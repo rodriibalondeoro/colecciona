@@ -6,7 +6,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { products as mockProducts, users, shippingMethods, cardConditions } from "@/data/mockData";
 
-import { ConditionBadge, VerifiedBadge, LevelBadge } from "@/components/Badge";
+import { VerifiedBadge, LevelBadge } from "@/components/Badge";
 import ProductCard from "@/components/ProductCard";
 import PriceChart from "@/components/PriceChart";
 import MakeOfferModal from "@/components/MakeOfferModal";
@@ -217,7 +217,7 @@ export default function ProductDetailPage() {
           <span>/</span>
           <span>{product.category.toUpperCase()}</span>
           <span>/</span>
-          <span className={styles.breadcrumbActive}>{product.code || product.title}</span>
+          <span className={styles.breadcrumbActive}>{product.title}</span>
         </div>
 
         <div className={styles.mainGrid}>
@@ -233,10 +233,6 @@ export default function ProductDetailPage() {
                   className={styles.mainImage}
                 />
               </FoilCard>
-              <div className={styles.imageOverlayTop}>
-                <ConditionBadge condition={product.condition} size="md" />
-                <span className={styles.codeBadge}>{product.code}</span>
-              </div>
             </div>
 
             {gallery.length > 1 && (
@@ -287,12 +283,7 @@ export default function ProductDetailPage() {
 
             <div className={styles.priceBox}>
               <div className={styles.priceHeader}>
-                <span className={styles.priceTagLbl}>Mejor Precio Disponible</span>
-                {product.priceChange && (
-                  <span className={`${styles.priceTrend} ${product.priceChange.startsWith('+') ? styles.trendUp : styles.trendDown}`}>
-                    {product.priceChange} este mes
-                  </span>
-                )}
+                <span className={styles.priceTagLbl}>Precio</span>
               </div>
 
               <div className={styles.priceValRow}>
@@ -316,7 +307,7 @@ export default function ProductDetailPage() {
             <div className={styles.conditionInfoBox}>
               <div className={styles.condHeader}>
                 <span className={styles.condTitle}>Estado Conservación:</span>
-                <ConditionBadge condition={product.condition} size="sm" />
+                <span>{product.condition}</span>
               </div>
               <p className={styles.condText}>{conditionInfo?.description}</p>
             </div>

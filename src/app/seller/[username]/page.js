@@ -304,6 +304,8 @@ export default function SellerProfilePage() {
     ? (allReviews.reduce((acc, r) => acc + r.rating, 0) / allReviews.length).toFixed(2)
     : seller.rating?.toFixed(2) || "0.00";
 
+  const isVerified = (seller.sales || 0) + (seller.purchases || 0) >= 10;
+
   const distribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
   if (allReviews.length) {
     allReviews.forEach(r => distribution[r.rating]++);
@@ -319,7 +321,7 @@ export default function SellerProfilePage() {
           <div className={styles.details}>
             <div className={styles.nameRow}>
               <h1 className={styles.name}>{seller.name}</h1>
-              {seller.verified && (
+              {isVerified && (
                 <svg className={styles.verified} viewBox="0 0 24 24" width="20" height="20" fill="var(--accent-primary)">
                   <path d="M12 2L15.09 5.09L19.5 5.5L20.5 9.91L23.5 12L20.5 14.09L19.5 18.5L15.09 18.91L12 22L8.91 18.91L4.5 18.5L3.5 14.09L0.5 12L3.5 9.91L4.5 5.5L8.91 5.09L12 2ZM10.5 15.5L17.5 8.5L16.09 7.09L10.5 12.67L7.91 10.08L6.5 11.5L10.5 15.5Z" />
                 </svg>

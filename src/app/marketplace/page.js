@@ -543,6 +543,7 @@ function MarketplaceContent() {
                       seller={seller}
                       onDelete={isOwner ? handleDelete : undefined}
                       onSelect={() => router.push(`/product/${product.id}`)}
+                      session={session}
                     />
                   </div>
                 );

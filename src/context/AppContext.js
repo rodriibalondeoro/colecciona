@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useEffect } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import { products, users } from "@/data/mockData";
 import { persistMessage, getFavorites, toggleFavoriteAPI, notifyUser, getOffers, createOffer, updateOffer, sendPush } from "@/lib/dataService";
 import { subscribeToMessages, subscribeToNotifications } from "@/lib/supabase";
@@ -35,6 +35,29 @@ export function AppProvider({ children }) {
       return new Set();
     }
   }); // Set of product ids
+
+  // Migrate favorites to per-user storage
+  const migrateFavoritesRef = useRef(false);
+  useEffect(() => {
+    if (!session?.id || migrateFavoritesRef.current) return;
+    migrateFavoritesRef.current = true;
+    try {
+      const globalKey = "colecciona_favorites";
+      const userKey = `colecciona_favorites_${session.id}`;
+      const userStored = localStorage.getItem(userKey);
+      const globalStored = localStorage.getItem(globalKey);
+      if (userStored) {
+        setFavorites(new Set(JSON.parse(userStored)));
+      } else if (globalStored) {
+        const globalFavs = JSON.parse(globalStored);
+        if (globalFavs.length > 0) {
+          localStorage.setItem(userKey, JSON.stringify(globalFavs));
+          setFavorites(new Set(globalFavs));
+        }
+        localStorage.removeItem(globalKey);
+      }
+    } catch {}
+  }, [session]);
 
   // ── Notifications ──
   const [notifications, setNotifications] = useState([]);
@@ -305,7 +328,13 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!session) return;
     getFavorites().then((ids) => {
-      if (ids && ids.length > 0) setFavorites(new Set(ids));
+      if (ids && ids.length > 0) {
+        setFavorites((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.add(id));
+          return next;
+        });
+      }
     }).catch(() => {});
   }, [session]);
 
@@ -342,22 +371,23 @@ export function AppProvider({ children }) {
   }, [cart]);
 
   // ─────────────────────────────────────────────────────────────
-  // Persist favorites locally when not logged in
-  // ─────────────────────────────────────────────────────────────
+  // Persist favorites locally per user
   useEffect(() => {
-    if (session) return;
     try {
-      localStorage.setItem("colecciona_favorites", JSON.stringify([...favorites]));
+      const key = session?.id ? `colecciona_favorites_${session.id}` : "colecciona_favorites";
+      localStorage.setItem(key, JSON.stringify([...favorites]));
     } catch {}
   }, [favorites, session]);
 
   // ─────────────────────────────────────────────────────────────
   // Toast helpers
   // ─────────────────────────────────────────────────────────────
+  const toastCounterRef = useRef(0);
   const showToast = useCallback((message, type = "info") => {
-    const id = Date.now();
+    const id = `${Date.now()}-${++toastCounterRef.current}`;
     setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
+    const timer = setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
+    return () => clearTimeout(timer);
   }, []);
 
   // ─────────────────────────────────────────────────────────────
@@ -392,7 +422,6 @@ export function AppProvider({ children }) {
   // Favorites helpers
   // ─────────────────────────────────────────────────────────────
   const toggleFavorite = useCallback((productId) => {
-    const wasFavorite = favorites.has(productId);
     setFavorites((prev) => {
       const next = new Set(prev);
       if (next.has(productId)) {
@@ -404,18 +433,7 @@ export function AppProvider({ children }) {
       }
       return next;
     });
-    if (session) {
-      toggleFavoriteAPI(productId).catch(() => {
-        setFavorites((prev) => {
-          const next = new Set(prev);
-          if (wasFavorite) next.add(productId);
-          else next.delete(productId);
-          return next;
-        });
-        showToast("Error al actualizar favoritos", "error");
-      });
-    }
-  }, [session, favorites, showToast]);
+  }, [showToast]);
 
   // ─────────────────────────────────────────────────────────────
   // Notifications helpers

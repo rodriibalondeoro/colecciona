@@ -37,8 +37,8 @@ export default function OrdersPage() {
           fetch('/api/offers?type=received', { headers }),
         ]);
 
-        const ordersData = await ordersRes.json();
-        const offersData = await offersRes.json();
+        const ordersData = ordersRes.ok ? await ordersRes.json() : { orders: [] };
+        const offersData = offersRes.ok ? await offersRes.json() : { offers: [] };
 
         const myOrders = (ordersData.orders || []).filter(o => o.buyer_id === session?.id);
         const mySales = (ordersData.orders || []).filter(o => o.seller_id === session?.id);

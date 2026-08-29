@@ -62,6 +62,7 @@ export default function ProfilePage() {
   const walletNet = Math.max(walletBalance - walletFee, 0);
   const purchases = orders.filter((o) => o.buyer_id === user.id);
   const sales = orders.filter((o) => o.seller_id === user.id);
+  const isVerified = (purchases.length + sales.length) >= 10;
 
   const selectedCountry = findCountry(form.address_country) || {
     lat: 40.42,
@@ -259,7 +260,7 @@ export default function ProfilePage() {
                 <>
                   <div className={styles.nameRow}>
                     <h1 className={styles.userName}>{user.name}</h1>
-                    {user.verified && <VerifiedBadge />}
+                    {isVerified && <VerifiedBadge />}
                     <LevelBadge level={user.level} />
                     <button className={styles.editBtn} onClick={() => setEditing(true)}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

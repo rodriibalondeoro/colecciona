@@ -3,14 +3,14 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ConditionBadge, VerifiedBadge } from "./Badge";
+import { VerifiedBadge } from "./Badge";
 import FoilCard from "./FoilCard";
 import { useApp } from "@/context/AppContext";
 import { hapticLight } from "@/lib/haptics";
-import { fireConfetti } from "@/lib/confetti";
+import { collections } from "@/data/collections";
 import styles from "./ProductCard.module.css";
 
-export default function ProductCard({ product, seller, onDelete, onSelect }) {
+export default function ProductCard({ product, seller, onDelete, onSelect, session }) {
   const [loaded, setLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -20,6 +20,22 @@ export default function ProductCard({ product, seller, onDelete, onSelect }) {
   const { favorites, toggleFavorite } = useApp();
   const isFavorite = favorites.has(product.id);
   const hasImage = product.image && !imgError;
+  const isOwner = session && (
+    session.id === product.seller?.id ||
+    session.id === product.seller ||
+    session.email === product.seller?.email
+  );
+
+  function getCollectionName(categoryId) {
+    for (const col of collections) {
+      if (col.id === categoryId) return col.name;
+      for (const sub of col.subs || []) {
+        if (sub.id === categoryId) return col.name;
+      }
+    }
+    return "";
+  }
+  const collectionName = getCollectionName(product.category);
 
   const reducedRef = useRef(
     typeof window !== "undefined" &&
@@ -138,9 +154,8 @@ export default function ProductCard({ product, seller, onDelete, onSelect }) {
               <div className={styles.back}>
                 <span className={styles.backLogo}>C</span>
                 <span className={styles.backTitle}>{product.title}</span>
-                <span className={styles.backCode}>{product.code} · {product.set}</span>
+                {collectionName && <span className={styles.backSetName}>{collectionName}</span>}
                 <div className={styles.backDivider} />
-                <span className={styles.backCondition}>{product.condition}</span>
                 <strong className={styles.backPrice}>
                   {typeof product.price === "number" ? product.price.toFixed(2) : product.price} €
                 </strong>
@@ -149,12 +164,6 @@ export default function ProductCard({ product, seller, onDelete, onSelect }) {
             </div>
           </div>
           <div className={styles.shineOverlay} style={{ background: `linear-gradient(105deg, transparent ${tilt.shine - 15}%, rgba(255,255,255,0.06) ${tilt.shine}%, transparent ${tilt.shine + 15}%)` }} />
-          <div className={styles.topBadgeRow}>
-            <ConditionBadge condition={product.condition} size="sm" />
-            {product.rarity && (
-              <span className={styles.rarityTag}>{product.rarity}</span>
-            )}
-          </div>
         </div>
       </Link>
       </div>
@@ -163,10 +172,10 @@ export default function ProductCard({ product, seller, onDelete, onSelect }) {
       <button
         className={`${styles.bookmarkBtn} ${isFavorite ? styles.saved : ""}`}
         onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
           hapticLight();
-          const wasFavorite = isFavorite;
           toggleFavorite(product.id);
-          if (!wasFavorite) fireConfetti(e.clientX, e.clientY);
         }}
         aria-label={isFavorite ? "Quitar de favoritos" : "Guardar en favoritos"}
       >
@@ -207,35 +216,31 @@ export default function ProductCard({ product, seller, onDelete, onSelect }) {
       )}
 
       <div className={styles.metaBox}>
-        <div className={styles.codeRow}>
-          <span className={styles.codeTag}>{product.code || "TCG"}</span>
-          <span className={styles.setName}>{product.set}</span>
-        </div>
-
         <Link href={`/product/${product.id}`} className={styles.titleLink} onClick={handleLinkClick}>
           <h3 className={styles.title}>{product.title}</h3>
         </Link>
 
+        {collectionName && (
+          <span className={styles.collectionLabel}>{collectionName}</span>
+        )}
+
         <div className={styles.priceRow}>
           <div className={styles.priceContainer}>
-            <span className={styles.priceLabel}>Mejor Precio</span>
+            <span className={styles.priceLabel}>Precio</span>
             <span className={styles.priceValue}>
               {product.price.toFixed(2)} €
             </span>
           </div>
-
-          {product.priceChange && (
-            <span
-              className={`${styles.trendTag} ${
-                product.priceChange.startsWith("+")
-                  ? styles.trendUp
-                  : styles.trendDown
-              }`}
-            >
-              {product.priceChange}
-            </span>
+          {(product.favorites > 0 || product.favorites_count > 0 || product.likes > 0) && (
+            <span className={styles.likesCount}>❤️ {product.favorites || product.favorites_count || product.likes}</span>
           )}
         </div>
+
+        {isOwner && product.views > 0 && (
+          <div className={styles.ownerStats}>
+            <span className={styles.statItem}>👁️ {product.views} visitas</span>
+          </div>
+        )}
 
         {seller && (
           <div className={styles.sellerRow}>

@@ -5,11 +5,6 @@ import Image from 'next/image';
 import Link from 'next/link';
 import styles from './page.module.css';
 
-// Using a fallback for ConditionBadge since it might not exist yet
-const ConditionBadge = ({ condition }) => (
-  <span className={styles.conditionBadge}>{condition}</span>
-);
-
 export default function CartPage() {
   const { cart, removeFromCart, cartTotal } = useApp();
 
@@ -67,7 +62,6 @@ export default function CartPage() {
                 </div>
                 
                 <div className={styles.itemMeta}>
-                  <ConditionBadge condition={item.product.condition || 'NM'} />
                   <span className={styles.sellerName}>Vendido por {item.product.seller?.username || item.shippingMethod?.name || 'Vendedor'}</span>
                 </div>
                 
