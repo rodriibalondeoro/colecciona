@@ -1,0 +1,223 @@
+.wrap {
+  position: relative;
+  padding: 5rem 0 3.5rem;
+  overflow: hidden;
+}
+
+/* ── Cabecera ── */
+.head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 clamp(1.25rem, 4vw, 3rem) 1.25rem;
+}
+
+.eyebrow {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.35em;
+  color: var(--accent-light);
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: clamp(1.15rem, 2.4vw, 1.8rem);
+  font-weight: 800;
+  margin: 0;
+}
+
+.dragHint {
+  font-size: 0.62rem;
+  letter-spacing: 0.3em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  animation: nudge 1.4s ease-in-out infinite;
+}
+
+@keyframes nudge {
+  0%, 100% { transform: translateX(0); opacity: 1; }
+  50% { transform: translateX(7px); opacity: 0.4; }
+}
+
+/* ── Viewport arrastrable ── */
+.viewport {
+  overflow-x: auto;
+  cursor: grab;
+  touch-action: pan-y;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.dragging {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+  scroll-behavior: auto;
+}
+
+.track {
+  display: flex;
+  gap: clamp(1rem, 2.4vw, 2rem);
+  padding: 1rem clamp(1.25rem, 4vw, 3rem) 1.5rem;
+  width: max-content;
+}
+
+.card {
+  position: relative;
+  flex: 0 0 auto;
+  width: clamp(200px, 21vw, 280px);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  transform: translateY(var(--par-y, 0)) scale(var(--par-scale, 1));
+  opacity: var(--par-op, 1);
+  transition: opacity 0.25s ease;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.cardIndex {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.75rem;
+  z-index: 3;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.cardMedia {
+  position: relative;
+  aspect-ratio: 5 / 6;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cardShade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.55) 100%);
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.35s;
+}
+
+.card:hover .cardShade {
+  opacity: 1;
+}
+
+.cardBody {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  transform: translateY(100%);
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+
+.card:hover .cardBody {
+  transform: translateY(0);
+}
+
+.cardSet {
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent-light);
+}
+
+.cardTitle {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.15;
+}
+
+.cardPrice {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent-light);
+}
+
+/* ── Barra de progreso ── */
+.pbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem clamp(1.25rem, 4vw, 3rem) 0;
+}
+
+.pbarTrack {
+  flex: 1;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.pbarFill {
+  height: 100%;
+  width: 100%;
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+}
+
+.pbarCount {
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  min-width: 4ch;
+  text-align: right;
+}
+
+/* ── Fallback reduced-motion ── */
+.simple {
+  padding: 3rem 0;
+}
+
+.simpleTitle {
+  font-size: 0.7rem;
+  letter-spacing: 0.35em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 1.5rem;
+}
+
+.simpleGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 1rem;
+}
+
+.simpleCard {
+  position: relative;
+  aspect-ratio: 5 / 7;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+}
+
+@media (pointer: coarse) {
+  .dragHint {
+    display: none;
+  }
+}

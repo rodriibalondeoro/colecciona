@@ -1,0 +1,659 @@
+/* ══════════════════════════════════════════════════
+   Search Overlay — Command Palette / 2-Column Split
+   ══════════════════════════════════════════════════ */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(4, 5, 7, 0.78);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 60px 16px 40px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  overscroll-behavior: none;
+  touch-action: none;
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              visibility 0s linear 0.2s;
+}
+
+.backdrop.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal {
+  width: 100%;
+  max-width: 780px;
+  background: #090a0c;
+  border: 1px solid var(--border-medium);
+  border-radius: 20px;
+  box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.8),
+              0 0 0 1px rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: calc(100vh - 100px);
+  transform: scale(0.96) translateY(-10px);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.backdrop.open .modal {
+  transform: scale(1) translateY(0);
+}
+
+/* ── Barra superior de búsqueda ── */
+.searchBar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 24px 18px 28px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: #090a0c;
+}
+
+.searchIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-light);
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none !important;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.4;
+  padding-left: 8px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.searchInput::placeholder {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.clearBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-overlay);
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--trans-fast);
+}
+
+.clearBtn:hover {
+  background: var(--bg-highlight);
+  color: var(--text-primary);
+}
+
+.closeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--trans-fast);
+}
+
+.closeBtn:hover {
+  border-color: var(--border-medium);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* ── Cuerpo del modal (Scroll) ── */
+.modalBody {
+  flex: 1;
+  max-height: 520px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 20px 20px;
+}
+
+/* ── Vista por defecto (Solo Recientes) ── */
+.defaultView {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sectionLabel {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.clearAllBtn {
+  background: none;
+  border: none;
+  color: var(--accent-light);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background var(--trans-fast);
+}
+
+.clearAllBtn:hover {
+  background: var(--accent-muted);
+}
+
+.recentGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recentItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--trans-fast);
+}
+
+.recentItem:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+}
+
+.recentClock {
+  display: flex;
+  color: var(--text-dim);
+}
+
+.recentText {
+  white-space: nowrap;
+}
+
+.recentDelete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 50%;
+  transition: color var(--trans-fast);
+}
+
+.recentDelete:hover {
+  color: var(--rose);
+}
+
+.emptyRecentPrompt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* ── Resultados de búsqueda ── */
+.searchResults {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.submitAllRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all var(--trans-fast);
+}
+
+.submitAllRow:hover,
+.submitAllRow.activeRow {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: var(--accent-light);
+}
+
+.submitAllIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-light);
+}
+
+.submitAllText {
+  flex: 1;
+}
+
+.submitAllText strong {
+  color: var(--accent-light);
+}
+
+.returnKey {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.loadingIndicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-medium);
+  border-top-color: var(--accent-light);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Layout de 2 columnas separadas en vertical ── */
+.splitColumns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  align-items: stretch;
+}
+
+.leftColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  padding-right: 16px;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.rightColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding-left: 16px;
+  min-width: 0;
+}
+
+.resultGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.groupHeader {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  padding: 0 4px 6px;
+}
+
+.emptyColMessage {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 12px 4px;
+}
+
+/* ── Colecciones ── */
+.collectionsList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.collectionRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  height: 46px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--trans-fast);
+}
+
+.collectionRow:hover,
+.collectionRow.activeRow {
+  background: var(--bg-surface);
+}
+
+.collectionBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-light);
+  flex-shrink: 0;
+}
+
+.collectionMeta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.collectionTitle {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collectionParent {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.actionArrow {
+  color: var(--text-dim);
+  font-size: 13px;
+  transition: transform var(--trans-fast);
+}
+
+.collectionRow:hover .actionArrow,
+.collectionRow.activeRow .actionArrow,
+.userRow:hover .actionArrow,
+.userRow.activeRow .actionArrow {
+  transform: translateX(2px);
+  color: var(--text-primary);
+}
+
+/* ── Publicaciones / Cartas ── */
+.productsList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.productRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background var(--trans-fast);
+}
+
+.productRow:hover,
+.productRow.activeRow {
+  background: var(--bg-surface);
+}
+
+.productThumb {
+  position: relative;
+  width: 38px;
+  height: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.noImg {
+  font-size: 16px;
+}
+
+.productDetails {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.productTitle {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.productSub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.productSet {
+  color: var(--text-secondary);
+}
+
+.productCondition {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--emerald);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.productPrice {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+/* ── Usuarios / Vendedores ── */
+.usersList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.userRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  height: 46px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--trans-fast);
+}
+
+.userRow:hover,
+.userRow.activeRow {
+  background: var(--bg-surface);
+}
+
+.userAvatar {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--accent-muted);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-light);
+  font-weight: 700;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.userMeta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.userName {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.userFullName {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.userRating {
+  font-size: 11px;
+  color: var(--amber);
+  font-weight: 600;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+/* ── Estado vacío ── */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.emptyIcon {
+  font-size: 28px;
+  margin-bottom: 10px;
+}
+
+.emptyState h3 {
+  font-size: 15px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.emptyState p {
+  font-size: 13px;
+  max-width: 300px;
+  margin-bottom: 14px;
+}
+
+.emptyResetBtn {
+  padding: 7px 14px;
+  background: var(--accent-primary);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--trans-fast);
+}
+
+.emptyResetBtn:hover {
+  opacity: 0.9;
+}
+
+@media (max-width: 640px) {
+  .backdrop {
+    padding: 16px 10px;
+  }
+  .modal {
+    max-height: 90vh;
+  }
+  .searchBar {
+    padding: 12px 14px;
+    gap: 12px;
+  }
+  .searchInput {
+    font-size: 15px;
+  }
+  .splitColumns {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .leftColumn {
+    padding-right: 0;
+    border-right: none;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .rightColumn {
+    padding-left: 0;
+  }
+}

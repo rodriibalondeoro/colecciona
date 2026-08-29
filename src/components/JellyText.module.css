@@ -1,0 +1,52 @@
+@keyframes badgeShine {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.jellyWrap {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  user-select: none;
+  cursor: grab;
+  touch-action: pan-y;
+}
+
+.jellyWrap:active {
+  cursor: grabbing;
+}
+
+.char {
+  display: inline-block;
+  transform-origin: 50% 80%;
+  will-change: transform;
+  transition: filter 0.2s ease;
+  pointer-events: auto;
+}
+
+/* Modo contorneado (COLECCIONA) */
+.outline .char {
+  color: transparent;
+  -webkit-text-stroke: 1.5px rgba(255, 255, 255, 0.22);
+}
+
+.outline:hover .char {
+  -webkit-text-stroke-color: rgba(255, 255, 255, 0.45);
+}
+
+/* Modo relleno colorines (AUTÉNTICO) */
+.filled .char {
+  color: transparent;
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8, #818cf8);
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-stroke: 0;
+  animation: badgeShine 6s linear infinite;
+  filter: drop-shadow(0 0 20px rgba(129, 140, 248, 0.3));
+}
+
+.filled:hover .char {
+  filter: drop-shadow(0 0 35px rgba(129, 140, 248, 0.55));
+}

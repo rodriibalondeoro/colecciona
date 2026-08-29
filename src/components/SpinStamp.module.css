@@ -1,0 +1,46 @@
+.stamp {
+  position: relative;
+  width: clamp(120px, 15vw, 180px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.svg {
+  position: absolute;
+  inset: 0;
+  animation: spin 20s linear infinite;
+  will-change: transform;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.text {
+  font-size: 13.5px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  fill: var(--accent-light, #818cf8);
+}
+
+.colorinesText {
+  fill: url(#stampColorines) !important;
+  font-weight: 800;
+  letter-spacing: 2px;
+}
+
+.core {
+  font-size: 1.4rem;
+  color: var(--accent-primary, #818cf8);
+}
+
+.colorinesCore {
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}

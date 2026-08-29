@@ -1,0 +1,149 @@
+/* Sección alta: el reveal se completa en el 40% del scroll; el resto el
+   tagline queda centrado y estático antes de que el footer se suba por
+   encima. 200vh ≈ reveal en ~40vh + reposo hasta el footer. Margin-top
+   negativo para solapar con el final del banner. */
+.section {
+  position: relative;
+  z-index: 0;
+  height: 200vh;
+  margin-top: -80px;
+  background: var(--bg-dark);
+}
+
+/* Degradado vertical sutil: rompe el negro plano sin distraer */
+.section::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(99, 102, 241, 0.04) 30%,
+    rgba(139, 92, 246, 0.05) 60%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+/* Stage pegajoso: se queda clavado mientras cruzas la sección */
+.stage {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 0;
+}
+
+/* Halo de acento: radial indigo/violeta que se enciende con las palabras */
+.glow {
+  position: absolute;
+  width: min(80vw, 800px);
+  height: min(80vw, 800px);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(99, 102, 241, 0.14) 0%,
+    rgba(139, 92, 246, 0.1) 35%,
+    transparent 65%
+  );
+  filter: blur(80px);
+  opacity: 0;
+  pointer-events: none;
+  will-change: opacity;
+}
+
+/* Pila del tagline: palabras blancas en grande, movimiento puro */
+.stack {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  font-size: clamp(2.2rem, 5.2vw, 4.4rem);
+  line-height: 1.12;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  color: #ffffff;
+  user-select: none;
+  will-change: transform;
+}
+
+/* Cada grupo apila sus palabras en una fila flexible */
+.group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+}
+
+/* Separación entre palabras */
+.group .mask + .mask {
+  margin-left: 0.24em;
+}
+
+/* Separación entre grupos apilados */
+.group + .group {
+  margin-top: clamp(0.5rem, 1.6vh, 1.2rem);
+}
+
+/* Máscara de palabra: recorta el ascenso/rotación */
+.mask {
+  display: block;
+  overflow: hidden;
+}
+
+.word {
+  display: inline-block;
+  transform: translate3d(0, 120%, 0) rotate(6deg);
+  will-change: transform, opacity;
+}
+
+/* Pantallas bajas: compacta el tagline sin perder el ritmo */
+@media (max-height: 760px) and (min-width: 992px) {
+  .stack {
+    font-size: clamp(1.6rem, 3.6vw, 3rem);
+  }
+  .section {
+    height: 180vh;
+  }
+}
+
+/* Móvil: escala el tamaño para que SEGURIDAD / ESTAFAS quepan */
+@media (max-width: 991px) {
+  .stack {
+    font-size: clamp(1.5rem, 5vw, 2.6rem);
+  }
+  .group + .group {
+    margin-top: clamp(0.4rem, 1.2vh, 0.8rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section {
+    height: auto;
+    min-height: 60vh;
+    margin-top: 0;
+    padding: 90px 0;
+  }
+  .section::before {
+    display: none;
+  }
+  .stage {
+    position: relative;
+    height: auto;
+    overflow: visible;
+  }
+  .word {
+    transform: none;
+    rotate: none;
+    opacity: 1;
+  }
+  .glow {
+    display: none;
+  }
+}

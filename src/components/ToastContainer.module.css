@@ -1,0 +1,95 @@
+.container {
+  position: fixed;
+  bottom: 24px;
+  left: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+}
+
+@media (max-width: 768px) {
+  .container {
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 400px;
+  }
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-elevated, rgba(17, 19, 21, 0.8));
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+  border-radius: var(--radius-md, 12px);
+  box-shadow: var(--shadow-lg, 0 10px 15px -3px rgba(0, 0, 0, 0.5));
+  pointer-events: auto;
+  animation: slideIn var(--trans-base, 0.3s) ease-out forwards;
+  color: var(--text-primary, #fff);
+  font-family: var(--font-sans);
+}
+
+.toast.success {
+  border-left: 4px solid var(--emerald, #10b981);
+}
+
+.toast.error {
+  border-left: 4px solid var(--rose, #f43f5e);
+}
+
+.toast.info {
+  border-left: 4px solid var(--accent-primary, #3b82f6);
+}
+
+.toast.warning {
+  border-left: 4px solid var(--amber, #f59e0b);
+}
+
+.iconContainer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.iconSuccess { color: var(--emerald, #10b981); width: 20px; height: 20px; }
+.iconError { color: var(--rose, #f43f5e); width: 20px; height: 20px; }
+.iconInfo { color: var(--accent-primary, #3b82f6); width: 20px; height: 20px; }
+.iconWarning { color: var(--amber, #f59e0b); width: 20px; height: 20px; }
+
+.message {
+  font-size: 0.95rem;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+@keyframes slideIn {
+  0% {
+    opacity: 0;
+    transform: translateX(-20px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@media (max-width: 768px) {
+  @keyframes slideIn {
+    0% {
+      opacity: 0;
+      transform: translateY(20px) scale(0.95);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+}

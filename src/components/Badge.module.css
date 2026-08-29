@@ -1,0 +1,108 @@
+.conditionBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border: 1px solid;
+  text-transform: uppercase;
+  backdrop-filter: blur(12px);
+}
+
+.sm {
+  padding: 2px 6px;
+  font-size: 10px;
+}
+
+.md {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.lg {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.verifiedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent-muted);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  color: var(--accent-light);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+
+.levelChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+}
+
+.level3 {
+  border-color: rgba(16, 185, 129, 0.3);
+  color: var(--emerald);
+  background: var(--emerald-muted);
+}
+
+.level4 {
+  border-color: rgba(99, 102, 241, 0.3);
+  color: var(--accent-light);
+  background: var(--accent-muted);
+}
+
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid;
+}
+
+.statusCompleted {
+  color: var(--emerald);
+  background: var(--emerald-muted);
+  border-color: rgba(16, 185, 129, 0.25);
+}
+
+.statusShipped {
+  color: var(--accent-light);
+  background: var(--accent-muted);
+  border-color: rgba(99, 102, 241, 0.25);
+}
+
+.statusPending {
+  color: var(--amber);
+  background: var(--amber-muted);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.statusCancelled {
+  color: var(--rose);
+  background: var(--rose-muted);
+  border-color: rgba(244, 63, 94, 0.25);
+}

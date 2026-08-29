@@ -1,0 +1,37 @@
+.starContainer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  margin: 16px 0;
+}
+
+.star {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-dim);
+  transition: all 0.2s ease;
+  width: 32px;
+  height: 32px;
+}
+
+.star:hover {
+  transform: scale(1.1);
+}
+
+.star.filled {
+  color: var(--amber);
+}
+
+.star svg {
+  width: 100%;
+  height: 100%;
+  fill: transparent;
+  transition: fill 0.2s ease, color 0.2s ease;
+}
+
+.star.filled svg {
+  fill: currentColor;
+}

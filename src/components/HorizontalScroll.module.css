@@ -1,0 +1,302 @@
+/* =============================================
+   HorizontalScroll — Escaparate 3 Cromos + Mercado
+   ============================================= */
+
+@keyframes badgeShine {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Sección scrollable con altura suficiente para 3 pasos fluidos */
+.section {
+  position: relative;
+  height: 250vh;
+  background: var(--bg-dark);
+}
+
+/* Sticky viewport centrado vertical y horizontalmente */
+.sticky {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  background: radial-gradient(ellipse at 40% 50%, rgba(99, 102, 241, 0.08) 0%, var(--bg-dark) 80%);
+}
+
+/* Pista horizontal centrada con márgenes proporcionales */
+.track {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 0 max(6vw, calc((100vw - 1400px) / 2));
+  will-change: transform;
+}
+
+/* ——— Bloque Intro a la Izquierda ——— */
+.intro {
+  flex: 0 0 300px;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 12px;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--accent-light, #818cf8);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.heading {
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+  margin: 0;
+}
+
+.sub {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.shimmer {
+  display: inline-block;
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8, #818cf8);
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: badgeShine 4s linear infinite;
+}
+
+/* ——— Tarjetas de Cromos ——— */
+.card {
+  flex: 0 0 270px;
+  width: 270px;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 18px;
+  background: var(--card-bg, #141420);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  position: relative;
+  transform: rotate(var(--tilt, 0deg)) scale(0.96);
+  opacity: 0.55;
+  filter: brightness(0.75);
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.35s ease,
+              filter 0.35s ease,
+              border-color 0.3s ease,
+              box-shadow 0.4s ease;
+}
+
+.frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+}
+
+.img {
+  object-fit: cover;
+  transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.card:hover .img {
+  transform: scale(1.05);
+}
+
+.badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  padding: 3px 8px;
+  border-radius: 6px;
+  z-index: 2;
+}
+
+.meta {
+  padding: 14px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.set {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+}
+
+.price {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--accent-light, #818cf8);
+  margin-top: 2px;
+}
+
+/* ——— Cromo Activo — Resalte con Borde de Colorines y Brillo ——— */
+.activeCard {
+  transform: translateY(-8px) rotate(var(--tilt, 0deg)) scale(1.03);
+  opacity: 1;
+  filter: brightness(1.18) contrast(1.05);
+  border-color: transparent;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.8),
+              0 0 35px rgba(129, 140, 248, 0.45);
+  z-index: 4;
+}
+
+.activeCard::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 20px;
+  padding: 2px;
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8, #818cf8);
+  background-size: 300% auto;
+  animation: badgeShine 3.5s linear infinite;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* ——— Outro a la derecha (Centrado simétricamente con el intro) ——— */
+.outro {
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  padding-left: 20px;
+}
+
+.outroCode {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--accent-light, #818cf8);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.outroLink {
+  font-size: 20px;
+  font-weight: 800;
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8, #818cf8);
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: badgeShine 4s linear infinite;
+  text-decoration: none;
+  display: inline-block;
+  transition: transform 0.2s ease;
+  white-space: nowrap;
+}
+
+.outroLink:hover {
+  transform: translateX(6px);
+}
+
+/* ——— Sello circular giratorio ubicado pegado a la barra inferior a la derecha ——— */
+.bottomStampWrapper {
+  position: absolute;
+  bottom: 85px;
+  right: max(3vw, calc((100vw - 1400px) / 2 - 40px));
+  pointer-events: none;
+  z-index: 8;
+}
+
+.outroStamp {
+  width: clamp(150px, 16vw, 195px);
+  height: clamp(150px, 16vw, 195px);
+  opacity: 0.95;
+  filter: drop-shadow(0 0 16px rgba(129, 140, 248, 0.35));
+}
+
+/* ——— Barra de Progreso Fija Inferior ——— */
+.bar {
+  position: absolute;
+  bottom: 28px;
+  left: max(6vw, calc((100vw - 1400px) / 2));
+  right: max(6vw, calc((100vw - 1400px) / 2));
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.barLine {
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.barText {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* ——— Responsive ——— */
+@media (max-width: 768px) {
+  .section {
+    height: 200vh;
+  }
+  .intro {
+    flex: 0 0 250px;
+    width: 250px;
+  }
+  .heading {
+    font-size: 26px;
+  }
+  .card {
+    flex: 0 0 230px;
+    width: 230px;
+  }
+  .outroCard {
+    flex: 0 0 260px;
+    width: 260px;
+  }
+}

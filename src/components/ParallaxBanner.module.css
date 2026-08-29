@@ -1,0 +1,146 @@
+/* Sección alta: crea el espacio de scroll para el efecto scrubbed.
+   230vh = separar (35%) + converger (25%) + quedarse centrado (40%). */
+.banner {
+  position: relative;
+  height: 230vh;
+  background: var(--bg-dark);
+}
+
+/* Stage pegajoso: se queda clavado mientras cruzas la sección */
+.stage {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.col {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1480px;
+  padding: 0 max(5vw, 24px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Máscara de línea (overflow hidden) para el reveal.
+   Ocupa todo el ancho del viewport para que las palabras puedan viajar hasta
+   los bordes sin que la máscara las corte (el corte solo ocurre en el borde
+   real de pantalla). Padding superior generoso para la tilde de la É. */
+.lineMask {
+  width: 100vw;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 0.14em max(5vw, 24px) 0.22em;
+}
+
+/* Titulares gigantes */
+.titleLine {
+  font-size: clamp(3.2rem, 10.5vw, 9.5rem);
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  will-change: transform;
+  transition:
+    transform 1.35s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.9s ease;
+}
+
+.lineA {
+  justify-content: flex-start;
+}
+
+.lineB {
+  justify-content: flex-end;
+}
+
+/* Capa interna de cada línea: lleva la convergencia hacia el centro con scroll */
+.track {
+  display: flex;
+  align-items: center;
+  will-change: transform;
+}
+
+/* Estado inicial del reveal (oculto, listo para deslizar) */
+.pending {
+  transform: translateY(150%);
+  opacity: 0;
+}
+
+/* Palabra animada "DE MANERA" — debajo de COLECCIONA, más pequeña.
+   Se centra para poder alargarse al hacer scroll. */
+.flipWord {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #ffffff;
+  font-size: clamp(1.3rem, 2.6vw, 2.2rem);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  height: clamp(2.2rem, 5vh, 3.2rem);
+  margin: 0.04em 0 0.08em;
+  user-select: none;
+  will-change: transform;
+  transition:
+    transform 1.35s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.9s ease;
+}
+
+.flipGroup {
+  display: flex;
+  align-items: center;
+}
+
+/* Blanco limpio */
+.flipLetter {
+  display: inline-block;
+  white-space: pre;
+  color: #ffffff;
+}
+
+@media (max-width: 991px) {
+  .banner {
+    height: 210vh;
+  }
+  .flipWord {
+    display: none;
+  }
+}
+
+@media (max-height: 760px) and (min-width: 992px) {
+  .banner {
+    height: 200vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .banner {
+    height: auto;
+    min-height: 70vh;
+    padding: 80px 0 90px;
+  }
+  .stage {
+    position: relative;
+    height: auto;
+    overflow: visible;
+  }
+  .col {
+    height: auto;
+  }
+  .pending {
+    transform: none;
+    opacity: 1;
+  }
+}

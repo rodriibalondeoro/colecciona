@@ -1,0 +1,143 @@
+/* ====================================================
+   NothinText.module.css
+   Física de dispersión y repulsión magnética idéntica a noth.in
+   ==================================================== */
+
+@keyframes badgeShine {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.nothinWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: auto;
+}
+
+.char {
+  display: inline-block;
+  position: relative;
+  will-change: transform;
+  transform-origin: center center;
+  transition: filter 0.25s ease;
+  pointer-events: auto;
+}
+
+/* Letra con tilde limpia, elegante y bien proporcionada */
+.charWithAccent {
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+}
+
+.cleanAccent {
+  position: absolute;
+  top: -0.12em;
+  left: 50%;
+  width: 0.28em;
+  height: 0.08em;
+  border-radius: 99px;
+  transform: rotate(-24deg);
+  transform-origin: center center;
+  pointer-events: none;
+  z-index: 2;
+  transition: all 0.25s ease;
+}
+
+.baseChar {
+  display: inline-block;
+}
+
+/* ——— MODO 1: CONTORNO (COLECCIONA) ——— */
+.outline .char,
+.outline .baseChar {
+  color: transparent;
+  -webkit-text-stroke: 1.8px rgba(255, 255, 255, 0.35);
+}
+
+.outline .cleanAccent {
+  background: transparent;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+}
+
+.outline:hover .char,
+.outline:hover .baseChar {
+  -webkit-text-stroke-color: #818cf8;
+  filter: drop-shadow(0 0 25px rgba(129, 140, 248, 0.45));
+}
+
+.outline:hover .cleanAccent {
+  border-color: #818cf8;
+  box-shadow: 0 0 10px rgba(129, 140, 248, 0.5);
+}
+
+/* ——— MODO 2: RELLENO COLORINES (AUTÉNTICA) ——— */
+.filled .char,
+.filled .baseChar {
+  color: transparent;
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8, #818cf8);
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-stroke: 0;
+  animation: badgeShine 6s linear infinite;
+  filter: drop-shadow(0 0 25px rgba(129, 140, 248, 0.35));
+}
+
+.filled .cleanAccent {
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8, #818cf8);
+  background-size: 300% auto;
+  animation: badgeShine 6s linear infinite;
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.5);
+}
+
+.filled:hover .char,
+.filled:hover .baseChar {
+  filter: drop-shadow(0 0 40px rgba(52, 211, 153, 0.7));
+}
+
+.filled:hover .cleanAccent {
+  box-shadow: 0 0 18px rgba(52, 211, 153, 0.85);
+}
+
+/* ——— MODO 3: MIX (DE MANERA) ———
+   Misma estructura tipográfica de COLECCIONA (contorno nítido)
+   con un mix sutil del degradado y resplandor de AUTÉNTICA */
+.mix .char,
+.mix .baseChar {
+  color: transparent;
+  background: linear-gradient(100deg, rgba(129, 140, 248, 0.35), rgba(52, 211, 153, 0.35), rgba(167, 139, 250, 0.35));
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-stroke: 1.6px rgba(255, 255, 255, 0.55);
+  animation: badgeShine 6s linear infinite;
+  filter: drop-shadow(0 0 16px rgba(129, 140, 248, 0.25));
+}
+
+.mix .cleanAccent {
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8, #818cf8);
+  background-size: 300% auto;
+  animation: badgeShine 6s linear infinite;
+  border: 1.2px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 0 10px rgba(129, 140, 248, 0.35);
+}
+
+.mix:hover .char,
+.mix:hover .baseChar {
+  -webkit-text-stroke-color: #818cf8;
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8, #818cf8);
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 0 35px rgba(129, 140, 248, 0.65));
+}
+
+.mix:hover .cleanAccent {
+  border-color: #818cf8;
+  box-shadow: 0 0 18px rgba(129, 140, 248, 0.8);
+}

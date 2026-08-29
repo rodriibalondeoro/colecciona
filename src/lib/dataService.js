@@ -1,0 +1,452 @@
+// Data Service — Capa de persistencia con fallback local
+// Si Supabase está configurado escribe a través de las API routes del servidor
+// (que sí pueden alcanzar Supabase). Si no, usa localStorage.
+
+import { supabase } from "./supabase";
+
+async function getAuthToken() {
+  if (!supabase) return null;
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (data?.session?.access_token) return data.session.access_token;
+  } catch {}
+  try {
+    const raw = localStorage.getItem("colecciona_session");
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (s.access_token) return s.access_token;
+    }
+  } catch {}
+  console.warn("[DataService] No se encontró auth token. El usuario debe reloguearse.");
+  return null;
+}
+
+async function authHeaders() {
+  const token = await getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+const DB_KEY = "colecciona_db";
+// Si el navegador no puede alcanzar Supabase (red lenta, proxy, bloqueo), estas
+// llamadas se quedarían colgadas para siempre. Con un timeout razonable todo cae
+// al store local y la app sigue funcionando igual.
+const NET_TIMEOUT = 10000;
+
+const emptyDB = () => ({ users: [], products: [], messages: [] });
+
+export function readDB() {
+  if (typeof window === "undefined") return emptyDB();
+  try {
+    const raw = localStorage.getItem(DB_KEY);
+    return raw ? { ...emptyDB(), ...JSON.parse(raw) } : emptyDB();
+  } catch {
+    return emptyDB();
+  }
+}
+
+export function writeDB(db) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(DB_KEY, JSON.stringify(db));
+  } catch {}
+}
+
+/**
+ * Registra un usuario. Usa API route (/api/register) para llegar a Supabase
+ * desde el servidor.
+ * - Si la API responde con un error de negocio (p.ej. teléfono duplicado),
+ *   se lanza el error para que la UI lo muestre.
+ * - Solo si la API no está disponible (red/offline) se persiste en localStorage.
+ */
+export async function registerUser(user) {
+  let res;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
+    res = await fetch("/api/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: user.email,
+        phone: user.phone,
+        password: user.password,
+        fullName: user.fullName,
+        username: user.username,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const json = await res.json();
+    if (res.ok && json.user) return json.user;
+    throw new Error(json.error || `HTTP ${res.status}`);
+  } catch (err) {
+    // Si fue un fallo de red (no una respuesta de negocio), caemos a localStorage.
+    if (res && res.status === 409) {
+      throw new Error(err.message);
+    }
+    if (!res || (err && err.name === "AbortError")) {
+      console.warn("[DataService] registerUser via API no disponible:", err?.message);
+    } else {
+      throw new Error(err.message);
+    }
+  }
+
+  const db = readDB();
+  const record = {
+    id: `u${Date.now()}`,
+    name: user.fullName,
+    username: String(user.username || "").replace("@", ""),
+    email: user.email,
+    phone: user.phone,
+    initials: String(user.fullName || "")
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase(),
+    level: 1,
+    levelName: "Nuevo Vendedor",
+    verified: true,
+    sales: 0,
+    rating: 5.0,
+    memberSince: new Date().getFullYear(),
+    location: "España",
+    responseTime: "< 1 hora",
+    registeredAt: new Date().toISOString(),
+  };
+  db.users.push(record);
+  writeDB(db);
+  return record;
+}
+
+/**
+ * Publica un producto en el mercado. Usa API route (/api/publish) para
+ * llegar a Supabase desde el servidor. Si la API falla, persiste en localStorage.
+ */
+export async function publishProduct(product) {
+  const payload = {
+    title: product.title,
+    price: product.price,
+    image: product.image,
+    category: product.category,
+    condition: product.condition,
+    seller: product.seller,
+    sellerEmail: product.sellerEmail,
+    sellerName: product.sellerName,
+    code: product.code,
+    rarity: product.rarity,
+    description: product.description,
+    set: product.set,
+    language: product.language,
+    year: product.year,
+  };
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
+    const res = await fetch("/api/publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const json = await res.json();
+    if (res.ok && json.product) return json.product;
+    console.warn("[DataService] publishProduct via API falló:", json.error);
+    throw new Error(json.error || `HTTP ${res.status}`);
+  } catch (err) {
+    console.warn("[DataService] publishProduct via API no disponible:", err?.message);
+    throw err;
+  }
+}
+
+/** Productos publicados localmente (además del catálogo mock). */
+export function getPersistedProducts() {
+  return readDB().products || [];
+}
+
+/** Elimina un producto de Supabase y del store local. */
+export async function deleteProduct(productId) {
+  let sellerEmail = null;
+  try {
+    const s = JSON.parse(localStorage.getItem("colecciona_session") || "null");
+    sellerEmail = s?.email || null;
+  } catch {}
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
+    const res = await fetch(`/api/publish/${productId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+      body: JSON.stringify({ sellerEmail }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const db = readDB();
+      db.products = db.products.filter((p) => p.id !== productId);
+      writeDB(db);
+      return true;
+    }
+  } catch (err) {
+    console.warn("[DataService] deleteProduct via API no disponible:", err?.message);
+  }
+  const db = readDB();
+  db.products = db.products.filter((p) => p.id !== productId);
+  writeDB(db);
+  return true;
+}
+
+/** Persiste un mensaje de chat (via API route o en el store local). */
+export async function persistMessage(message) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
+    const res = await fetch("/api/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+      body: JSON.stringify(message),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) return;
+  } catch (err) {
+    console.warn("[DataService] persistMessage via API no disponible:", err?.message);
+  }
+  const db = readDB();
+  db.messages.push({ ...message, id: `m${Date.now()}` });
+  writeDB(db);
+}
+
+/** Crea una notificación para el destinatario (no bloqueante). */
+export async function notifyUser({ recipientId, type, title, body, link }) {
+  if (!recipientId) return;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
+    await fetch("/api/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipientId, type, title, body, link }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+  } catch (err) {
+    console.warn("[DataService] notifyUser no disponible:", err?.message);
+  }
+}
+
+/** Crea una oferta de precio para un producto (inicia el hilo de negociación). */
+export async function createOffer({ productId, amount, message }) {
+  const token = await getAuthToken();
+  if (!token) return null;
+  try {
+    const res = await fetch("/api/offers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ productId, amount, message }),
+    });
+    const data = await res.json();
+    return data.offer || null;
+  } catch (err) {
+    console.warn("[DataService] createOffer no disponible:", err?.message);
+    return null;
+  }
+}
+
+/** Lista las ofertas del usuario (enviadas y recibidas). */
+export async function getOffers() {
+  const token = await getAuthToken();
+  if (!token) return [];
+  try {
+    const res = await fetch("/api/offers", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    return data.offers || [];
+  } catch { return []; }
+}
+
+/** Acepta o rechaza una oferta recibida. */
+export async function updateOffer({ id, status }) {
+  const token = await getAuthToken();
+  if (!token) return null;
+  try {
+    const res = await fetch("/api/offers", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id, status }),
+    });
+    return res.ok;
+  } catch { return null; }
+}
+
+/** Envía un push al destinatario (no bloqueante). */
+export async function sendPush({ recipientId, title, body, link }) {
+  if (!recipientId) return;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
+    await fetch("/api/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipientId, title, body, link }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+  } catch (err) {
+    console.warn("[DataService] sendPush no disponible:", err?.message);
+  }
+}
+
+/** Obtiene las reseñas públicas de un usuario (vendedor). */
+export async function fetchReviews(userId) {
+  if (!userId) return [];
+  try {
+    const res = await fetch(`/api/reviews?userId=${encodeURIComponent(userId)}`);
+    const data = await res.json();
+    return data.reviews || [];
+  } catch { return []; }
+}
+
+export async function getFavorites() {
+  try {
+    const token = await getAuthToken();
+    if (!token) return [];
+    const res = await fetch("/api/favorites", { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    return data.favorites || [];
+  } catch { return []; }
+}
+
+export async function toggleFavoriteAPI(productId) {
+  try {
+    const token = await getAuthToken();
+    if (!token) return null;
+    const res = await fetch("/api/favorites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ productId }),
+    });
+    const data = await res.json();
+    return data.favorited;
+  } catch { return null; }
+}
+
+export async function getProfile() {
+  let email = null;
+  try {
+    const s = JSON.parse(localStorage.getItem("colecciona_session") || "null");
+    email = s?.email || null;
+  } catch {}
+  try {
+    const headers = {};
+    const token = await getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (email) headers["x-user-email"] = email;
+    if (!token && !email) return null;
+    const res = await fetch("/api/profile", { headers });
+    const data = await res.json();
+    return data.profile || null;
+  } catch { return null; }
+}
+
+export async function updateProfile(updates) {
+  let email = null;
+  try {
+    const s = JSON.parse(localStorage.getItem("colecciona_session") || "null");
+    email = s?.email || null;
+  } catch {}
+  try {
+    const headers = { "Content-Type": "application/json" };
+    const token = await getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (email) headers["x-user-email"] = email;
+    if (!token && !email) return null;
+    const res = await fetch("/api/profile", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(updates),
+    });
+    const data = await res.json();
+    return data.profile || null;
+  } catch { return null; }
+}
+
+export async function resetPassword(email, newPassword) {
+  const db = readDB();
+  for (const u of db.users) {
+    if (u.email && u.email.toLowerCase() === String(email).toLowerCase()) {
+      u.password = newPassword;
+    }
+  }
+  writeDB(db);
+
+  // Respaldo local para cuentas que no estén en la BD (usuarios demo)
+  try {
+    const map = JSON.parse(localStorage.getItem("colecciona_passwords") || "{}");
+    map[String(email).toLowerCase()] = newPassword;
+    localStorage.setItem("colecciona_passwords", JSON.stringify(map));
+  } catch {}
+  return true;
+}
+
+const BUCKET = "card-images";
+
+function dataUrlToBlob(dataUrl) {
+  const base64 = dataUrl.split(",")[1];
+  const byteChars = atob(base64);
+  const buf = new Uint8Array(byteChars.length);
+  for (let i = 0; i < byteChars.length; i++) buf[i] = byteChars.charCodeAt(i);
+  return new Blob([buf], { type: "image/jpeg" });
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Sube la imagen de una carta a Supabase Storage a través de la API route del
+ * servidor (/api/upload-image). El servidor sí puede alcanzar Supabase aunque
+ * el navegador no. Si la API falla, devuelve un dataURL local persistente.
+ * Nunca se queda colgada.
+ */
+export async function uploadCardImage(input) {
+  const localDataUrl =
+    typeof input === "string" ? input : await blobToDataUrl(input);
+
+  try {
+    const file =
+      typeof input === "string"
+        ? dataUrlToBlob(input)
+        : input;
+
+    const formData = new FormData();
+    formData.append("file", file, `card.${file.type === "image/png" ? "png" : "jpg"}`);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    const res = await fetch("/api/upload-image", {
+      method: "POST",
+      body: formData,
+      headers: { ...(await authHeaders()) },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    const json = await res.json();
+    if (res.ok && json.url) return json.url;
+    console.warn("[DataService] Upload via API falló:", json.error);
+  } catch (err) {
+    console.warn("[DataService] Upload via API no disponible:", err?.message);
+  }
+
+  return localDataUrl;
+}

@@ -1,0 +1,69 @@
+.footer {
+  position: relative;
+  z-index: 1;
+  padding: 40px 20px 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  overflow: hidden;
+  text-align: left;
+}
+
+/* Continuidad de color: el footer replica el degradado del tagline
+   (índigo tenue → violeta tenue → transparente) para que al pasar de
+   una sección a la otra el fondo fluya sin costura. */
+.footer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(99, 102, 241, 0.04) 30%,
+    rgba(139, 92, 246, 0.05) 60%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+.bigText {
+  display: block;
+  width: 100%;
+  font-family: var(--font-heading, Outfit, sans-serif);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-size: clamp(2.6rem, 14vw, 9.5rem);
+  line-height: 0.85;
+  white-space: nowrap;
+  user-select: none;
+
+  background: linear-gradient(100deg, #818cf8, #34d399, #a78bfa, #38bdf8, #818cf8);
+  background-size: 300% auto;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: shine 9s linear infinite;
+}
+
+@keyframes shine {
+  to {
+    background-position: 300% center;
+  }
+}
+
+.copyright {
+  margin: 0;
+  width: 100%;
+  text-align: center;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+@media (max-width: 768px) {
+  .footer {
+    padding-bottom: 90px; /* hueco para la BottomNav móvil */
+  }
+}

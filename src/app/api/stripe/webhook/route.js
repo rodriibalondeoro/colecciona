@@ -1,0 +1,76 @@
+import { NextResponse } from "next/server";
+import { getStripe } from "@/lib/stripe";
+import { createClient } from "@supabase/supabase-js";
+
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+export const runtime = "nodejs";
+
+export async function POST(req) {
+  const body = await req.text();
+  const sig = req.headers.get("stripe-signature");
+
+  if (!sig) {
+    console.error("[Webhook] No stripe-signature header");
+    return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+  }
+
+  if (!webhookSecret) {
+    console.error("[Webhook] STRIPE_WEBHOOK_SECRET no configurado");
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 500 });
+  }
+
+  let event;
+  try {
+    event = getStripe().webhooks.constructEvent(body, sig, webhookSecret);
+  } catch (err) {
+    console.error("[Webhook] Firma inválida:", err.message);
+    return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
+  }
+
+  console.log(`[Webhook] Evento recibido: ${event.type}`);
+
+  const supabase = createClient(url, key);
+
+  switch (event.type) {
+    case "payment_intent.succeeded": {
+      const pi = event.data.object;
+      console.log(`[Webhook] Payment succeeded: ${pi.id}`);
+      const { error } = await supabase
+        .from("orders")
+        .update({ status: "paid" })
+        .eq("payment_intent_id", pi.id);
+      if (error) console.error("[Webhook] Error updating order:", error);
+      break;
+    }
+    case "payment_intent.captured": {
+      const pi = event.data.object;
+      console.log(`[Webhook] Payment captured: ${pi.id}`);
+      await supabase
+        .from("orders")
+        .update({ status: "paid" })
+        .eq("payment_intent_id", pi.id);
+      break;
+    }
+    case "payment_intent.payment_failed": {
+      const pi = event.data.object;
+      console.log(`[Webhook] Payment failed: ${pi.id}`);
+      await supabase
+        .from("orders")
+        .update({ status: "failed" })
+        .eq("payment_intent_id", pi.id);
+      break;
+    }
+    case "charge.succeeded":
+    case "charge.updated":
+      // Log but no action needed
+      console.log(`[Webhook] ${event.type} — handled`);
+      break;
+    default:
+      console.log(`[Webhook] Evento no manejado: ${event.type}`);
+  }
+
+  return NextResponse.json({ received: true });
+}
