@@ -348,7 +348,7 @@
 .emptyState p {
   font-size: 13px;
   color: var(--text-muted);
-  margin: 0 0 16px;
+  margin: 0;
   line-height: 1.5;
 }
 

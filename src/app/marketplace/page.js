@@ -470,7 +470,9 @@ function MarketplaceContent() {
               onChange={(e) => setSelectedCategory(e.target.value)}
             >
               <option value="all">Todas las colecciones</option>
-              {collections.map((col) => (
+              {collections
+                .filter((col) => ["mundial", "tlg-futbol", "champions", "baloncesto", "beisbol", "nfl-ufc", "motor", "comics-cine", "nintendo", "especial-digital"].includes(col.id))
+                .map((col) => (
                 <optgroup key={col.id} label={col.name}>
                   <option value={col.id}>{col.name} (Todo)</option>
                   {col.subs?.map((sub) => (
@@ -483,52 +485,31 @@ function MarketplaceContent() {
             </select>
           </div>
 
-
           <div className={styles.filterField}>
             <label className={styles.filterLabel}>Precio (€)</label>
             <div className={styles.priceInputs}>
               <input
-                type="number"
-                min="0"
+                type="text"
+                inputMode="decimal"
                 placeholder="Mín"
                 value={minPrice}
-                onChange={(e) => setMinPrice(e.target.value)}
+                onChange={(e) => { const v = e.target.value.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1"); setMinPrice(v); }}
                 className={styles.priceInput}
                 aria-label="Precio mínimo"
               />
               <span className={styles.priceDash}>–</span>
               <input
-                type="number"
-                min="0"
+                type="text"
+                inputMode="decimal"
                 placeholder="Máx"
                 value={maxPrice}
-                onChange={(e) => setMaxPrice(e.target.value)}
+                onChange={(e) => { const v = e.target.value.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1"); setMaxPrice(v); }}
                 className={styles.priceInput}
                 aria-label="Precio máximo"
               />
             </div>
           </div>
-
-          {(sortBy !== "recent" || minPrice !== "" || maxPrice !== "" || conditionFilter !== "all") && (
-            <button
-              type="button"
-              className={styles.filterClear}
-              onClick={() => { setSortBy("recent"); setMinPrice(""); setMaxPrice(""); setConditionFilter("all"); }}
-            >
-              Limpiar
-            </button>
-          )}
         </div>
-
-        {/* Resumen de resultados */}
-        {filtered.length > 0 && (
-        <div className={styles.resultsSummary}>
-          <p className={styles.resultsSummaryText}>
-            <strong className={styles.resultsCount}>{filtered.length}</strong>{" "}
-            {filtered.length === 1 ? "resultado" : "resultados"}
-          </p>
-        </div>
-        )}
         </>
         )}
 
@@ -589,10 +570,7 @@ function MarketplaceContent() {
               </svg>
             </div>
             <h3>No se encontraron cromos</h3>
-            <p>Prueba a buscar con otras palabras clave o limpia los filtros para ver todos los cromos disponibles.</p>
-            <button className={styles.resetBtn} onClick={resetAll}>
-              Limpiar filtros
-            </button>
+            <p>Prueba a buscar con otras palabras clave o con otros filtros.</p>
           </div>
         )}
       </div>
