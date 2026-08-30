@@ -11,6 +11,7 @@ import ProductCard from "@/components/ProductCard";
 import PriceChart from "@/components/PriceChart";
 import MakeOfferModal from "@/components/MakeOfferModal";
 import FoilCard from "@/components/FoilCard";
+import PriceAlertButton from "@/components/PriceAlertButton";
 import { useApp } from "@/context/AppContext";
 import { addRecentlyViewed, getRecentlyViewed } from "@/lib/recentlyViewed";
 import styles from "./page.module.css";
@@ -413,6 +414,10 @@ export default function ProductDetailPage() {
                 </svg>
                 Compartir
               </button>
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <PriceAlertButton productId={product.id} currentPrice={product.price} />
             </div>
           </div>
         </div>

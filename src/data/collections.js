@@ -6,126 +6,6 @@
 
 export const collections = [
   {
-    id: 'tcg',
-    name: 'Cartas · TCG',
-    code: 'TCG',
-    color: '#eab308',
-    subs: [
-      { id: 'pokemon', name: 'Pokémon', code: 'PKM' },
-      { id: 'mtg', name: 'Magic: The Gathering', code: 'MTG' },
-      { id: 'yugioh', name: 'Yu-Gi-Oh!', code: 'YGO' },
-      { id: 'onepiece', name: 'One Piece', code: 'OPT' },
-      { id: 'dragonball', name: 'Dragon Ball Super', code: 'DBS' },
-      { id: 'lorcana', name: 'Lorcana', code: 'LRC' },
-      { id: 'flesh', name: 'Flesh & Blood', code: 'FAB' },
-      { id: 'cromos', name: 'Cromos clásicos', code: 'CRM' },
-    ],
-  },
-  {
-    id: 'deportes',
-    name: 'Deportes',
-    code: 'SPT',
-    color: '#10b981',
-    subs: [
-      { id: 'futbol', name: 'Fútbol', code: 'FUT' },
-      { id: 'basket', name: 'Baloncesto · NBA', code: 'BLB' },
-      { id: 'mundial', name: 'Mundial', code: 'MUN' },
-      { id: 'eurocopa', name: 'Eurocopa', code: 'EUR' },
-      { id: 'f1', name: 'Fórmula 1', code: 'F1' },
-      { id: 'moto', name: 'MotoGP', code: 'MGP' },
-      { id: 'atletismo', name: 'Atletismo', code: 'ATL' },
-      { id: 'box', name: 'Boxeo · MMA', code: 'BOX' },
-      { id: 'sports', name: 'Otras deportivas', code: 'SPT' },
-    ],
-  },
-  {
-    id: 'kawaii',
-    name: 'Kawaii · Sanrio',
-    code: 'SIO',
-    color: '#f472b6',
-    subs: [
-      { id: 'hellokitty', name: 'Hello Kitty', code: 'HK' },
-      { id: 'mymelody', name: 'My Melody', code: 'MM' },
-      { id: 'kuromi', name: 'Kuromi', code: 'KRM' },
-      { id: 'cinnamoroll', name: 'Cinnamoroll', code: 'CIN' },
-      { id: 'sanrio', name: 'Resto Sanrio', code: 'SNR' },
-    ],
-  },
-  {
-    id: 'figuras',
-    name: 'Figuras',
-    code: 'FIG',
-    color: '#a855f7',
-    subs: [
-      { id: 'funk', name: 'Funko Pop!', code: 'FNK' },
-      { id: 'nendoroid', name: 'Nendoroid', code: 'NDD' },
-      { id: 'figma', name: 'Figma', code: 'FGM' },
-      { id: 'gachapon', name: 'Gachapons', code: 'GCH' },
-      { id: 'figures', name: 'Otras figuras', code: 'OTR' },
-    ],
-  },
-  {
-    id: 'manga',
-    name: 'Manga · Cómic',
-    code: 'MNG',
-    color: '#6366f1',
-    subs: [
-      { id: 'shonen', name: 'Shonen', code: 'SHN' },
-      { id: 'shojo', name: 'Shojo', code: 'SHJ' },
-      { id: 'edideluxe', name: 'Ediciones Deluxe', code: 'DLX' },
-      { id: 'comic', name: 'Cómic de cabeza DC/Marvel', code: 'CMC' },
-      { id: 'manga', name: 'Manga general', code: 'MNG' },
-    ],
-  },
-  {
-    id: 'clasico',
-    name: 'Clásico',
-    code: 'CLA',
-    color: '#0ea5e9',
-    subs: [
-      { id: 'stamps', name: 'Sellos', code: 'SLO' },
-      { id: 'coins', name: 'Monedas', code: 'CND' },
-      { id: 'bills', name: 'Billetes', code: 'BLL' },
-      { id: 'reliquias', name: 'Amanotir / Antigüedades', code: 'ANT' },
-      { id: 'puros', name: 'Vitage · Puros', code: 'PRS' },
-    ],
-  },
-  {
-    id: 'retro',
-    name: 'Retro · Videojuego',
-    code: 'RTO',
-    color: '#f43f5e',
-    subs: [
-      { id: 'consolas', name: 'Consolas retro', code: 'CSL' },
-      { id: 'cartuchos', name: 'Cartuchos', code: 'CAR' },
-      { id: 'retro', name: 'Videojuegos general', code: 'RTO' },
-    ],
-  },
-  {
-    id: 'lego',
-    name: 'LEGO · Construcción',
-    code: 'LGO',
-    color: '#f97316',
-    subs: [
-      { id: 'lego', name: 'LEGO general', code: 'LGO' },
-      { id: 'legostar', name: 'LEGO Star Wars', code: 'LSW' },
-      { id: 'miniaturas', name: 'Miniaturas', code: 'MIN' },
-      { id: 'dioramas', name: 'Dioramas', code: 'DIR' },
-    ],
-  },
-  {
-    id: 'papel',
-    name: 'Cromos y Pegatinas',
-    code: 'CRM',
-    color: '#84cc16',
-    subs: [
-      { id: 'stickers', name: 'Pegatinas', code: 'STK' },
-      { id: 'albums', name: 'Álbumes', code: 'ALB' },
-      { id: 'cromosclasicos', name: 'Cromos clásicos', code: 'CRM' },
-      { id: 'papers', name: 'Material escolar', code: 'PAP' },
-    ],
-  },
-  {
     id: 'mundial',
     name: 'Mundial y Selecciones',
     logo: '🏆',
@@ -176,7 +56,7 @@ export const collections = [
       { id: 'collector-tins', name: 'Collector Tins (Argentina · ManUtd)', code: 'TIN' },
     ],
   },
-{
+  {
     id: 'baloncesto',
     name: 'Baloncesto · NBA',
     logo: '🏀',
@@ -188,7 +68,7 @@ export const collections = [
       { id: 'motif-nba', name: 'Motif Basketball 25-26', code: 'MOB' },
     ],
   },
-{
+  {
     id: 'beisbol',
     name: 'Béisbol · MLB',
     logo: '⚾',
@@ -199,7 +79,7 @@ export const collections = [
       { id: 'pristine-bb', name: 'Pristine Baseball 2026', code: 'PBB' },
     ],
   },
-{
+  {
     id: 'nfl-ufc',
     name: 'NFL y Combate',
     logo: '🏈',
@@ -210,7 +90,7 @@ export const collections = [
       { id: 'universe-wwe', name: 'Topps Universe WWE', code: 'WWE' },
     ],
   },
-{
+  {
     id: 'motor',
     name: 'Motor',
     logo: '🏎️',
@@ -219,7 +99,7 @@ export const collections = [
       { id: 'turbo-attax-f1', name: 'Fórmula 1 Turbo Attax 2026', code: 'F1' },
     ],
   },
-{
+  {
     id: 'comics-cine',
     name: 'Cómics y Cine',
     logo: '🦸',
@@ -232,7 +112,7 @@ export const collections = [
       { id: 'starwars-galaxy', name: 'Star Wars Chrome Galaxy 2026', code: 'SWC' },
     ],
   },
-{
+  {
     id: 'nintendo',
     name: 'Nintendo',
     logo: '🎮',
@@ -242,7 +122,7 @@ export const collections = [
       { id: 'kidi-line', name: 'Bluey · Adopt Me! · Minecraft', code: 'KID' },
     ],
   },
-{
+  {
     id: 'especial-digital',
     name: 'Especial / Digital',
     logo: '✨',
@@ -254,18 +134,6 @@ export const collections = [
       { id: 'digital-collections', name: 'Panini Digital Collections', code: 'DGT' },
       { id: 'topps-now', name: 'Topps NOW® ', code: 'NOW' },
       { id: 'living-set', name: 'Topps Living Set® ', code: 'LIV' },
-    ],
-  },
-  {
-    id: 'presencia',
-    name: 'Presencia',
-    code: 'PRS',
-    color: '#22d3ee',
-    subs: [
-      { id: 'llaveros', name: 'Llaveros', code: 'LLV' },
-      { id: 'washipes', name: 'Washi tapes', code: 'WSH' },
-      { id: 'postales', name: 'Postales', code: 'PST' },
-      { id: 'tarjetas', name: 'Tarjetas', code: 'TRJ' },
     ],
   },
 ];

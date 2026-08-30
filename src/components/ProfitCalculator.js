@@ -20,7 +20,7 @@ export default function ProfitCalculator() {
   const buyerTotal = price + shipCost;
   
   // Platform fees
-  const coleccionaComm = Math.max(price * 0.035, 0.35); // 3.5% or min 0.35
+  const coleccionaComm = price * 0.08; // 8% comisión Colecciona
   const stripeComm = buyerTotal * 0.015 + 0.25; // 1.5% + 0.25€
   
   const totalFees = coleccionaComm + stripeComm + shipCost; // You have to pay for shipping eventually from the received money, or rather it's subtracted. Actually, buyer pays shipping, so total collected is buyerTotal.

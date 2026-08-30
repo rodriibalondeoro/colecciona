@@ -9,6 +9,7 @@ import Cursor from "@/components/Cursor";
 import ScrollProgress from "@/components/ScrollProgress";
 import HoverFooter from "@/components/HoverFooter";
 import { AppProvider } from "@/context/AppContext";
+import { PremiumProvider } from "@/hooks/usePremium";
 import ToastContainer from "@/components/ToastContainer";
 
 const inter = Inter({
@@ -102,17 +103,19 @@ export default function RootLayout({ children }) {
       </head>
       <body>
           <AppProvider>
-            <RegisterSW />
-            <Preloader />
-            <SmoothScroll />
-            <Cursor />
-            <ScrollProgress />
-            <div className="grain" aria-hidden="true" />
-            <AuthGate>
-              <main className="main-content">{children}</main>
-            </AuthGate>
-            <HoverFooter />
-            <ToastContainer />
+            <PremiumProvider>
+              <RegisterSW />
+              <Preloader />
+              <SmoothScroll />
+              <Cursor />
+              <ScrollProgress />
+              <div className="grain" aria-hidden="true" />
+              <AuthGate>
+                <main className="main-content">{children}</main>
+              </AuthGate>
+              <HoverFooter />
+              <ToastContainer />
+            </PremiumProvider>
           </AppProvider>
         </body>
     </html>

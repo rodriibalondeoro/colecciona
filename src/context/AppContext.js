@@ -412,7 +412,7 @@ export function AppProvider({ children }) {
     (acc, item) => ({
       subtotal: acc.subtotal + item.product.price,
       shipping: acc.shipping + (item.shippingMethod?.price || 1.8),
-      commission: acc.commission + Math.max(0.35, item.product.price * 0.035),
+      commission: acc.commission + item.product.price * 0.08,
     }),
     { subtotal: 0, shipping: 0, commission: 0 }
   );
@@ -734,8 +734,8 @@ export function AppProvider({ children }) {
       buyer: "me",
       price: item.product.price,
       shipping: item.shippingMethod?.price || 1.8,
-      commission: Math.max(0.35, item.product.price * 0.035),
-      total: item.product.price + (item.shippingMethod?.price || 1.8) + Math.max(0.35, item.product.price * 0.035),
+      commission: item.product.price * 0.08,
+      total: item.product.price + (item.shippingMethod?.price || 1.8) + item.product.price * 0.08,
       shippingMethod: item.shippingMethod?.name || "Sobre acolchado Correos",
       trackingCode: null,
       status: "paid",

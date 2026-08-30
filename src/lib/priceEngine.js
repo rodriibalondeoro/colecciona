@@ -42,7 +42,7 @@ export function analyzePrice(listingPrice, category, condition, baseMarketPrice 
 
   // Ahorro vs comisiones tradicionales (Vinted cobra 5% + 0.70€ fijo + seguro extra)
   const conventionalFee = listingPrice * 0.05 + 0.70 + 2.0; // estimación Wallapop/Vinted
-  const coleccionaFee = Math.max(0.35, listingPrice * 0.035); // comisión real súper baja
+  const coleccionaFee = listingPrice * 0.08; // 8% comisión Colecciona
 
   const userSaving = conventionalFee - coleccionaFee;
 

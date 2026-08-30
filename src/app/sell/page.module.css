@@ -554,3 +554,8 @@
   max-width: 280px;
   margin: 0 auto;
 }
+
+/* Card Identifier */
+.identifierBox {
+  margin-top: 16px;
+}

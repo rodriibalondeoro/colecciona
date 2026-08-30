@@ -65,9 +65,65 @@ export async function POST(req) {
     }
     case "charge.succeeded":
     case "charge.updated":
-      // Log but no action needed
       console.log(`[Webhook] ${event.type} — handled`);
       break;
+
+    // --- Premium Subscription Events ---
+    case "customer.subscription.created": {
+      const sub = event.data.object;
+      const userId = sub.metadata?.user_id;
+      console.log(`[Webhook] Subscription created: ${sub.id} for user ${userId}`);
+      if (userId) {
+        await supabase.from("subscriptions").upsert({
+          user_id: userId,
+          stripe_subscription_id: sub.id,
+          stripe_customer_id: sub.customer,
+          status: sub.status,
+          plan: "premium_monthly",
+          amount: (sub.items?.data?.[0]?.price?.unit_amount || 499) / 100,
+          current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
+          current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+        }, { onConflict: "stripe_subscription_id" });
+        await supabase.from("users").update({
+          is_premium: true,
+          premium_since: new Date().toISOString(),
+          stripe_subscription_id: sub.id,
+        }).eq("id", userId);
+      }
+      break;
+    }
+    case "customer.subscription.updated": {
+      const sub = event.data.object;
+      const userId = sub.metadata?.user_id;
+      console.log(`[Webhook] Subscription updated: ${sub.id} status=${sub.status}`);
+      const isActive = sub.status === "active" || sub.status === "trialing";
+      if (userId) {
+        await supabase.from("subscriptions").update({
+          status: sub.status,
+          current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+          cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
+        }).eq("stripe_subscription_id", sub.id);
+        await supabase.from("users").update({
+          is_premium: isActive,
+        }).eq("id", userId);
+      }
+      break;
+    }
+    case "customer.subscription.deleted": {
+      const sub = event.data.object;
+      const userId = sub.metadata?.user_id;
+      console.log(`[Webhook] Subscription deleted: ${sub.id}`);
+      if (userId) {
+        await supabase.from("subscriptions").update({
+          status: "canceled",
+        }).eq("stripe_subscription_id", sub.id);
+        await supabase.from("users").update({
+          is_premium: false,
+          stripe_subscription_id: null,
+        }).eq("id", userId);
+      }
+      break;
+    }
     default:
       console.log(`[Webhook] Evento no manejado: ${event.type}`);
   }

@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { VerifiedBadge } from "./Badge";
+import PremiumBadge from "./PremiumBadge";
 import FoilCard from "./FoilCard";
 import { useApp } from "@/context/AppContext";
 import { hapticLight } from "@/lib/haptics";
@@ -259,6 +260,7 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
             </div>
             <span className={styles.sellerHandle}>@{seller.username}</span>
             {seller.verified && <VerifiedBadge />}
+            {seller.is_premium && <PremiumBadge size="xs" showText={false} />}
           </div>
         )}
       </div>

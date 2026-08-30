@@ -7,8 +7,12 @@ import { collections } from "@/data/collections";
 import ProfitCalculator from "@/components/ProfitCalculator";
 import ImageCropper from "@/components/ImageCropper";
 import PSAVerifier from "@/components/PSAVerifier";
+import CardIdentifier from "@/components/CardIdentifier";
+import PriceSuggest from "@/components/PriceSuggest";
+import PremiumBadge from "@/components/PremiumBadge";
 import { publishProduct, uploadCardImage, getProfile } from "@/lib/dataService";
 import { hapticSuccess } from "@/lib/haptics";
+import { usePremium } from "@/hooks/usePremium";
 import styles from "./page.module.css";
 
 const themeSectionIds = [
@@ -17,6 +21,7 @@ const themeSectionIds = [
 ];
 
 export default function SellPage() {
+  const { isPremium, commissionRate } = usePremium();
   const uploadPromiseRef = useRef(null);
   const lastPhotoRef = useRef(null);
   const [session, setSession] = useState(null);
@@ -36,6 +41,7 @@ export default function SellPage() {
   const [description, setDescription] = useState("");
   const [shippingMethod, setShippingMethod] = useState("sm1");
   const [isPublished, setIsPublished] = useState(false);
+  const [showIdentifier, setShowIdentifier] = useState(false);
 
   useEffect(() => {
     try {
@@ -72,6 +78,7 @@ export default function SellPage() {
     setCroppedPreview(dataUrl);
     setImageStatus("uploading");
     setImageError(null);
+    setShowIdentifier(true);
     uploadPromiseRef.current = uploadCardImage(blob || dataUrl)
       .then((url) => {
         setImageUrl(url);
@@ -83,6 +90,23 @@ export default function SellPage() {
         setImageError(err?.message || "Error al subir la imagen.");
         setImageUrl(null);
       });
+  };
+
+  const handleIdentify = (data) => {
+    if (data.title) setTitle(data.title);
+    if (data.category) setCategory(data.category);
+    if (data.set) {
+      setDescription((prev) =>
+        prev ? `${prev}\nSet: ${data.set}` : `Set: ${data.set}`
+      );
+    }
+    setShowIdentifier(false);
+    setStep(2);
+  };
+
+  const handleSkipIdentifier = () => {
+    setShowIdentifier(false);
+    setStep(2);
   };
 
   const handleRetryUpload = () => {
@@ -105,7 +129,7 @@ export default function SellPage() {
   const publishedImage = imageUrl || croppedPreview || imagePreview;
 
   const numericPrice = parseFloat(price) || 0;
-  const commissionFee = numericPrice * 0.08;
+  const commissionFee = numericPrice * commissionRate;
   const netEarnings = numericPrice - commissionFee;
   const selectedShipping = shippingMethods.find((m) => m.id === shippingMethod) || shippingMethods[0];
 
@@ -256,10 +280,13 @@ export default function SellPage() {
     <div className={`${styles.wrapper} page-enter`}>
       <div className="container">
         <div className={styles.header}>
-          <span className={styles.headerBadge}>PANEL DE VENDEDOR TCG</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+            <span className={styles.headerBadge}>PANEL DE VENDEDOR TCG</span>
+            <PremiumBadge size="xs" />
+          </div>
           <h1 className={styles.pageTitle}>Publicar Carta en Mercado</h1>
           <p className={styles.pageSubtitle}>
-            Venta protegida con el coste final de comisión más bajo del mercado (8%).
+            Venta protegida con comisión {isPremium ? 'reducida' : 'baja'} del {(commissionRate * 100).toFixed(0)}%.
           </p>
         </div>
 
@@ -344,15 +371,27 @@ export default function SellPage() {
                 )}
               </div>
 
-              <div className={styles.navRight}>
-                <button
-                  className={styles.primaryBtn}
-                  disabled={!croppedPreview}
-                  onClick={() => setStep(2)}
-                >
-                  Continuar: Especificaciones →
-                </button>
-              </div>
+              {showIdentifier && croppedPreview && (
+                <div className={styles.identifierBox}>
+                  <CardIdentifier
+                    imageUrl={croppedPreview}
+                    onIdentify={handleIdentify}
+                    onSkip={handleSkipIdentifier}
+                  />
+                </div>
+              )}
+
+              {!showIdentifier && (
+                <div className={styles.navRight}>
+                  <button
+                    className={styles.primaryBtn}
+                    disabled={!croppedPreview}
+                    onClick={() => setStep(2)}
+                  >
+                    Continuar: Especificaciones →
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -418,8 +457,14 @@ export default function SellPage() {
                 </div>
               </div>
 
+              <PriceSuggest
+                category={category}
+                condition={condition}
+                title={title}
+                onSuggestedPrice={(p) => setPrice(String(p))}
+              />
+
               <div className={styles.inputGroup}>
-                <label className={styles.label}>Estado de conservación</label>
                 <div className={styles.conditionGrid}>
                   {Object.entries(cardConditions).map(([code, info]) => (
                     <button
