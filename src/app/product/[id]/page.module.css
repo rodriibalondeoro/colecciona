@@ -13,24 +13,22 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: linear-gradient(135deg, var(--accent-primary, #7c5cff), #a78bfa);
-  border: none;
+  background: var(--bg-surface, #1a1a2e);
+  border: 1px solid var(--border-medium);
   border-radius: var(--radius-sm);
-  padding: 8px 16px;
+  padding: 7px 14px;
   font-family: var(--font-mono);
   font-size: 12px;
-  font-weight: 700;
-  color: #fff;
+  font-weight: 600;
+  color: var(--text-primary, #e4e6f0);
   cursor: pointer;
   transition: all 0.2s ease;
-  box-shadow: 0 2px 8px rgba(124, 92, 255, 0.3);
 }
 
 .backBtn:hover {
   color: #fff;
-  background: linear-gradient(135deg, #6d4de8, #8b5cf6);
-  box-shadow: 0 4px 14px rgba(124, 92, 255, 0.45);
-  transform: translateY(-1px);
+  border-color: var(--accent-primary, #7c5cff);
+  background: var(--bg-overlay, rgba(124, 92, 255, 0.08));
 }
 
 .mainGrid {
@@ -884,18 +882,15 @@
   display: inline-block;
   margin-top: 16px;
   padding: 10px 24px;
-  background: linear-gradient(135deg, var(--accent-primary, #7c5cff), #a78bfa);
+  background: var(--accent-primary, #7c5cff);
   color: white;
   border-radius: var(--radius-sm);
   text-decoration: none;
-  font-weight: 700;
+  font-weight: 600;
   font-size: 13px;
-  box-shadow: 0 2px 8px rgba(124, 92, 255, 0.3);
   transition: all 0.2s ease;
 }
 
 .primaryLink:hover {
-  background: linear-gradient(135deg, #6d4de8, #8b5cf6);
-  box-shadow: 0 4px 14px rgba(124, 92, 255, 0.45);
-  transform: translateY(-1px);
+  filter: brightness(1.1);
 }
