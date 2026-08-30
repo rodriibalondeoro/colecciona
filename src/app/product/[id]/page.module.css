@@ -6,25 +6,29 @@
 .breadcrumbNav {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
   margin-bottom: 24px;
 }
 
-.breadcrumbNav a {
+.backBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text-muted);
-  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.breadcrumbNav a:hover {
+.backBtn:hover {
   color: var(--text-primary);
-}
-
-.breadcrumbActive {
-  color: var(--accent-light);
-  font-weight: 700;
+  border-color: var(--border-medium);
+  background: var(--bg-overlay);
 }
 
 .mainGrid {

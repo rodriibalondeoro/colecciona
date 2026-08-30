@@ -26,16 +26,23 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
     session.email === product.seller?.email
   );
 
+  const themeSectionIds = [
+    'mundial', 'tlg-futbol', 'champions', 'baloncesto', 'beisbol',
+    'nfl-ufc', 'motor', 'comics-cine', 'nintendo', 'especial-digital',
+  ];
+
   function getCollectionName(categoryId) {
     for (const col of collections) {
+      if (!themeSectionIds.includes(col.id)) continue;
       if (col.id === categoryId) return col.name;
       for (const sub of col.subs || []) {
-        if (sub.id === categoryId) return col.name;
+        if (sub.id === categoryId) return `${col.name} / ${sub.name}`;
       }
     }
     return "";
   }
   const collectionName = getCollectionName(product.category);
+  const baseLikes = product.favorites || product.favorites_count || product.likes || 0;
 
   const reducedRef = useRef(
     typeof window !== "undefined" &&
@@ -180,8 +187,8 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
         aria-label={isFavorite ? "Quitar de favoritos" : "Guardar en favoritos"}
       >
         <svg
-          width="16"
-          height="16"
+          width="14"
+          height="14"
           viewBox="0 0 24 24"
           fill={isFavorite ? "currentColor" : "none"}
           stroke="currentColor"
@@ -231,9 +238,12 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
               {product.price.toFixed(2)} €
             </span>
           </div>
-          {(product.favorites > 0 || product.favorites_count > 0 || product.likes > 0) && (
-            <span className={styles.likesCount}>❤️ {product.favorites || product.favorites_count || product.likes}</span>
-          )}
+          <div className={styles.likesCount}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+            </svg>
+            {baseLikes + (isFavorite ? 1 : 0)}
+          </div>
         </div>
 
         {isOwner && product.views > 0 && (

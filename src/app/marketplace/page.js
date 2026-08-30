@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ProductCard from "@/components/ProductCard";
 import Skeleton from "@/components/Skeleton";
-import { categories, products, users } from "@/data/mockData";
+import { products, users } from "@/data/mockData";
 import { collections } from "@/data/collections";
 import { getPersistedProducts, deleteProduct } from "@/lib/dataService";
 import { getRecentlyViewed } from "@/lib/recentlyViewed";
@@ -14,6 +14,11 @@ import Image from "next/image";
 import TextReveal from "@/components/TextReveal";
 import { useStaggerReveal } from "@/lib/useScrollReveal";
 import styles from "./page.module.css";
+
+const themeSectionIds = [
+  'mundial', 'tlg-futbol', 'champions', 'baloncesto', 'beisbol',
+  'nfl-ufc', 'motor', 'comics-cine', 'nintendo', 'especial-digital',
+];
 
 const PAGE_LIMIT = 20;
 
@@ -36,7 +41,20 @@ function normalize(s) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-function buildSearchParams({ q, category, condition, sort, page, minPrice, maxPrice }) {
+function findCollectionInfo(categoryId) {
+  for (const col of collections) {
+    if (col.id === categoryId) {
+      return { id: col.id, name: col.name, parentName: col.name, subName: "" };
+    }
+    const sub = col.subs?.find((s) => s.id === categoryId);
+    if (sub) {
+      return { id: sub.id, name: sub.name, parentName: col.name, subName: sub.name };
+    }
+  }
+  return { id: categoryId, name: "", parentName: "", subName: "" };
+}
+
+function buildSearchParams({ q, category, condition, sort, page, minPrice, maxPrice, includeLimit = true }) {
   const params = new URLSearchParams();
   if (q) params.set("q", q);
   if (category && category !== "all") params.set("category", category);
@@ -45,7 +63,7 @@ function buildSearchParams({ q, category, condition, sort, page, minPrice, maxPr
   if (minPrice) params.set("min_price", minPrice);
   if (maxPrice) params.set("max_price", maxPrice);
   if (page > 1) params.set("page", String(page));
-  params.set("limit", String(PAGE_LIMIT));
+  if (includeLimit) params.set("limit", String(PAGE_LIMIT));
   return params.toString();
 }
 
@@ -205,8 +223,9 @@ function MarketplaceContent() {
       minPrice,
       maxPrice,
       page: 1,
+      includeLimit: false,
     });
-    router.replace(`/marketplace?${params}`, { scroll: false });
+    router.replace(params ? `/marketplace?${params}` : "/marketplace", { scroll: false });
 
     setCurrentPage(1);
     setDbProducts([]);
@@ -240,13 +259,15 @@ function MarketplaceContent() {
     }
   };
 
-  const resetAll = () => {
+  const clearSearchContext = () => {
     setSearchQuery("");
     setSelectedCategory("all");
-    setConditionFilter("all");
-    setSortBy("recent");
-    setMinPrice("");
-    setMaxPrice("");
+    router.replace("/marketplace", { scroll: false });
+  };
+
+  const handleCategoryChange = (categoryId) => {
+    setSelectedCategory(categoryId);
+    setSearchQuery(categoryId === "all" ? "" : findCollectionInfo(categoryId).name);
   };
 
   const allProducts = [...persisted, ...dbProducts, ...products];
@@ -257,23 +278,9 @@ function MarketplaceContent() {
   const seenIds = new Set(dbProducts.map((p) => p.id));
   const mergedProducts = [...dbProducts, ...allProducts.filter((p) => !seenIds.has(p.id))];
 
-  const activeCol = collections.find((c) => c.id === selectedCategory);
-  let activeSubName = "";
-  let activeParentName = "";
-  if (activeCol) {
-    activeParentName = activeCol.name;
-  } else {
-    const parentCol = collections.find((c) => c.subs.some((s) => s.id === selectedCategory));
-    if (parentCol) {
-      activeParentName = parentCol.name;
-      activeSubName = parentCol.subs.find((s) => s.id === selectedCategory)?.name || "";
-    } else {
-      const cat = categories.find((c) => c.id === selectedCategory);
-      if (cat) {
-        activeParentName = cat.name;
-      }
-    }
-  }
+  const activeInfo = findCollectionInfo(selectedCategory);
+  const activeParentName = activeInfo.parentName;
+  const activeSubName = activeInfo.subName;
 
   const breadcrumbText = selectedCategory === "all"
     ? "COMPRA Y VENDE"
@@ -313,6 +320,7 @@ function MarketplaceContent() {
       const col = collections.find((c) => c.id === p.category);
       if (col && normalize(col.name).includes(qn)) return true;
       const parent = collections.find((c) => (c.subs || []).some((s) => s.id === p.category));
+      if (parent && normalize(parent.name).includes(qn)) return true;
       const sub = parent?.subs?.find((s) => s.id === p.category);
       if (sub && normalize(sub.name).includes(qn)) return true;
       return false;
@@ -371,7 +379,7 @@ function MarketplaceContent() {
                 className={styles.searchClearBtn}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSearchQuery("");
+                  clearSearchContext();
                 }}
                 aria-label="Borrar búsqueda"
               >
@@ -422,24 +430,14 @@ function MarketplaceContent() {
         </section>
         )}
 
-        {hasActiveFilter && dbProducts.length > 0 && (
-          <div className={styles.backToMarket}>
-            <button className={styles.backToMarketBtn} onClick={resetAll} type="button">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M19 12H5" />
-                <path d="M12 19l-7-7 7-7" />
-              </svg>
-              Volver al mercado
-            </button>
-          </div>
-        )}
-
         {/* Full-screen Search Overlay (historial, atrás, teclado) */}
         <SearchOverlay
           open={searchOpen}
           onClose={() => setSearchOpen(false)}
           onSearch={(t) => setSearchQuery(t)}
+          onSelectCategory={handleCategoryChange}
           fallbackUsers={users}
+          selectedCategory={selectedCategory}
         />
 
         {hasActiveFilter && (
@@ -467,11 +465,11 @@ function MarketplaceContent() {
               id="categoryFilter"
               className={styles.filterSelect}
               value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
+              onChange={(e) => handleCategoryChange(e.target.value)}
             >
               <option value="all">Todas las colecciones</option>
               {collections
-                .filter((col) => ["mundial", "tlg-futbol", "champions", "baloncesto", "beisbol", "nfl-ufc", "motor", "comics-cine", "nintendo", "especial-digital"].includes(col.id))
+                .filter((col) => themeSectionIds.includes(col.id))
                 .map((col) => (
                 <optgroup key={col.id} label={col.name}>
                   <option value={col.id}>{col.name} (Todo)</option>

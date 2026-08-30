@@ -213,11 +213,12 @@ export default function ProductDetailPage() {
     <div className={`${styles.wrapper} page-enter`}>
       <div className="container">
         <div className={styles.breadcrumbNav}>
-          <Link href="/marketplace">Mercado</Link>
-          <span>/</span>
-          <span>{product.category.toUpperCase()}</span>
-          <span>/</span>
-          <span className={styles.breadcrumbActive}>{product.title}</span>
+          <button className={styles.backBtn} onClick={() => router.back()}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+            Volver al Mercado
+          </button>
         </div>
 
         <div className={styles.mainGrid}>

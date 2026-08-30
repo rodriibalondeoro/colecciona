@@ -13,6 +13,11 @@ import {
 import { collections } from "@/data/collections";
 import styles from "./SearchOverlay.module.css";
 
+const themeSectionIds = [
+  'mundial', 'tlg-futbol', 'champions', 'baloncesto', 'beisbol',
+  'nfl-ufc', 'motor', 'comics-cine', 'nintendo', 'especial-digital',
+];
+
 function normalizeStr(s) {
   return String(s || "")
     .toLowerCase()
@@ -20,20 +25,50 @@ function normalizeStr(s) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+function findCollectionInfo(categoryId) {
+  for (const col of collections) {
+    if (col.id === categoryId) {
+      return { id: col.id, name: col.name, parentName: col.name, subName: "" };
+    }
+    const sub = col.subs?.find((s) => s.id === categoryId);
+    if (sub) {
+      return { id: sub.id, name: sub.name, parentName: col.name, subName: sub.name };
+    }
+  }
+  return { id: categoryId, name: "", parentName: "", subName: "" };
+}
+
 export default function SearchOverlay({
   open,
   onClose,
   onSearch,
+  onSelectCategory,
   fallbackUsers = [],
+  selectedCategory = "all",
 }) {
   const router = useRouter();
+  const activeSectionName = selectedCategory !== "all"
+    ? findCollectionInfo(selectedCategory).name
+    : "";
 
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState([]);
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [products, setProducts] = useState([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
+
+  function getProductCollectionName(categoryId) {
+    for (const col of collections) {
+      if (!themeSectionIds.includes(col.id)) continue;
+      if (col.id === categoryId) return col.name;
+      for (const sub of col.subs || []) {
+        if (sub.id === categoryId) return `${col.name} / ${sub.name}`;
+      }
+    }
+    return "";
+  }
 
   const inputRef = useRef(null);
   const resultsListRef = useRef(null);
@@ -101,6 +136,8 @@ export default function SearchOverlay({
       }
       setRecent(getRecentSearches());
       setQuery("");
+      setUsers([]);
+      setProducts([]);
       setActiveIndex(0);
 
       // Bloquear scroll del fondo — método position:fixed (funciona en Safari)
@@ -183,32 +220,58 @@ export default function SearchOverlay({
     };
   }, [q, open, fallbackUsers]);
 
+  // Búsqueda de productos
+  useEffect(() => {
+    if (!open || !q || q.length < 2) {
+      setProducts([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const catParam = selectedCategory !== "all" ? `&category=${selectedCategory}` : "";
+        const res = await fetch(`/api/products/search?q=${encodeURIComponent(q)}${catParam}&limit=5`, {
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!controller.signal.aborted) {
+          setProducts(data.products || []);
+        }
+      } catch {
+        if (!controller.signal.aborted) setProducts([]);
+      }
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [q, open, selectedCategory]);
+
   // Colecciones que coinciden
   const matchingCollections = useMemo(() => {
     if (!q) return [];
     const ql = normalizeStr(q);
     const results = [];
-    for (const c of collections) {
+    const sectionsToShow = selectedCategory !== "all"
+      ? collections.filter((col) => col.id === selectedCategory)
+      : collections.filter((col) => themeSectionIds.includes(col.id));
+    for (const c of sectionsToShow) {
       if (normalizeStr(c.name).includes(ql)) {
         results.push({ id: c.id, name: c.name, type: "collection", color: c.color });
       }
-      for (const s of c.subs || []) {
-        if (normalizeStr(s.name).includes(ql)) {
-          results.push({ id: s.id, name: s.name, parent: c.name, type: "subcollection", color: c.color });
-        }
-      }
     }
     return results.slice(0, 5);
-  }, [q]);
+  }, [q, selectedCategory]);
 
   // Lista unificada para teclado
   const flatItems = useMemo(() => {
     if (!q) return [];
     const list = [];
+    products.forEach((p) => list.push({ kind: "product", data: p }));
     matchingCollections.forEach((c) => list.push({ kind: "collection", data: c }));
     users.forEach((u) => list.push({ kind: "user", data: u }));
     return list;
-  }, [q, matchingCollections, users]);
+  }, [q, products, matchingCollections, users]);
 
   const submitSearch = useCallback(
     (term) => {
@@ -227,13 +290,20 @@ export default function SearchOverlay({
       if (item.kind === "user") {
         addRecentSearch(q);
         navigate(`/seller/${item.data.username}`);
+      } else if (item.kind === "product") {
+        addRecentSearch(q);
+        navigate(`/product/${item.data.id}`);
       } else if (item.kind === "collection") {
         addRecentSearch(item.data.name);
-        onSearch(item.data.name);
+        if (onSelectCategory) {
+          onSelectCategory(item.data.id);
+        } else {
+          onSearch(item.data.name);
+        }
         close();
       }
     },
-    [q, navigate, onSearch, close]
+    [q, navigate, onSearch, onSelectCategory, close]
   );
 
   const handleKeyDown = (e) => {
@@ -284,7 +354,7 @@ export default function SearchOverlay({
 
   if (!mounted) return null;
 
-  const totalResults = users.length + matchingCollections.length;
+  const totalResults = products.length + users.length + matchingCollections.length;
   const isLoading = usersLoading;
 
   return createPortal(
@@ -310,7 +380,7 @@ export default function SearchOverlay({
           <input
             ref={inputRef}
             type="search"
-            placeholder="Buscar cromos, colecciones, vendedores..."
+            placeholder={selectedCategory !== "all" ? `Buscar en ${activeSectionName}...` : "Buscar cromos, colecciones, vendedores..."}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -403,8 +473,45 @@ export default function SearchOverlay({
 
               {/* Layout de 2 columnas separadas en vertical */}
               <div className={styles.splitColumns}>
-                {/* ── COLUMNA IZQUIERDA: Publicaciones, Cartas y Colecciones ── */}
+                {/* ── COLUMNA IZQUIERDA: Cartas y Colecciones ── */}
                 <div className={styles.leftColumn}>
+                  {/* Cartas */}
+                  {products.length > 0 && (
+                    <div className={styles.resultGroup}>
+                      <div className={styles.groupHeader}>Cartas</div>
+                      <div className={styles.collectionsList}>
+                        {products.slice(0, 5).map((prod) => {
+                          const itemIndex = flatItems.findIndex(
+                            (fi) => fi.kind === "product" && fi.data.id === prod.id
+                          );
+                          const active = activeIndex === itemIndex;
+                          return (
+                            <div
+                              key={prod.id}
+                              className={`${styles.collectionRow} ${active ? styles.activeRow : ""}`}
+                              data-active={active}
+                              onClick={() => handleSelectItem({ kind: "product", data: prod })}
+                              onMouseEnter={() => setActiveIndex(itemIndex)}
+                            >
+                              <div className={styles.collectionBadge} style={{ borderColor: "var(--accent-primary)" }}>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                                  <circle cx="8.5" cy="8.5" r="1.5" />
+                                  <polyline points="21 15 16 10 5 21" />
+                                </svg>
+                              </div>
+                              <div className={styles.collectionMeta}>
+                                <span className={styles.collectionTitle}>{prod.title}</span>
+                                <span className={styles.collectionParent}>{getProductCollectionName(prod.category)} · {prod.price?.toFixed(2)} €</span>
+                              </div>
+                              <span className={styles.actionArrow}>→</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Colecciones */}
                   {matchingCollections.length > 0 && (
                     <div className={styles.resultGroup}>
@@ -444,10 +551,10 @@ export default function SearchOverlay({
 
 
 
-                  {matchingCollections.length === 0 && !isLoading && (
+                  {products.length === 0 && matchingCollections.length === 0 && !isLoading && (
                     <div className={styles.resultGroup}>
                       <div className={styles.groupHeader}>Colecciones</div>
-                      <p className={styles.emptyColMessage}>No se encontraron colecciones</p>
+                      <p className={styles.emptyColMessage}>No se encontraron resultados</p>
                     </div>
                   )}
                 </div>

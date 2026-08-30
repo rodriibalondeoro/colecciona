@@ -2,13 +2,19 @@
 
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import { categories, shippingMethods, cardConditions } from "@/data/mockData";
+import { shippingMethods, cardConditions } from "@/data/mockData";
+import { collections } from "@/data/collections";
 import ProfitCalculator from "@/components/ProfitCalculator";
 import ImageCropper from "@/components/ImageCropper";
 import PSAVerifier from "@/components/PSAVerifier";
 import { publishProduct, uploadCardImage, getProfile } from "@/lib/dataService";
 import { hapticSuccess } from "@/lib/haptics";
 import styles from "./page.module.css";
+
+const themeSectionIds = [
+  'mundial', 'tlg-futbol', 'champions', 'baloncesto', 'beisbol',
+  'nfl-ufc', 'motor', 'comics-cine', 'nintendo', 'especial-digital',
+];
 
 export default function SellPage() {
   const uploadPromiseRef = useRef(null);
@@ -384,10 +390,17 @@ export default function SellPage() {
                     onChange={(e) => setCategory(e.target.value)}
                     className={styles.select}
                   >
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
+                    <option value="">Seleccionar categoría</option>
+                    {collections
+                      .filter((col) => themeSectionIds.includes(col.id))
+                      .map((col) => (
+                      <optgroup key={col.id} label={col.name}>
+                        {col.subs?.map((sub) => (
+                          <option key={sub.id} value={sub.id}>
+                            {sub.name}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </div>
