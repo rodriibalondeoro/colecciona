@@ -16,7 +16,6 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
   const [imgError, setImgError] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [tilt, setTilt] = useState({ x: 0, y: 0, shine: 50 });
   const cardRef = useRef(null);
   const { favorites, toggleFavorite } = useApp();
   const isFavorite = favorites.has(product.id);
@@ -98,38 +97,13 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
     [onSelect, triggerSelect]
   );
 
-  const handleMouseMove = useCallback((e) => {
-    const card = cardRef.current;
-    if (!card) return;
-    const rect = card.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-    const tiltX = (0.5 - y) * 8;
-    const tiltY = (x - 0.5) * 8;
-    const shine = x * 100;
-    card.style.setProperty("--spot-x", `${x * 100}%`);
-    card.style.setProperty("--spot-y", `${y * 100}%`);
-    setTilt({ x: tiltX, y: tiltY, shine });
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    setTilt({ x: 0, y: 0, shine: 50 });
-  }, []);
-
   return (
     <div
       ref={cardRef}
       className={`${styles.card} ${leaving ? styles.leaving : ""}`}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={handleMouseLeave}
       onClick={onSelect ? handleCardClick : undefined}
-      style={{
-        transform: `perspective(600px) rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)`,
-        transition: tilt.x === 0 ? "transform 0.4s cubic-bezier(0.16, 1, 0.3, 1)" : "transform 0.1s ease-out",
-      }}
     >
       <div className={styles.cardClip}>
-        <div className={styles.spotlight} aria-hidden="true" />
         <Link href={`/product/${product.id}`} className={styles.imageLink} onClick={handleLinkClick}>
         <div className={styles.imageBox}>
           <div className={styles.flip}>
@@ -170,8 +144,7 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
                 <span className={styles.backBrand}>COLLECCIONA</span>
               </div>
             </div>
-          </div>
-          <div className={styles.shineOverlay} style={{ background: `linear-gradient(105deg, transparent ${tilt.shine - 15}%, rgba(255,255,255,0.06) ${tilt.shine}%, transparent ${tilt.shine + 15}%)` }} />
+           </div>
         </div>
       </Link>
       </div>
