@@ -13,22 +13,24 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: none;
-  border: 1px solid var(--border-subtle);
+  background: linear-gradient(135deg, var(--accent-primary, #7c5cff), #a78bfa);
+  border: none;
   border-radius: var(--radius-sm);
-  padding: 6px 12px;
+  padding: 8px 16px;
   font-family: var(--font-mono);
   font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-weight: 700;
+  color: #fff;
   cursor: pointer;
   transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(124, 92, 255, 0.3);
 }
 
 .backBtn:hover {
-  color: var(--text-primary);
-  border-color: var(--border-medium);
-  background: var(--bg-overlay);
+  color: #fff;
+  background: linear-gradient(135deg, #6d4de8, #8b5cf6);
+  box-shadow: 0 4px 14px rgba(124, 92, 255, 0.45);
+  transform: translateY(-1px);
 }
 
 .mainGrid {
@@ -881,9 +883,19 @@
 .primaryLink {
   display: inline-block;
   margin-top: 16px;
-  padding: 10px 20px;
-  background: var(--accent-primary);
+  padding: 10px 24px;
+  background: linear-gradient(135deg, var(--accent-primary, #7c5cff), #a78bfa);
   color: white;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   text-decoration: none;
+  font-weight: 700;
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(124, 92, 255, 0.3);
+  transition: all 0.2s ease;
+}
+
+.primaryLink:hover {
+  background: linear-gradient(135deg, #6d4de8, #8b5cf6);
+  box-shadow: 0 4px 14px rgba(124, 92, 255, 0.45);
+  transform: translateY(-1px);
 }
