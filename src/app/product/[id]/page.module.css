@@ -184,13 +184,13 @@
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 
 .priceHeader {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 6px;
 }
 
 .priceTagLbl {
