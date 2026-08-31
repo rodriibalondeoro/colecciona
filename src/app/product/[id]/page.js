@@ -290,6 +290,10 @@ export default function ProductDetailPage() {
             </div>
 
             <div className={styles.priceBox}>
+              <div className={styles.priceHeader}>
+                <span className={styles.priceTagLbl}>Precio</span>
+              </div>
+
               <div className={styles.priceValRow}>
                 <span className={styles.mainPrice}>{product.price.toFixed(2)} €</span>
               </div>
