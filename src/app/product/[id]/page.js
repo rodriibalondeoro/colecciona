@@ -284,7 +284,7 @@ export default function ProductDetailPage() {
               </div>
               <div className={styles.authText}>
                 <span className={styles.authTitle}>Garantía de Autenticidad en Colecciona</span>
-                <span className={styles.authSub}>Protección de reembolso completo si la carta no coincide 100% con la descripción.</span>
+                <span className={styles.authSub}>Protección de reembolso completo si el/los cromos no coinciden al 100% con la descripción.</span>
               </div>
             </div>
           </div>
@@ -364,7 +364,7 @@ export default function ProductDetailPage() {
             )}
 
             <div className={styles.shippingBox}>
-              <span className={styles.boxTitle}>Envíos disponibles del vendedor</span>
+              <span className={styles.boxTitle}>Métodos de envíos disponibles del vendedor</span>
               <div className={styles.shippingOptions}>
                 {visibleShippingMethods.map((method) => {
                   return (
@@ -430,8 +430,8 @@ export default function ProductDetailPage() {
           <section className={styles.sellerShelf}>
             <div className={styles.sellerShelfHeader}>
               <div>
-                <span className={styles.shelfEyebrow}>Del mismo vendedor</span>
-                <h2 className={styles.shelfTitle}>Más cartas de {seller?.name}</h2>
+                <span className={styles.shelfEyebrow}>DEL MISMO VENDEDOR</span>
+                <h2 className={styles.shelfTitle}>Más cromos de {seller?.name}</h2>
               </div>
               {seller?.username && (
                 <Link href={`/seller/${seller.username}`} className={styles.shelfLink}>
