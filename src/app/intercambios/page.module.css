@@ -1,0 +1,79 @@
+.page { padding: 84px 0 120px; }
+.title { font-size: 28px; font-weight: 800; margin: 0 0 4px; }
+.subtitle { font-size: 14px; color: var(--text-muted); margin: 0 0 24px; }
+
+.tabs { display: flex; gap: 4px; margin-bottom: 24px; background: var(--bg-surface); border-radius: var(--radius-md); padding: 4px; border: 1px solid var(--border-subtle); }
+.tab { flex: 1; padding: 10px 16px; background: transparent; border: none; border-radius: var(--radius-sm); color: var(--text-muted); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.tabActive { background: var(--accent-primary); color: white; }
+
+.section { min-height: 200px; }
+.loading { text-align: center; padding: 40px; color: var(--text-muted); }
+
+.hintBox { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 24px; text-align: center; }
+.hintBox p { color: var(--text-muted); margin: 0 0 12px; }
+.hintLink { color: var(--accent-light); font-weight: 600; font-size: 13px; text-decoration: none; }
+
+.emptyBox { text-align: center; padding: 48px 20px; }
+.emptyIcon { font-size: 48px; margin-bottom: 12px; }
+.emptyBox h3 { font-size: 18px; margin: 0 0 8px; }
+.emptyBox p { font-size: 14px; color: var(--text-muted); margin: 0; }
+
+/* Match Grid */
+.matchGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+
+.matchCard { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; transition: all 0.2s; }
+.matchCard:hover { border-color: var(--accent-primary); }
+
+.matchHeader { display: flex; align-items: center; gap: 12px; padding: 16px 16px 0; }
+.matchAvatar { width: 42px; height: 42px; border-radius: 50%; background: var(--bg-overlay); border: 1px solid var(--border-medium); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; color: var(--accent-light); overflow: hidden; flex-shrink: 0; }
+.matchAvatar img { width: 100%; height: 100%; object-fit: cover; }
+.matchName { font-size: 15px; font-weight: 700; text-decoration: none; color: var(--text-primary); }
+.matchName:hover { color: var(--accent-light); }
+.hotBadge { margin-left: 6px; font-size: 16px; }
+
+.scoreCircle { margin-left: auto; width: 52px; height: 52px; border-radius: 50%; background: var(--bg-overlay); border: 2px solid var(--accent-primary); display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0; }
+.scoreVal { font-family: var(--font-mono); font-size: 16px; font-weight: 800; color: var(--accent-light); line-height: 1; }
+.scorePct { font-size: 9px; color: var(--text-muted); }
+
+.matchBody { padding: 12px 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.matchCol { display: flex; flex-direction: column; gap: 4px; }
+.matchLabel { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+.matchItem { font-size: 12px; color: var(--text-primary); padding: 2px 0; }
+
+.matchFooter { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-top: 1px solid var(--border-subtle); }
+.matchCount { font-size: 11px; color: var(--text-muted); }
+.proposeBtn { padding: 6px 14px; background: var(--accent-primary); border: none; border-radius: var(--radius-xs); color: white; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none; }
+
+/* Filters */
+.filterRow { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 16px; }
+.filterBtn { padding: 5px 10px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-full); color: var(--text-muted); font-size: 11px; cursor: pointer; }
+.filterActive { background: var(--accent-primary); border-color: var(--accent-primary); color: white; }
+
+/* Proposals */
+.proposalList { display: flex; flex-direction: column; gap: 12px; }
+.proposalCard { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 16px; }
+.proposalHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.proposalWith { font-size: 14px; font-weight: 700; margin-right: 8px; }
+.proposalDate { font-size: 11px; color: var(--text-muted); }
+
+.badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: var(--radius-full); white-space: nowrap; }
+
+.tradeView { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; }
+.tradeSide { display: flex; flex-direction: column; gap: 6px; }
+.tradeSideLabel { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 2px; }
+.tradeItem { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg-overlay); border-radius: var(--radius-xs); font-size: 12px; }
+.tradeItemImg { width: 28px; height: 28px; border-radius: 4px; object-fit: cover; }
+.tradeEmpty { font-size: 12px; color: var(--text-muted); font-style: italic; }
+.tradeDivider { font-size: 20px; color: var(--accent-primary); display: flex; align-items: center; justify-content: center; padding-top: 20px; }
+
+.proposalMsg { font-size: 12px; color: var(--text-muted); font-style: italic; margin: 12px 0 0; padding: 8px 12px; background: var(--bg-overlay); border-radius: var(--radius-xs); }
+
+.proposalActions { display: flex; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.acceptBtn { padding: 8px 16px; background: var(--emerald); border: none; border-radius: var(--radius-xs); color: white; font-size: 12px; font-weight: 700; cursor: pointer; }
+.rejectBtn { padding: 8px 16px; background: transparent; border: 1px solid var(--border-medium); border-radius: var(--radius-xs); color: var(--text-muted); font-size: 12px; cursor: pointer; }
+
+@media (max-width: 640px) {
+  .matchGrid { grid-template-columns: 1fr; }
+  .tradeView { grid-template-columns: 1fr; gap: 8px; }
+  .tradeDivider { padding: 0; transform: rotate(90deg); }
+}
