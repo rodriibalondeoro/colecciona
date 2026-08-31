@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { getServerSupabase } from "@/lib/serverSupabase";
 
 export async function GET(req) {
+  const fallback = { isPremium: false, premiumSince: null, commissionRate: 0.08 };
   try {
     const authHeader = req.headers.get("authorization");
     const emailHeader = req.headers.get("x-user-email");
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const supabase = createClient(url, serviceKey);
+    const supabase = getServerSupabase();
+    if (!supabase) return NextResponse.json(fallback);
 
     let userId = null;
 

@@ -1,17 +1,14 @@
 import { NextResponse } from "next/server";
 import { getProductById } from "@/data/mockData";
 import { getPersistedProducts } from "@/lib/dataService";
-import { createClient } from "@supabase/supabase-js";
+import { getServerSupabase } from "@/lib/serverSupabase";
 
 export async function GET(req, { params }) {
   try {
     const { id } = await params;
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (url && key) {
-      const supabase = createClient(url, key);
+    const supabase = getServerSupabase();
+    if (supabase) {
       const { data, error } = await supabase
         .from("products")
         .select("*, seller:users(*)")

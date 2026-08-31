@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { getServerSupabase } from "@/lib/serverSupabase";
 import { verifyAuth } from "@/lib/serverAuth";
-
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function POST(req) {
   try {
@@ -11,7 +8,8 @@ export async function POST(req) {
     if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const body = await req.json();
-    const supabase = createClient(url, key);
+    const supabase = getServerSupabase();
+    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 
     const { data: order } = await supabase
       .from("orders")
@@ -102,7 +100,8 @@ export async function GET(req) {
 
     if (!userId) return NextResponse.json({ reviews: [] });
 
-    const supabase = createClient(url, key);
+    const supabase = getServerSupabase();
+    if (!supabase) return NextResponse.json({ reviews: [] });
     const { data } = await supabase
       .from("reviews")
       .select(
