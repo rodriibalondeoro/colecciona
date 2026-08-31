@@ -1,14 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
+import { authFetch } from '@/lib/authFetch';
 import styles from './page.module.css';
 
 export default function IntercambiosPage() {
   const { session, showToast } = useApp();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [tab, setTab] = useState('matches');
   const [matches, setMatches] = useState([]);
   const [matchLoading, setMatchLoading] = useState(true);
@@ -17,16 +19,32 @@ export default function IntercambiosPage() {
   const [proposalFilter, setProposalFilter] = useState('all');
   const [proposalsLoading, setProposalsLoading] = useState(true);
 
+  // Proposal creation
+  const [showProposal, setShowProposal] = useState(false);
+  const [proposalTarget, setProposalTarget] = useState(null);
+  const [myForTradeItems, setMyForTradeItems] = useState([]);
+  const [theirForTradeItems, setTheirForTradeItems] = useState([]);
+  const [selectedMyItems, setSelectedMyItems] = useState([]);
+  const [selectedTheirItems, setSelectedTheirItems] = useState([]);
+  const [proposalMsg, setProposalMsg] = useState('');
+  const [sending, setSending] = useState(false);
+
   useEffect(() => {
     if (!session?.id) { router.push('/auth'); return; }
     loadMatches();
     loadProposals();
-  }, [session]);
+    // Check if we should open proposal modal from URL
+    const targetId = searchParams.get('newProposal');
+    if (targetId) {
+      setTab('proposals');
+      openProposalFor(targetId);
+    }
+  }, [session, searchParams]);
 
   const loadMatches = async () => {
     setMatchLoading(true);
     try {
-      const res = await fetch('/api/match');
+      const res = await authFetch('/api/match');
       const data = await res.json();
       setMatches(data.matches || []);
       setMatchHint(data.hint || '');
@@ -37,19 +55,75 @@ export default function IntercambiosPage() {
   const loadProposals = async () => {
     setProposalsLoading(true);
     try {
-      const res = await fetch('/api/trade-proposals');
+      const res = await authFetch('/api/trade-proposals');
       const data = await res.json();
       setProposals(data.proposals || []);
     } catch { showToast('Error al cargar propuestas', 'error'); }
     setProposalsLoading(false);
   };
 
-  const handleStatusChange = async (proposalId, newStatus, message) => {
+  const openProposalFor = async (userId) => {
+    setProposalTarget(userId);
+    setSelectedMyItems([]);
+    setSelectedTheirItems([]);
+    setProposalMsg('');
+    setShowProposal(true);
+
+    // Load my FOR_TRADE items
     try {
-      const res = await fetch(`/api/trade-proposals/${proposalId}`, {
+      const res = await authFetch(`/api/collections?userId=${session.id}`);
+      const data = await res.json();
+      const allItems = [];
+      for (const col of data.collections || []) {
+        const itemRes = await authFetch(`/api/collections/${col.id}/items?status=FOR_TRADE`);
+        const itemData = await itemRes.json();
+        allItems.push(...(itemData.items || []).map(i => ({ ...i, collectionName: col.name })));
+      }
+      setMyForTradeItems(allItems);
+    } catch {}
+
+    // Load their FOR_TRADE items (via match data)
+    const match = matches.find(m => m.userId === userId);
+    if (match) {
+      // Items they can give us are what we're missing
+      setTheirForTradeItems(match.youCanGet.map(name => ({ card_name: name })));
+    }
+  };
+
+  const handleCreateProposal = async () => {
+    if (!proposalTarget || (!selectedMyItems.length && !selectedTheirItems.length)) {
+      showToast('Selecciona al menos un elemento', 'error');
+      return;
+    }
+    setSending(true);
+    try {
+      const res = await authFetch('/api/trade-proposals', {
+        method: 'POST',
+        body: JSON.stringify({
+          receiver_id: proposalTarget,
+          message: proposalMsg || null,
+          proposer_items: selectedMyItems.map(id => ({ collection_item_id: id, quantity: 1 })),
+          receiver_items: selectedTheirItems.map(name => ({ card_name: name })),
+        }),
+      });
+      const data = await res.json();
+      if (data.proposal) {
+        showToast('Propuesta enviada', 'success');
+        setShowProposal(false);
+        loadProposals();
+        setTab('proposals');
+      } else {
+        showToast(data.error || 'Error al enviar', 'error');
+      }
+    } catch { showToast('Error', 'error'); }
+    setSending(false);
+  };
+
+  const handleStatusChange = async (proposalId, newStatus) => {
+    try {
+      const res = await authFetch(`/api/trade-proposals/${proposalId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus, message }),
+        body: JSON.stringify({ status: newStatus }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -61,10 +135,7 @@ export default function IntercambiosPage() {
     } catch { showToast('Error', 'error'); }
   };
 
-  const filteredProposals = proposals.filter(p => {
-    if (proposalFilter === 'all') return true;
-    return p.status === proposalFilter;
-  });
+  const filteredProposals = proposals.filter(p => proposalFilter === 'all' || p.status === proposalFilter);
 
   const statusBadge = (status) => {
     const map = {
@@ -119,11 +190,9 @@ export default function IntercambiosPage() {
                 {matches.map(m => (
                   <div key={m.userId} className={styles.matchCard}>
                     <div className={styles.matchHeader}>
-                      <div className={styles.matchAvatar}>
-                        {m.avatarUrl ? <img src={m.avatarUrl} alt="" /> : (m.userName || '?')[0]}
-                      </div>
+                      <div className={styles.matchAvatar}>{m.userName?.[0] || '?'}</div>
                       <div>
-                        <Link href={`/seller/${m.username}`} className={styles.matchName}>{m.userName}</Link>
+                        <span className={styles.matchName}>{m.userName}</span>
                         {m.score >= 75 && <span className={styles.hotBadge}>🔥</span>}
                       </div>
                       <div className={styles.scoreCircle}>
@@ -131,7 +200,6 @@ export default function IntercambiosPage() {
                         <span className={styles.scorePct}>%</span>
                       </div>
                     </div>
-
                     <div className={styles.matchBody}>
                       {m.youCanGet.length > 0 && (
                         <div className={styles.matchCol}>
@@ -146,12 +214,11 @@ export default function IntercambiosPage() {
                         </div>
                       )}
                     </div>
-
                     <div className={styles.matchFooter}>
                       <span className={styles.matchCount}>{m.matchedCount} coincidencias</span>
-                      <Link href={`/intercambios?tab=proposals&newProposal=${m.userId}`} className={styles.proposeBtn}>
+                      <button className={styles.proposeBtn} onClick={() => openProposalFor(m.userId)}>
                         Proponer intercambio
-                      </Link>
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -191,82 +258,54 @@ export default function IntercambiosPage() {
                     <div key={p.id} className={styles.proposalCard}>
                       <div className={styles.proposalHeader}>
                         <div>
-                          <span className={styles.proposalWith}>
-                            {isProposer ? `Para: ${other?.name}` : `De: ${other?.name}`}
-                          </span>
+                          <span className={styles.proposalWith}>{isProposer ? `Para: ${other?.name}` : `De: ${other?.name}`}</span>
                           {statusBadge(p.status)}
                         </div>
-                        <span className={styles.proposalDate}>
-                          {new Date(p.created_at).toLocaleDateString('es-ES')}
-                        </span>
+                        <span className={styles.proposalDate}>{new Date(p.created_at).toLocaleDateString('es-ES')}</span>
                       </div>
-
                       <div className={styles.tradeView}>
                         <div className={styles.tradeSide}>
                           <span className={styles.tradeSideLabel}>Tú recibes:</span>
                           {(isProposer ? receiverItems : proposerItems).map((item, i) => (
                             <div key={i} className={styles.tradeItem}>
-                              {item.collection_item?.image_url && (
-                                <img src={item.collection_item.image_url} alt="" className={styles.tradeItemImg} />
-                              )}
+                              {item.collection_item?.image_url && <img src={item.collection_item.image_url} alt="" className={styles.tradeItemImg} />}
                               <span>{item.collection_item?.card_name || 'Cromo'}</span>
                             </div>
                           ))}
-                          {(isProposer ? receiverItems : proposerItems).length === 0 && (
-                            <span className={styles.tradeEmpty}>Sin elementos</span>
-                          )}
+                          {(isProposer ? receiverItems : proposerItems).length === 0 && <span className={styles.tradeEmpty}>Sin elementos</span>}
                         </div>
                         <div className={styles.tradeDivider}>⇄</div>
                         <div className={styles.tradeSide}>
                           <span className={styles.tradeSideLabel}>Tú ofreces:</span>
                           {(isProposer ? proposerItems : receiverItems).map((item, i) => (
                             <div key={i} className={styles.tradeItem}>
-                              {item.collection_item?.image_url && (
-                                <img src={item.collection_item.image_url} alt="" className={styles.tradeItemImg} />
-                              )}
+                              {item.collection_item?.image_url && <img src={item.collection_item.image_url} alt="" className={styles.tradeItemImg} />}
                               <span>{item.collection_item?.card_name || 'Cromo'}</span>
                             </div>
                           ))}
-                          {(isProposer ? proposerItems : receiverItems).length === 0 && (
-                            <span className={styles.tradeEmpty}>Sin elementos</span>
-                          )}
+                          {(isProposer ? proposerItems : receiverItems).length === 0 && <span className={styles.tradeEmpty}>Sin elementos</span>}
                         </div>
                       </div>
-
                       {p.message && <p className={styles.proposalMsg}>"{p.message}"</p>}
-
                       {['PROPOSED', 'COUNTERED'].includes(p.status) && !isProposer && (
                         <div className={styles.proposalActions}>
-                          <button onClick={() => handleStatusChange(p.id, 'ACCEPTED')} className={styles.acceptBtn}>
-                            ✓ Aceptar
-                          </button>
-                          <button onClick={() => handleStatusChange(p.id, 'CANCELLED')} className={styles.rejectBtn}>
-                            ✕ Rechazar
-                          </button>
+                          <button onClick={() => handleStatusChange(p.id, 'ACCEPTED')} className={styles.acceptBtn}>✓ Aceptar</button>
+                          <button onClick={() => handleStatusChange(p.id, 'CANCELLED')} className={styles.rejectBtn}>✕ Rechazar</button>
                         </div>
                       )}
-
                       {p.status === 'ACCEPTED' && isProposer && (
                         <div className={styles.proposalActions}>
-                          <button onClick={() => handleStatusChange(p.id, 'SHIPPING_PENDING')} className={styles.acceptBtn}>
-                            📦 Marcar envío pendiente
-                          </button>
+                          <button onClick={() => handleStatusChange(p.id, 'SHIPPING_PENDING')} className={styles.acceptBtn}>📦 Envío pendiente</button>
                         </div>
                       )}
-
                       {p.status === 'SHIPPED' && !isProposer && (
                         <div className={styles.proposalActions}>
-                          <button onClick={() => handleStatusChange(p.id, 'RECEIVED')} className={styles.acceptBtn}>
-                            ✓ Confirmar recepción
-                          </button>
+                          <button onClick={() => handleStatusChange(p.id, 'RECEIVED')} className={styles.acceptBtn}>✓ Confirmar recepción</button>
                         </div>
                       )}
-
                       {p.status === 'RECEIVED' && (
                         <div className={styles.proposalActions}>
-                          <button onClick={() => handleStatusChange(p.id, 'COMPLETED')} className={styles.acceptBtn}>
-                            ✓ Completar intercambio
-                          </button>
+                          <button onClick={() => handleStatusChange(p.id, 'COMPLETED')} className={styles.acceptBtn}>✓ Completar</button>
                         </div>
                       )}
                     </div>
@@ -274,6 +313,50 @@ export default function IntercambiosPage() {
                 })}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Proposal Creation Modal */}
+        {showProposal && (
+          <div className={styles.modal} onClick={() => setShowProposal(false)}>
+            <div className={styles.modalContent} onClick={e => e.stopPropagation()}>
+              <h2>Proponer intercambio</h2>
+              <div className={styles.proposalForm}>
+                <div className={styles.formSection}>
+                  <label>Tú ofreces:</label>
+                  {myForTradeItems.length === 0 ? (
+                    <p className={styles.formHint}>No tienes cromos marcados para intercambio. Marca algunos en tus colecciones.</p>
+                  ) : myForTradeItems.map(item => (
+                    <label key={item.id} className={styles.checkItem}>
+                      <input type="checkbox" checked={selectedMyItems.includes(item.id)}
+                        onChange={e => setSelectedMyItems(prev => e.target.checked ? [...prev, item.id] : prev.filter(id => id !== item.id))} />
+                      {item.card_name} {item.card_number ? `#${item.card_number}` : ''} ({item.collectionName})
+                    </label>
+                  ))}
+                </div>
+                <div className={styles.formSection}>
+                  <label>Ellos te dan:</label>
+                  {theirForTradeItems.length === 0 ? (
+                    <p className={styles.formHint}>Los elementos que buscas aparecerán aquí.</p>
+                  ) : theirForTradeItems.map((item, i) => (
+                    <label key={i} className={styles.checkItem}>
+                      <input type="checkbox" checked={selectedTheirItems.includes(item.card_name)}
+                        onChange={e => setSelectedTheirItems(prev => e.target.checked ? [...prev, item.card_name] : prev.filter(n => n !== item.card_name))} />
+                      {item.card_name}
+                    </label>
+                  ))}
+                </div>
+                <textarea placeholder="Mensaje (opcional)" value={proposalMsg} onChange={e => setProposalMsg(e.target.value)}
+                  className={styles.input} rows={2} />
+                <div className={styles.formActions}>
+                  <button onClick={() => setShowProposal(false)} className={styles.cancelBtn}>Cancelar</button>
+                  <button onClick={handleCreateProposal} disabled={sending || (!selectedMyItems.length && !selectedTheirItems.length)}
+                    className={styles.submitBtn}>
+                    {sending ? 'Enviando...' : 'Enviar propuesta'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>

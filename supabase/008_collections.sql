@@ -87,7 +87,6 @@ BEGIN
     total_items = (
       SELECT COUNT(*) FROM collection_items
       WHERE collection_id = COALESCE(NEW.collection_id, OLD.collection_id)
-      AND status IN ('OWNED', 'DUPLICATE', 'FOR_TRADE', 'FOR_SALE')
     ),
     updated_at = now()
   WHERE id = COALESCE(NEW.collection_id, OLD.collection_id);

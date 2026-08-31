@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
+import { authFetch } from '@/lib/authFetch';
 import styles from './page.module.css';
 
 const STATUS_LABELS = {
@@ -34,7 +35,7 @@ export default function CollectionDetailPage() {
 
   const loadCollection = async () => {
     try {
-      const res = await fetch(`/api/collections/${id}`);
+      const res = await authFetch(`/api/collections/${id}`);
       const data = await res.json();
       if (data.collection) {
         setCollection(data.collection);
@@ -49,43 +50,38 @@ export default function CollectionDetailPage() {
     e.preventDefault();
     if (!newItem.card_name.trim()) return;
     try {
-      const res = await fetch(`/api/collections/${id}/items`, {
+      const res = await authFetch(`/api/collections/${id}/items`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newItem),
       });
       const data = await res.json();
       if (data.item) {
-        setItems(prev => [...prev, data.item]);
         setShowAdd(false);
         setNewItem({ card_name: '', card_number: '', set_name: '', status: 'OWNED', total_quantity: 1 });
         showToast('Elemento añadido', 'success');
         loadCollection();
+      } else {
+        showToast(data.error || 'Error', 'error');
       }
     } catch { showToast('Error al añadir', 'error'); }
   };
 
   const handleUpdateStatus = async (itemId, newStatus) => {
     try {
-      const res = await fetch(`/api/collections/${id}/items`, {
+      const res = await authFetch(`/api/collections/${id}/items`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ itemId, status: newStatus, total_quantity: 1 }),
       });
       const data = await res.json();
-      if (data.item) {
-        setItems(prev => prev.map(i => i.id === itemId ? data.item : i));
-        loadCollection();
-      }
+      if (data.item) { setItems(prev => prev.map(i => i.id === itemId ? data.item : i)); loadCollection(); }
     } catch { showToast('Error al actualizar', 'error'); }
   };
 
   const handleDeleteItem = async (itemId) => {
     if (!confirm('¿Eliminar este elemento?')) return;
     try {
-      await fetch(`/api/collections/${id}/items?itemId=${itemId}`, { method: 'DELETE' });
-      setItems(prev => prev.filter(i => i.id !== itemId));
-      loadCollection();
+      const res = await authFetch(`/api/collections/${id}/items?itemId=${itemId}`, { method: 'DELETE' });
+      if (res.ok) { setItems(prev => prev.filter(i => i.id !== itemId)); loadCollection(); }
     } catch { showToast('Error al eliminar', 'error'); }
   };
 
@@ -95,7 +91,9 @@ export default function CollectionDetailPage() {
     return true;
   });
 
-  const progress = stats?.progress || (collection?.total_items > 0 ? Math.round((stats?.owned || 0) / collection.total_items * 100) : 0);
+  const progress = collection?.total_items > 0
+    ? Math.round((items.filter(i => i.status !== 'MISSING').length / collection.total_items) * 100)
+    : 0;
 
   if (loading) return <div className={styles.loading}>Cargando...</div>;
   if (!collection) return <div className={styles.loading}>Colección no encontrada</div>;
@@ -104,7 +102,6 @@ export default function CollectionDetailPage() {
     <div className={styles.page}>
       <div className="container">
         <Link href="/collections" className={styles.backLink}>← Mis Colecciones</Link>
-
         <div className={styles.header}>
           <div>
             <h1 className={styles.title}>{collection.name}</h1>
@@ -126,35 +123,23 @@ export default function CollectionDetailPage() {
             <div className={styles.progressFill} style={{ width: `${progress}%` }} />
           </div>
           <div className={styles.progressStats}>
-            <span>✅ {stats?.owned || 0} obtenidos</span>
-            <span>❌ {stats?.missing || 0} faltan</span>
-            <span>↻ {stats?.duplicates || 0} repetidos</span>
+            <span>✅ {items.filter(i => i.status !== 'MISSING').length} obtenidos</span>
+            <span>❌ {items.filter(i => i.status === 'MISSING').length} faltan</span>
+            <span>↻ {items.filter(i => i.status === 'DUPLICATE' || i.status === 'FOR_TRADE' || i.status === 'FOR_SALE').length} repetidos</span>
           </div>
         </div>
 
         <div className={styles.controls}>
           <div className={styles.filterRow}>
             {['ALL', 'OWNED', 'MISSING', 'DUPLICATE', 'FOR_TRADE', 'FOR_SALE'].map(s => (
-              <button
-                key={s}
-                className={`${styles.filterBtn} ${filter === s ? styles.filterActive : ''}`}
-                onClick={() => setFilter(s)}
-              >
+              <button key={s} className={`${styles.filterBtn} ${filter === s ? styles.filterActive : ''}`} onClick={() => setFilter(s)}>
                 {s === 'ALL' ? 'Todos' : STATUS_LABELS[s]?.icon + ' ' + STATUS_LABELS[s]?.label}
               </button>
             ))}
           </div>
           <div className={styles.searchRow}>
-            <input
-              type="text"
-              placeholder="Buscar cromo..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className={styles.searchInput}
-            />
-            <button className={styles.addBtn} onClick={() => setShowAdd(true)}>
-              + Añadir
-            </button>
+            <input type="text" placeholder="Buscar cromo..." value={search} onChange={e => setSearch(e.target.value)} className={styles.searchInput} />
+            <button className={styles.addBtn} onClick={() => setShowAdd(true)}>+ Añadir</button>
           </div>
         </div>
 
@@ -198,25 +183,13 @@ export default function CollectionDetailPage() {
               const st = STATUS_LABELS[item.status] || STATUS_LABELS.OWNED;
               return (
                 <div key={item.id} className={styles.item}>
-                  <div className={styles.itemStatus} style={{ background: st.color + '20', color: st.color }}>
-                    {st.icon}
-                  </div>
+                  <div className={styles.itemStatus} style={{ background: st.color + '20', color: st.color }}>{st.icon}</div>
                   <div className={styles.itemInfo}>
-                    <span className={styles.itemName}>
-                      {item.card_number ? `#${item.card_number} ` : ''}{item.card_name}
-                    </span>
-                    <span className={styles.itemMeta}>
-                      {item.set_name && `${item.set_name} · `}
-                      {item.total_quantity > 1 && `×${item.total_quantity} · `}
-                      {st.label}
-                    </span>
+                    <span className={styles.itemName}>{item.card_number ? `#${item.card_number} ` : ''}{item.card_name}</span>
+                    <span className={styles.itemMeta}>{item.set_name && `${item.set_name} · `}{item.total_quantity > 1 && `×${item.total_quantity} · `}{st.label}</span>
                   </div>
                   <div className={styles.itemActions}>
-                    <select
-                      value={item.status}
-                      onChange={e => handleUpdateStatus(item.id, e.target.value)}
-                      className={styles.statusSelect}
-                    >
+                    <select value={item.status} onChange={e => handleUpdateStatus(item.id, e.target.value)} className={styles.statusSelect}>
                       <option value="OWNED">✓ Tengo</option>
                       <option value="MISSING">✕ Me falta</option>
                       <option value="DUPLICATE">↻ Repetido</option>

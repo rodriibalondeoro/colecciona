@@ -74,7 +74,7 @@ export async function GET(req) {
 
     const { data: users } = await supabase
       .from("users")
-      .select("id, name, username, avatar_url, rating, public_location")
+      .select("id, name, username, avatar_url, rating, location")
       .in("id", userIds);
 
     const userMap = {};

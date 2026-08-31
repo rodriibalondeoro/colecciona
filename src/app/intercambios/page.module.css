@@ -72,6 +72,23 @@
 .acceptBtn { padding: 8px 16px; background: var(--emerald); border: none; border-radius: var(--radius-xs); color: white; font-size: 12px; font-weight: 700; cursor: pointer; }
 .rejectBtn { padding: 8px 16px; background: transparent; border: 1px solid var(--border-medium); border-radius: var(--radius-xs); color: var(--text-muted); font-size: 12px; cursor: pointer; }
 
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
+.modalContent { background: var(--bg-surface); border: 1px solid var(--border-medium); border-radius: var(--radius-md); padding: 24px; width: 100%; max-width: 520px; max-height: 80vh; overflow-y: auto; }
+.modalContent h2 { font-size: 18px; margin: 0 0 16px; }
+
+.proposalForm { display: flex; flex-direction: column; gap: 14px; }
+.formSection { display: flex; flex-direction: column; gap: 6px; }
+.formSection label { font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; }
+.formHint { font-size: 12px; color: var(--text-muted); font-style: italic; margin: 0; }
+.checkItem { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg-overlay); border-radius: var(--radius-xs); font-size: 12px; cursor: pointer; }
+.checkItem input[type="checkbox"] { accent-color: var(--accent-primary); }
+.input { padding: 8px 12px; background: var(--bg-dark); border: 1px solid var(--border-medium); border-radius: var(--radius-xs); color: var(--text-primary); font-size: 13px; outline: none; }
+.input:focus { border-color: var(--accent-primary); }
+.formActions { display: flex; gap: 8px; justify-content: flex-end; }
+.cancelBtn { padding: 8px 14px; background: transparent; border: 1px solid var(--border-medium); border-radius: var(--radius-xs); color: var(--text-muted); font-size: 12px; cursor: pointer; }
+.submitBtn { padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: var(--radius-xs); color: white; font-size: 12px; font-weight: 700; cursor: pointer; }
+.submitBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 @media (max-width: 640px) {
   .matchGrid { grid-template-columns: 1fr; }
   .tradeView { grid-template-columns: 1fr; gap: 8px; }
