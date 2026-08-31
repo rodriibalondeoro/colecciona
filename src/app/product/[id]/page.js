@@ -290,17 +290,8 @@ export default function ProductDetailPage() {
             </div>
 
             <div className={styles.priceBox}>
-              <div className={styles.priceHeader}>
-                <span className={styles.priceTagLbl}>Precio</span>
-              </div>
-
               <div className={styles.priceValRow}>
                 <span className={styles.mainPrice}>{product.price.toFixed(2)} €</span>
-                {product.marketPrice && (
-                  <span className={styles.marketPriceRef}>
-                    Precio de mercado est: {product.marketPrice.toFixed(2)} €
-                  </span>
-                )}
               </div>
 
               <div className={styles.escrowNotice}>
@@ -308,24 +299,14 @@ export default function ProductDetailPage() {
                   <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
                   <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                 </svg>
-                <span>El importe se congela en cuenta de custodia Stripe durante 48h.</span>
+                <span>El importe se congelará por seguridad.</span>
               </div>
-            </div>
-            
-            <div className={styles.conditionInfoBox}>
-              <div className={styles.condHeader}>
-                <span className={styles.condTitle}>Estado Conservación:</span>
-                <span>{product.condition}</span>
-              </div>
-              <p className={styles.condText}>{conditionInfo?.description}</p>
             </div>
 
-            {product.description && (
-              <div className={styles.descBox}>
-                <h4>Nota del Vendedor:</h4>
-                <p>{product.description}</p>
-              </div>
-            )}
+            <div className={styles.descBox}>
+              <h4>Descripción</h4>
+              <p>{product.description || "Sin descripción."}</p>
+            </div>
 
             <div className={styles.shippingBox}>
               <span className={styles.boxTitle}>Opciones de Envío Directo</span>
