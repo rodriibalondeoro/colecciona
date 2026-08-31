@@ -95,6 +95,7 @@ function MarketplaceContent() {
   const [hasMore, setHasMore] = useState(true);
   const [session, setSession] = useState(null);
   const [recentItems, setRecentItems] = useState([]);
+  const [myMissingCards, setMyMissingCards] = useState([]);
   const [scrolled, setScrolled] = useState(false);
   const [leavingId, setLeavingId] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -103,6 +104,7 @@ function MarketplaceContent() {
   const debounceRef = useRef(null);
   const isInitialMount = useRef(true);
   const trackRef = useRef(null);
+  const sentinelRef = useRef(null);
 
   const checkHistoryScroll = useCallback(() => {
     const track = trackRef.current;
@@ -122,8 +124,28 @@ function MarketplaceContent() {
     try {
       const s = JSON.parse(localStorage.getItem("colecciona_session") || "null");
       setSession(s);
+      if (s?.id) loadMissingCards(s.id);
     } catch {}
   }, []);
+
+  const loadMissingCards = async (userId) => {
+    try {
+      const token = (() => { try { return JSON.parse(localStorage.getItem("colecciona_session") || "{}").access_token || JSON.parse(localStorage.getItem("colecciona_session") || "{}").accessToken || ''; } catch { return ''; } })();
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const colRes = await fetch(`/api/collections?userId=${userId}`, { headers });
+      const colData = await colRes.json();
+      const collections = colData.collections || [];
+      const missing = [];
+      for (const col of collections) {
+        const itemRes = await fetch(`/api/collections/${col.id}/items?status=MISSING`, { headers });
+        const itemData = await itemRes.json();
+        for (const item of itemData.items || []) {
+          missing.push(item.card_name.toLowerCase().trim());
+        }
+      }
+      setMyMissingCards([...new Set(missing)]);
+    } catch {}
+  };
 
   useEffect(() => {
     setRecentItems(getRecentlyViewed());
@@ -167,6 +189,22 @@ function MarketplaceContent() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Infinite scroll via IntersectionObserver
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading && dbProducts.length > 0) {
+          handleLoadMore();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, loading, dbProducts.length, currentPage]);
 
   const fetchProducts = useCallback(async (page, append = false) => {
     const params = buildSearchParams({
@@ -542,21 +580,20 @@ function MarketplaceContent() {
                       onDelete={isOwner ? handleDelete : undefined}
                       onSelect={() => router.push(`/product/${product.id}`)}
                       session={session}
+                      myMissingCards={myMissingCards}
                     />
                   </div>
                 );
               })}
             </div>
             {dbProducts.length > 0 && hasMore && (
-              <div style={{ display: "flex", justifyContent: "center", padding: "2rem 0" }}>
-                <button
-                  onClick={handleLoadMore}
-                  disabled={loadingMore}
-                  className={styles.resetBtn}
-                  style={{ minWidth: 180 }}
-                >
-                  {loadingMore ? "Cargando..." : "Cargar más"}
-                </button>
+              <div ref={sentinelRef} style={{ display: "flex", justifyContent: "center", padding: "2rem 0" }}>
+                {loadingMore && <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Cargando mas...</span>}
+              </div>
+            )}
+            {dbProducts.length > 0 && !hasMore && filtered.length > 0 && (
+              <div style={{ textAlign: "center", padding: "2rem 0", color: "var(--text-muted)", fontSize: 13 }}>
+                Has visto todos los resultados
               </div>
             )}
           </>

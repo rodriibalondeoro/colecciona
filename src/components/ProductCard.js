@@ -11,7 +11,11 @@ import { hapticLight } from "@/lib/haptics";
 import { collections } from "@/data/collections";
 import styles from "./ProductCard.module.css";
 
-export default function ProductCard({ product, seller, onDelete, onSelect, session }) {
+function normalize(s) {
+  return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+}
+
+export default function ProductCard({ product, seller, onDelete, onSelect, session, myMissingCards = [] }) {
   const [loaded, setLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -24,6 +28,10 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
     session.id === product.seller?.id ||
     session.id === product.seller ||
     session.email === product.seller?.email
+  );
+
+  const isFalta = myMissingCards.length > 0 && myMissingCards.some(
+    missing => normalize(product.title).includes(normalize(missing)) || normalize(missing).includes(normalize(product.title))
   );
 
   const themeSectionIds = [
@@ -197,6 +205,11 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
       )}
 
       <div className={styles.metaBox}>
+        {isFalta && (
+          <div className={styles.faltaBanner}>
+            <span>🔥 Este cromo es una de tus faltas</span>
+          </div>
+        )}
         <Link href={`/product/${product.id}`} className={styles.titleLink} onClick={handleLinkClick}>
           <h3 className={styles.title}>{product.title}</h3>
         </Link>

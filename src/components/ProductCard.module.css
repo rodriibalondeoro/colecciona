@@ -279,6 +279,22 @@
   flex: 1;
 }
 
+.faltaBanner {
+  padding: 6px 10px;
+  background: linear-gradient(135deg, rgba(239,68,68,0.1), rgba(245,158,11,0.1));
+  border: 1px solid rgba(239,68,68,0.25);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #ef4444;
+  margin-bottom: 4px;
+  animation: faltaPulse 2s ease-in-out infinite;
+}
+@keyframes faltaPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
+}
+
 .titleLink {
   text-decoration: none;
 }
