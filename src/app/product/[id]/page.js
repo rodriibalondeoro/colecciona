@@ -14,6 +14,7 @@ import FoilCard from "@/components/FoilCard";
 import PriceAlertButton from "@/components/PriceAlertButton";
 import { useApp } from "@/context/AppContext";
 import { addRecentlyViewed, getRecentlyViewed } from "@/lib/recentlyViewed";
+import { collections } from "@/data/collections";
 import styles from "./page.module.css";
 
 export default function ProductDetailPage() {
@@ -185,6 +186,15 @@ export default function ProductDetailPage() {
   const shippingObj = shippingMethods.find((m) => m.id === selectedShipping) || shippingMethods[0];
   const totalPrice = product.price + shippingObj.price;
 
+  function getCollectionName(categoryId) {
+    for (const col of collections) {
+      for (const sub of col.subs || []) {
+        if (sub.id === categoryId) return `${col.name} / ${sub.name}`;
+      }
+    }
+    return "";
+  }
+
   // Normaliza `images`: puede venir como array real, string JSON o CSV desde Supabase
   let rawImages = product.images;
   if (!Array.isArray(rawImages)) {
@@ -273,13 +283,9 @@ export default function ProductDetailPage() {
 
           <div className={styles.rightColumn}>
             <div className={styles.titleSection}>
-              <div className={styles.setRow}>
-                <span className={styles.setTag}>{product.set}</span>
-                <span className={styles.rarityLabel}>{product.rarity}</span>
-              </div>
               <h1 className={styles.productTitle}>{product.title}</h1>
               <span className={styles.metaSub}>
-                Idioma: {product.language} • Año: {product.year}
+                {getCollectionName(product.category)}
               </span>
             </div>
 
