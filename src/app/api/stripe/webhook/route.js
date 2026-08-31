@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createClient } from "@supabase/supabase-js";
+import { ORDER_STATES } from "@/lib/orderStates";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -40,9 +41,12 @@ export async function POST(req) {
       console.log(`[Webhook] Payment succeeded: ${pi.id}`);
       const { error } = await supabase
         .from("orders")
-        .update({ status: "paid" })
+        .update({ status: ORDER_STATES.PAID })
         .eq("payment_intent_id", pi.id);
       if (error) console.error("[Webhook] Error updating order:", error);
+      await supabase.rpc("mark_products_sold_by_payment_intent", {
+        p_payment_intent_id: pi.id,
+      });
       break;
     }
     case "payment_intent.captured": {
@@ -50,8 +54,11 @@ export async function POST(req) {
       console.log(`[Webhook] Payment captured: ${pi.id}`);
       await supabase
         .from("orders")
-        .update({ status: "paid" })
+        .update({ status: ORDER_STATES.PAID })
         .eq("payment_intent_id", pi.id);
+      await supabase.rpc("mark_products_sold_by_payment_intent", {
+        p_payment_intent_id: pi.id,
+      });
       break;
     }
     case "payment_intent.payment_failed": {
@@ -59,8 +66,11 @@ export async function POST(req) {
       console.log(`[Webhook] Payment failed: ${pi.id}`);
       await supabase
         .from("orders")
-        .update({ status: "failed" })
+        .update({ status: ORDER_STATES.CANCELLED })
         .eq("payment_intent_id", pi.id);
+      await supabase.rpc("release_product_reservations_by_payment_intent", {
+        p_payment_intent_id: pi.id,
+      });
       break;
     }
     case "charge.succeeded":

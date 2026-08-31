@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
+import { ORDER_STATES, canTransitionOrder, normalizeOrderStatus } from "@/lib/orderStates";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -16,7 +17,7 @@ export async function PATCH(req, { params }) {
 
     const { data: existing } = await supabase
       .from("orders")
-      .select("id, buyer_id, seller_id")
+      .select("id, buyer_id, seller_id, status")
       .eq("id", id)
       .single();
 
@@ -28,10 +29,17 @@ export async function PATCH(req, { params }) {
       return NextResponse.json({ error: "No autorizado" }, { status: 403 });
     }
 
+    const actorRole = existing.buyer_id === user.id ? "buyer" : "seller";
     const updates = {};
-    if (body.status) updates.status = body.status;
+    const nextStatus = body.status ? normalizeOrderStatus(body.status) : null;
+    if (nextStatus) {
+      if (!canTransitionOrder(existing.status, nextStatus, actorRole)) {
+        return NextResponse.json({ error: "Transición de estado no permitida" }, { status: 400 });
+      }
+      updates.status = nextStatus;
+    }
     if (body.tracking_code) updates.tracking_code = body.tracking_code;
-    if (body.status === "completed") updates.confirmed_at = new Date().toISOString();
+    if (nextStatus === ORDER_STATES.COMPLETED) updates.confirmed_at = new Date().toISOString();
 
     const { data, error: updateError } = await supabase
       .from("orders")
@@ -42,7 +50,7 @@ export async function PATCH(req, { params }) {
 
     if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
 
-    if (body.status === "completed") {
+    if (nextStatus === ORDER_STATES.COMPLETED) {
       const { data: sellerRow } = await supabase.from("users").select("sales").eq("id", existing.seller_id).single();
       if (sellerRow) {
         await supabase.from("users").update({ sales: (sellerRow.sales || 0) + 1 }).eq("id", existing.seller_id);
@@ -56,15 +64,15 @@ export async function PATCH(req, { params }) {
 
     const notifyUserId = user.id === existing.buyer_id ? existing.seller_id : existing.buyer_id;
     const statusLabels = {
-      shipped: "ha enviado tu pedido",
-      completed: "ha confirmado la recepción",
+      [ORDER_STATES.SHIPPED]: "ha enviado tu pedido",
+      [ORDER_STATES.COMPLETED]: "ha confirmado la recepción",
     };
-    if (statusLabels[body.status]) {
+    if (statusLabels[nextStatus]) {
       await supabase.from("notifications").insert({
         user_id: notifyUserId,
         type: "order_update",
         title: "Actualización de pedido",
-        body: statusLabels[body.status],
+        body: statusLabels[nextStatus],
         link: "/orders",
       });
     }

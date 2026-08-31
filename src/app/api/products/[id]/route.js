@@ -11,8 +11,9 @@ export async function GET(req, { params }) {
     if (supabase) {
       const { data, error } = await supabase
         .from("products")
-        .select("*, seller:users(*)")
+        .select("*, seller:users(id, username, name, avatar, bio, level, level_name, sales, purchases, rating, location, followers, following, seller_shipping_methods)")
         .eq("id", id)
+        .eq("status", "ACTIVE")
         .single();
 
       if (!error && data) {

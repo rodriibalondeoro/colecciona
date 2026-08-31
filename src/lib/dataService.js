@@ -132,7 +132,6 @@ export async function publishProduct(product) {
     category: product.category,
     condition: product.condition,
     seller: product.seller,
-    sellerEmail: product.sellerEmail,
     sellerName: product.sellerName,
     code: product.code,
     rarity: product.rarity,
@@ -169,19 +168,12 @@ export function getPersistedProducts() {
 
 /** Elimina un producto de Supabase y del store local. */
 export async function deleteProduct(productId) {
-  let sellerEmail = null;
-  try {
-    const s = JSON.parse(localStorage.getItem("colecciona_session") || "null");
-    sellerEmail = s?.email || null;
-  } catch {}
-
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
     const res = await fetch(`/api/publish/${productId}`, {
       method: "DELETE",
-      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-      body: JSON.stringify({ sellerEmail }),
+      headers: { ...(await authHeaders()) },
       signal: controller.signal,
     });
     clearTimeout(timer);
@@ -337,17 +329,11 @@ export async function toggleFavoriteAPI(productId) {
 }
 
 export async function getProfile() {
-  let email = null;
-  try {
-    const s = JSON.parse(localStorage.getItem("colecciona_session") || "null");
-    email = s?.email || null;
-  } catch {}
   try {
     const headers = {};
     const token = await getAuthToken();
     if (token) headers.Authorization = `Bearer ${token}`;
-    if (email) headers["x-user-email"] = email;
-    if (!token && !email) return null;
+    if (!token) return null;
     const res = await fetch("/api/profile", { headers });
     const data = await res.json();
     return data.profile || null;
@@ -355,17 +341,11 @@ export async function getProfile() {
 }
 
 export async function updateProfile(updates) {
-  let email = null;
-  try {
-    const s = JSON.parse(localStorage.getItem("colecciona_session") || "null");
-    email = s?.email || null;
-  } catch {}
   try {
     const headers = { "Content-Type": "application/json" };
     const token = await getAuthToken();
     if (token) headers.Authorization = `Bearer ${token}`;
-    if (email) headers["x-user-email"] = email;
-    if (!token && !email) return null;
+    if (!token) return null;
     const res = await fetch("/api/profile", {
       method: "PATCH",
       headers,

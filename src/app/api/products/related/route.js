@@ -14,6 +14,7 @@ export async function GET(req) {
     .select("*, seller:users(username, name, initials)")
     .neq("id", productId || "")
     .eq("category", category || "")
+    .eq("status", "ACTIVE")
     .order("created_at", { ascending: false })
     .limit(8);
 

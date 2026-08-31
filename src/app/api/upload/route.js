@@ -1,12 +1,29 @@
 import { NextResponse } from "next/server";
+import { verifyAuth } from "@/lib/serverAuth";
+
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export async function POST(req) {
   try {
+    const { error: authError } = await verifyAuth(req);
+    if (authError) {
+      return NextResponse.json({ error: authError }, { status: 401 });
+    }
+
     const formData = await req.formData();
     const file = formData.get("file");
 
     if (!file) {
       return NextResponse.json({ error: "No se ha subido ningún archivo" }, { status: 400 });
+    }
+
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      return NextResponse.json({ error: "Tipo de archivo no permitido" }, { status: 415 });
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json({ error: "La imagen supera el tamaño máximo de 5 MB" }, { status: 413 });
     }
 
     const cloudinaryCloudName = process.env.CLOUDINARY_CLOUD_NAME;

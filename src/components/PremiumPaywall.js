@@ -24,9 +24,13 @@ export default function PremiumPaywall({ feature, onClose }) {
     try {
       const session = JSON.parse(localStorage.getItem("colecciona_session") || "null");
       const token = session?.access_token || session?.accessToken;
+      if (!token) {
+        setError("Inicia sesion para activar Premium");
+        setLoading(false);
+        return;
+      }
       const headers = { "Content-Type": "application/json" };
       if (token) headers.Authorization = `Bearer ${token}`;
-      if (session?.email) headers["x-user-email"] = session.email;
 
       const res = await fetch("/api/stripe/subscribe", {
         method: "POST",

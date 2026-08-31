@@ -1,5 +1,6 @@
 import styles from "./Badge.module.css";
 import { cardConditions } from "@/data/mockData";
+import { ORDER_STATES, normalizeOrderStatus } from "@/lib/orderStates";
 
 export function ConditionBadge({ condition, size = "md" }) {
   const config = cardConditions[condition] || cardConditions.NM;
@@ -49,12 +50,17 @@ export function LevelBadge({ level }) {
 
 export function StatusBadge({ status }) {
   const configMap = {
-    completed: { label: "Completado", class: styles.statusCompleted },
-    shipped: { label: "En Tránsito", class: styles.statusShipped },
-    pending: { label: "En Custodia Escrow", class: styles.statusPending },
-    cancelled: { label: "Cancelado", class: styles.statusCancelled },
+    [ORDER_STATES.COMPLETED]: { label: "Completado", class: styles.statusCompleted },
+    [ORDER_STATES.DELIVERED]: { label: "Recibido", class: styles.statusShipped },
+    [ORDER_STATES.SHIPPED]: { label: "En tránsito", class: styles.statusShipped },
+    [ORDER_STATES.PAID]: { label: "Pagado", class: styles.statusPending },
+    [ORDER_STATES.PAYMENT_PROCESSING]: { label: "Pago en proceso", class: styles.statusPending },
+    [ORDER_STATES.PENDING]: { label: "Pendiente", class: styles.statusPending },
+    [ORDER_STATES.CANCELLED]: { label: "Cancelado", class: styles.statusCancelled },
+    [ORDER_STATES.REFUNDED]: { label: "Reembolsado", class: styles.statusCancelled },
+    [ORDER_STATES.DISPUTED]: { label: "En disputa", class: styles.statusCancelled },
   };
-  const config = configMap[status] || configMap.pending;
+  const config = configMap[normalizeOrderStatus(status)] || configMap[ORDER_STATES.PENDING];
   return (
     <span className={`${styles.statusChip} ${config.class}`}>
       {config.label}

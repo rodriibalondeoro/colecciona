@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
 import ShippingQR from '@/components/ShippingQR';
 import styles from './page.module.css';
+import { ORDER_STATES, normalizeOrderStatus } from '@/lib/orderStates';
 
 export default function OrdersPage() {
   const { session, showToast, addReview } = useApp();
@@ -80,13 +81,13 @@ export default function OrdersPage() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ status: 'shipped', tracking_code: trackingCode }),
+        body: JSON.stringify({ status: ORDER_STATES.SHIPPED, tracking_code: trackingCode }),
       });
 
       const data = await res.json();
       if (data.success) {
         setSales(prev => prev.map(s =>
-          s.id === selectedSaleId ? { ...s, status: 'shipped', tracking_code: trackingCode } : s
+          s.id === selectedSaleId ? { ...s, status: ORDER_STATES.SHIPPED, tracking_code: trackingCode } : s
         ));
         setIsShippingModalOpen(false);
         showToast('Envio marcado como enviado', 'success');
@@ -106,13 +107,13 @@ export default function OrdersPage() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ status: 'completed' }),
+        body: JSON.stringify({ status: ORDER_STATES.COMPLETED }),
       });
 
       const data = await res.json();
       if (data.success) {
         setOrders(prev => prev.map(o =>
-          o.id === orderId ? { ...o, status: 'completed' } : o
+          o.id === orderId ? { ...o, status: ORDER_STATES.COMPLETED } : o
         ));
         showToast('Recepcion confirmada! Valoracion disponible.', 'success');
       } else {
@@ -186,12 +187,17 @@ export default function OrdersPage() {
   };
 
   const getStatusBadge = (status) => {
-    switch (status) {
-      case 'paid': return <span className={`${styles.badge} ${styles.amber}`}>Pagado - Esperando envio</span>;
-      case 'shipped': return <span className={`${styles.badge} ${styles.blue}`}>En camino</span>;
-      case 'completed': return <span className={`${styles.badge} ${styles.emerald}`}>Completado</span>;
-      case 'cancelled': return <span className={`${styles.badge} ${styles.rose}`}>Cancelado</span>;
-      case 'pending': return <span className={`${styles.badge} ${styles.amber}`}>Pendiente</span>;
+    switch (normalizeOrderStatus(status)) {
+      case ORDER_STATES.PENDING: return <span className={`${styles.badge} ${styles.amber}`}>Pendiente</span>;
+      case ORDER_STATES.PAYMENT_PROCESSING: return <span className={`${styles.badge} ${styles.amber}`}>Pago en proceso</span>;
+      case ORDER_STATES.PAID: return <span className={`${styles.badge} ${styles.amber}`}>Pagado - Esperando envio</span>;
+      case ORDER_STATES.PREPARING: return <span className={`${styles.badge} ${styles.amber}`}>Preparando</span>;
+      case ORDER_STATES.SHIPPED: return <span className={`${styles.badge} ${styles.blue}`}>En camino</span>;
+      case ORDER_STATES.DELIVERED: return <span className={`${styles.badge} ${styles.blue}`}>Recibido</span>;
+      case ORDER_STATES.COMPLETED: return <span className={`${styles.badge} ${styles.emerald}`}>Completado</span>;
+      case ORDER_STATES.CANCELLED: return <span className={`${styles.badge} ${styles.rose}`}>Cancelado</span>;
+      case ORDER_STATES.REFUNDED: return <span className={`${styles.badge} ${styles.rose}`}>Reembolsado</span>;
+      case ORDER_STATES.DISPUTED: return <span className={`${styles.badge} ${styles.rose}`}>En disputa</span>;
       case 'accepted': return <span className={`${styles.badge} ${styles.emerald}`}>Aceptada</span>;
       case 'rejected': return <span className={`${styles.badge} ${styles.rose}`}>Rechazada</span>;
       case 'countered': return <span className={`${styles.badge} ${styles.violet}`}>Contraoferta</span>;
@@ -200,10 +206,11 @@ export default function OrdersPage() {
   };
 
   const renderProgressBar = (status) => {
-    const steps = ['paid', 'shipped', 'completed'];
-    let currentIndex = steps.indexOf(status);
+    const normalized = normalizeOrderStatus(status);
+    const steps = [ORDER_STATES.PAID, ORDER_STATES.SHIPPED, ORDER_STATES.COMPLETED];
+    let currentIndex = steps.indexOf(normalized);
     if (currentIndex === -1) currentIndex = 0;
-    if (status === 'cancelled') return null;
+    if ([ORDER_STATES.CANCELLED, ORDER_STATES.REFUNDED, ORDER_STATES.DISPUTED].includes(normalized)) return null;
 
     return (
       <div className={styles.progressBar}>
@@ -287,7 +294,7 @@ export default function OrdersPage() {
 
                   {renderProgressBar(order.status)}
 
-                  {order.status === 'shipped' && (
+                  {normalizeOrderStatus(order.status) === ORDER_STATES.SHIPPED && (
                     <button
                       className={`${styles.actionButton} ${styles.primary}`}
                       onClick={() => handleConfirmDelivery(order.id)}
@@ -295,7 +302,7 @@ export default function OrdersPage() {
                       CONFIRMAR RECEPCION
                     </button>
                   )}
-                  {order.status === 'completed' && !reviewedOrderIds.has(order.id) && !order.reviewed && (
+                  {normalizeOrderStatus(order.status) === ORDER_STATES.COMPLETED && !reviewedOrderIds.has(order.id) && !order.reviewed && (
                     <button
                       className={`${styles.actionButton} ${styles.success}`}
                       onClick={() => {
@@ -350,7 +357,7 @@ export default function OrdersPage() {
 
                     {renderProgressBar(sale.status)}
 
-                    {sale.status === 'shipped' && sale.tracking_code && (
+                    {normalizeOrderStatus(sale.status) === ORDER_STATES.SHIPPED && sale.tracking_code && (
                       <div className={styles.shippingInfo} style={{ alignItems: 'center' }}>
                         <ShippingQR
                           value={`https://colecciona.com/rastreo/${encodeURIComponent(sale.tracking_code)}`}
@@ -360,7 +367,7 @@ export default function OrdersPage() {
                       </div>
                     )}
 
-                    {sale.status === 'paid' && (
+                    {normalizeOrderStatus(sale.status) === ORDER_STATES.PAID && (
                       <button
                         className={`${styles.actionButton} ${styles.primary}`}
                         onClick={() => openShippingModal(sale.id)}

@@ -1,33 +1,15 @@
 import { NextResponse } from "next/server";
 import { getServerSupabase } from "@/lib/serverSupabase";
+import { verifyAuth } from "@/lib/serverAuth";
 
 export async function GET(req) {
   const fallback = { isPremium: false, premiumSince: null, commissionRate: 0.08 };
   try {
-    const authHeader = req.headers.get("authorization");
-    const emailHeader = req.headers.get("x-user-email");
-
     const supabase = getServerSupabase();
     if (!supabase) return NextResponse.json(fallback);
 
-    let userId = null;
-
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.slice(7);
-      const { data } = await supabase.auth.getUser(token);
-      userId = data?.user?.id;
-    }
-
-    if (!userId && emailHeader) {
-      const { data: users } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", emailHeader)
-        .single();
-      userId = users?.id;
-    }
-
-    if (!userId) {
+    const { user } = await verifyAuth(req);
+    if (!user) {
       return NextResponse.json({
         isPremium: false,
         premiumSince: null,
@@ -38,7 +20,7 @@ export async function GET(req) {
     const { data: profile } = await supabase
       .from("users")
       .select("is_premium, premium_since")
-      .eq("id", userId)
+      .eq("id", user.id)
       .single();
 
     const isPremium = profile?.is_premium || false;

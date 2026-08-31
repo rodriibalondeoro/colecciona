@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { verifyAuth } from "@/lib/serverAuth";
 
 function getStripe() {
   const Stripe = require("stripe").default;
@@ -12,47 +13,24 @@ const PREMIUM_AMOUNT = 499; // 4.99 EUR en centimos
 
 export async function POST(req) {
   try {
-    const authHeader = req.headers.get("authorization");
-    const emailHeader = req.headers.get("x-user-email");
-
-    if (!authHeader?.startsWith("Bearer ") && !emailHeader) {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
-
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !serviceKey) {
+      return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
+    }
+
     const supabase = createClient(url, serviceKey);
 
-    let userId = null;
-    let userEmail = emailHeader;
-
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.slice(7);
-      const { data } = await supabase.auth.getUser(token);
-      if (data?.user) {
-        userId = data.user.id;
-        userEmail = data.user.email;
-      }
-    }
-
-    if (!userId && userEmail) {
-      const { data: users } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", userEmail)
-        .single();
-      userId = users?.id;
-    }
-
-    if (!userId) {
-      return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError) {
+      return NextResponse.json({ error: authError }, { status: 401 });
     }
 
     // Verificar si ya es premium
     const { data: profile } = await supabase
       .from("users")
       .select("is_premium, stripe_customer_id")
-      .eq("id", userId)
+      .eq("id", user.id)
       .single();
 
     if (profile?.is_premium) {
@@ -64,15 +42,15 @@ export async function POST(req) {
 
     if (!customerId) {
       const customer = await getStripe().customers.create({
-        email: userEmail,
-        metadata: { user_id: userId },
+        email: user.email,
+        metadata: { user_id: user.id },
       });
       customerId = customer.id;
 
       await supabase
         .from("users")
         .update({ stripe_customer_id: customerId })
-        .eq("id", userId);
+        .eq("id", user.id);
     }
 
     // Crear Checkout Session para suscripción
@@ -96,7 +74,7 @@ export async function POST(req) {
       ],
       success_url: `${req.headers.get("origin")}/profile?premium=success`,
       cancel_url: `${req.headers.get("origin")}/profile?premium=cancel`,
-      metadata: { user_id: userId },
+      metadata: { user_id: user.id },
     });
 
     return NextResponse.json({ url: session.url, sessionId: session.id });

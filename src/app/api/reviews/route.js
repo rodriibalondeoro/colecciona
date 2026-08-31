@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSupabase } from "@/lib/serverSupabase";
 import { verifyAuth } from "@/lib/serverAuth";
+import { ORDER_STATES, normalizeOrderStatus } from "@/lib/orderStates";
 
 export async function POST(req) {
   try {
@@ -17,7 +18,7 @@ export async function POST(req) {
       .eq("id", body.orderId)
       .single();
 
-    if (!order || order.status !== "completed") {
+    if (!order || normalizeOrderStatus(order.status) !== ORDER_STATES.COMPLETED) {
       return NextResponse.json(
         { error: "Solo puedes reseñar pedidos completados" },
         { status: 400 }

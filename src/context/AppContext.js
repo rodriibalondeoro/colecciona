@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef } f
 import { products, users } from "@/data/mockData";
 import { persistMessage, getFavorites, toggleFavoriteAPI, notifyUser, getOffers, createOffer, updateOffer, sendPush } from "@/lib/dataService";
 import { subscribeToMessages, subscribeToNotifications } from "@/lib/supabase";
+import { ORDER_STATES } from "@/lib/orderStates";
 
 /* ──────────────────────────────────────────────────────────────────────────
    AppContext — Estado global de Colecciona
@@ -714,14 +715,14 @@ export function AppProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   const confirmReceived = useCallback((orderId) => {
     setOrders((prev) =>
-      prev.map((o) => o.id === orderId ? { ...o, status: "completed", confirmedAt: new Date().toISOString() } : o)
+      prev.map((o) => o.id === orderId ? { ...o, status: ORDER_STATES.COMPLETED, confirmedAt: new Date().toISOString() } : o)
     );
     showToast("¡Recepción confirmada! Valoración disponible.", "success");
   }, [showToast]);
 
   const markSaleShipped = useCallback((saleId, trackingCode) => {
     setSales((prev) =>
-      prev.map((s) => s.id === saleId ? { ...s, status: "shipped", trackingCode } : s)
+      prev.map((s) => s.id === saleId ? { ...s, status: ORDER_STATES.SHIPPED, trackingCode } : s)
     );
     showToast("Envío marcado como enviado", "success");
   }, [showToast]);
@@ -738,7 +739,7 @@ export function AppProvider({ children }) {
       total: item.product.price + (item.shippingMethod?.price || 1.8) + item.product.price * 0.08,
       shippingMethod: item.shippingMethod?.name || "Sobre acolchado Correos",
       trackingCode: null,
-      status: "paid",
+      status: ORDER_STATES.PAID,
       purchasedAt: new Date().toISOString(),
       confirmedAt: null,
       address,

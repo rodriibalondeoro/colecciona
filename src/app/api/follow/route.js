@@ -5,25 +5,10 @@ import { verifyAuth } from "@/lib/serverAuth";
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 async function resolveUser(req) {
   const { user } = await verifyAuth(req);
   if (user) return user;
-
-  const userId = req.headers.get("x-user-id");
-  if (userId && UUID_RE.test(userId)) {
-    const supabase = createClient(url, key);
-    const { data } = await supabase.from("users").select("id, username").eq("id", userId).single();
-    if (data) return { id: data.id, username: data.username };
-  }
-
-  const email = req.headers.get("x-user-email");
-  if (!email) return null;
-
-  const supabase = createClient(url, key);
-  const { data } = await supabase.from("users").select("id, username").eq("email", email).single();
-  return data ? { id: data.id, username: data.username } : null;
+  return null;
 }
 
 export async function POST(req) {

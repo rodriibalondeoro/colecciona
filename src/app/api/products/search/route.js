@@ -90,7 +90,7 @@ export async function GET(req) {
     const filters = { query, category, condition, minPrice, maxPrice, sort, sellerUsername };
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     let dbProducts = [];
 
@@ -99,7 +99,9 @@ export async function GET(req) {
         const supabase = createClient(url, key);
         let dbQuery = supabase
           .from("products")
-          .select("*, seller:users(*)", { count: "exact" });
+          .select("*, seller:users(id, username, name, avatar, bio, level, level_name, sales, purchases, rating, location, followers, following)", { count: "exact" });
+
+        dbQuery = dbQuery.eq("status", "ACTIVE");
 
         if (category !== "all") {
           const section = collections.find((c) => c.id === category);

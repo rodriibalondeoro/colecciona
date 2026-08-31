@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
+import { ORDER_STATES } from "@/lib/orderStates";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -22,12 +23,32 @@ export async function POST(req) {
 
     const { data: product, error: productError } = await supabase
       .from("products")
-      .select("price, seller, title, image")
+      .select("price, seller, title, image, status")
       .eq("id", body.productId)
       .single();
 
     if (productError || !product) {
       return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
+    }
+    if (product.status !== "ACTIVE") {
+      return NextResponse.json({ error: "Producto no disponible" }, { status: 409 });
+    }
+
+    const { data: reservedProduct, error: reserveError } = await supabase
+      .from("products")
+      .update({
+        status: "SOLD",
+        reserved_by: user.id,
+        reserved_until: null,
+        sold_at: new Date().toISOString(),
+      })
+      .eq("id", body.productId)
+      .eq("status", "ACTIVE")
+      .select("id")
+      .single();
+
+    if (reserveError || !reservedProduct) {
+      return NextResponse.json({ error: "Producto no disponible" }, { status: 409 });
     }
 
     const price = product.price;
@@ -47,12 +68,20 @@ export async function POST(req) {
         total,
         shipping_method: body.shippingMethod || "Sobre acolchado Correos",
         shipping_address: body.shippingAddress || "",
-        status: "paid",
+        status: ORDER_STATES.PAID,
       })
       .select()
       .single();
 
-    if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 });
+    if (insertError) {
+      await supabase
+        .from("products")
+        .update({ status: "ACTIVE", reserved_by: null, reserved_until: null, sold_at: null })
+        .eq("id", body.productId)
+        .eq("reserved_by", user.id)
+        .eq("status", "SOLD");
+      return NextResponse.json({ error: insertError.message }, { status: 500 });
+    }
 
     await supabase.from("notifications").insert([
       {

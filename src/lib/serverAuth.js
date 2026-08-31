@@ -4,6 +4,10 @@ const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function verifyAuth(req) {
+  if (!url || !serviceKey) {
+    return { user: null, error: "Supabase no configurado" };
+  }
+
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) {
     return { user: null, error: "No autenticado" };

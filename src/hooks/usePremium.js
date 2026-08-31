@@ -24,7 +24,6 @@ export function PremiumProvider({ children }) {
       const token = session?.access_token || session?.accessToken;
       const headers = {};
       if (token) headers.Authorization = `Bearer ${token}`;
-      if (session?.email) headers["x-user-email"] = session.email;
 
       const res = await fetch("/api/premium/status", { headers });
       const data = await res.json();

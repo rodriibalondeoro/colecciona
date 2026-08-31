@@ -15,7 +15,12 @@ export async function GET(req) {
 
   let dbQuery = supabase
     .from("offers")
-    .select("*, product:products(*, seller:users(*)), from_user:users!offers_from_user_id_fkey(*), to_user:users!offers_to_user_id_fkey(*)");
+    .select(`
+      *,
+      product:products(*, seller:users(id, username, name, avatar, rating, sales)),
+      from_user:users!offers_from_user_id_fkey(id, username, name, avatar, rating, sales),
+      to_user:users!offers_to_user_id_fkey(id, username, name, avatar, rating, sales)
+    `);
 
   if (type === "received") {
     dbQuery = dbQuery.eq("to_user_id", user.id);

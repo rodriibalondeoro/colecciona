@@ -63,10 +63,6 @@ export default function SellerProfilePage() {
         if (s.access_token) {
           return { Authorization: `Bearer ${s.access_token}` };
         }
-        const headers = {};
-        if (s.id) headers["x-user-id"] = s.id;
-        if (s.email) headers["x-user-email"] = s.email;
-        return headers;
       }
     } catch {}
     return {};

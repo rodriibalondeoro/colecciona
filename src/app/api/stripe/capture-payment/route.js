@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
+import { ORDER_STATES } from "@/lib/orderStates";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -40,8 +41,12 @@ export async function POST(req) {
 
     await supabase
       .from("orders")
-      .update({ status: "paid" })
+      .update({ status: ORDER_STATES.PAID })
       .eq("payment_intent_id", paymentIntentId);
+
+    await supabase.rpc("mark_products_sold_by_payment_intent", {
+      p_payment_intent_id: paymentIntentId,
+    });
 
     await supabase.from("notifications").insert({
       user_id: order.seller_id,

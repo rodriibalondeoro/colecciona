@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { normalizePhone } from "@/lib/phone";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function POST(req) {
   try {

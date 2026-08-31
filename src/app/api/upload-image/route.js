@@ -1,10 +1,17 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { rateLimit } from "@/lib/rateLimit";
+import { verifyAuth } from "@/lib/serverAuth";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const BUCKET = "card-images";
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Map([
+  ["image/jpeg", "jpg"],
+  ["image/png", "png"],
+  ["image/webp", "webp"],
+]);
 
 export async function POST(req) {
   try {
@@ -20,6 +27,12 @@ export async function POST(req) {
     if (!url || !key) {
       return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
     }
+
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError) {
+      return NextResponse.json({ error: authError }, { status: 401 });
+    }
+
     const supabase = createClient(url, key);
 
     const formData = await req.formData();
@@ -29,8 +42,16 @@ export async function POST(req) {
       return NextResponse.json({ error: "No se ha subido ningún archivo" }, { status: 400 });
     }
 
-    const ext = file.type === "image/png" ? "png" : "jpg";
-    const path = `cards/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const ext = ALLOWED_IMAGE_TYPES.get(file.type);
+    if (!ext) {
+      return NextResponse.json({ error: "Tipo de archivo no permitido" }, { status: 415 });
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json({ error: "La imagen supera el tamaño máximo de 5 MB" }, { status: 413 });
+    }
+
+    const path = `${user.id}/cards/${crypto.randomUUID()}.${ext}`;
 
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);

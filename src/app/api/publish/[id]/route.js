@@ -4,7 +4,7 @@ import { verifyAuth } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function DELETE(req, { params }) {
   try {
@@ -26,7 +26,7 @@ export async function DELETE(req, { params }) {
 
     const { data: product, error: fetchError } = await supabase
       .from("products")
-      .select("seller, seller:users(email)")
+      .select("seller")
       .eq("id", id)
       .single();
 
@@ -34,24 +34,13 @@ export async function DELETE(req, { params }) {
       return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
     }
 
-    // Intentar auth con JWT
     const { user, error: authError } = await verifyAuth(req);
-    if (user) {
-      const sellerId = typeof product.seller === "object" ? product.seller?.id : product.seller;
-      if (sellerId !== user.id) {
-        return NextResponse.json({ error: "No tienes permiso para eliminar este producto" }, { status: 403 });
-      }
-    } else {
-      // Sin JWT: verificar ownership por email desde body
-      const body = await req.json().catch(() => ({}));
-      const email = body.sellerEmail;
-      if (!email) {
-        return NextResponse.json({ error: "No autenticado y sin email" }, { status: 401 });
-      }
-      const sellerEmail = typeof product.seller === "object" ? product.seller?.email : null;
-      if (sellerEmail !== email) {
-        return NextResponse.json({ error: "No tienes permiso para eliminar este producto" }, { status: 403 });
-      }
+    if (authError) {
+      return NextResponse.json({ error: authError }, { status: 401 });
+    }
+
+    if (product.seller !== user.id) {
+      return NextResponse.json({ error: "No tienes permiso para eliminar este producto" }, { status: 403 });
     }
 
     const { error } = await supabase.from("products").delete().eq("id", id);

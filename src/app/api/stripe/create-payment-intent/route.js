@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
+import { ORDER_STATES } from "@/lib/orderStates";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -28,14 +29,17 @@ export async function POST(req) {
 
     const supabase = createClient(url, key);
 
-    const ids = cartItems.map((i) => i.productId);
+    const ids = [...new Set(cartItems.map((i) => i.productId).filter(Boolean))];
+    const reservedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const { data: products, error: productError } = await supabase
-      .from("products")
-      .select("id, price, seller, title")
-      .in("id", ids);
+      .rpc("reserve_products_for_checkout", {
+        p_product_ids: ids,
+        p_buyer_id: user.id,
+        p_reserved_until: reservedUntil,
+      });
 
     if (productError || !products) {
-      return NextResponse.json({ error: "Productos no encontrados" }, { status: 404 });
+      return NextResponse.json({ error: "Uno o más productos ya no están disponibles" }, { status: 409 });
     }
 
     const productMap = {};
@@ -73,23 +77,34 @@ export async function POST(req) {
         total: itemTotal / 100,
         shipping_method: item.shippingMethod || "Sobre acolchado Correos",
         shipping_address: shippingAddress || "",
-        status: "pending",
+        status: ORDER_STATES.PAYMENT_PROCESSING,
       });
     }
 
     const totalCents = priceCents + shippingCents + commissionCents + PROTECTION_FEE_CENTS;
 
     const stripe = getStripe();
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: totalCents,
-      currency: "eur",
-      payment_method_types: ["card"],
-      capture_method: "manual",
-      metadata: {
-        buyerId: user.id,
-        productIds: ids.join(","),
-      },
-    });
+    let paymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: totalCents,
+        currency: "eur",
+        payment_method_types: ["card"],
+        capture_method: "manual",
+        metadata: {
+          buyerId: user.id,
+          productIds: ids.join(","),
+        },
+      });
+    } catch (stripeError) {
+      await supabase
+        .from("products")
+        .update({ status: "ACTIVE", reserved_by: null, reserved_until: null })
+        .in("id", ids)
+        .eq("reserved_by", user.id)
+        .eq("status", "RESERVED");
+      throw stripeError;
+    }
 
     // Insertar órdenes pendientes ligadas al PaymentIntent
     const { error: orderError } = await supabase.from("orders").insert(
@@ -98,6 +113,13 @@ export async function POST(req) {
 
     if (orderError) {
       console.error("[Stripe] Error creando orders:", orderError);
+      await stripe.paymentIntents.cancel(paymentIntent.id).catch(() => {});
+      await supabase
+        .from("products")
+        .update({ status: "ACTIVE", reserved_by: null, reserved_until: null })
+        .in("id", ids)
+        .eq("reserved_by", user.id)
+        .eq("status", "RESERVED");
       return NextResponse.json({ error: "Error creando el pedido" }, { status: 500 });
     }
 

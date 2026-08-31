@@ -9,7 +9,8 @@ function logDebug(msg) {
 }
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const PRODUCT_STATUSES = new Set(["DRAFT", "ACTIVE"]);
 
 export async function POST(req) {
   try {
@@ -30,64 +31,15 @@ export async function POST(req) {
       return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
     }
 
-    const body = await req.json();
-    logDebug(`body: sellerEmail=${body.sellerEmail} title=${body.title} img=${String(body.image).slice(0, 60)}`);
-    const supabase = createClient(url, key);
-
-    let sellerId = null;
-
-    // Intentar auth con JWT
     const { user, error: authError } = await verifyAuth(req);
-    if (user) {
-      sellerId = user.id;
-    } else {
-      // Sin JWT: resolver seller por email del body
-      const email = body.sellerEmail;
-      if (!email) {
-        return NextResponse.json({ error: "No autenticado y sin email" }, { status: 401 });
-      }
-      const { data: existingUser } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", email)
-        .limit(1)
-        .single();
-      if (existingUser) {
-        sellerId = existingUser.id;
-      } else {
-        // Crear el usuario Auth primero (dispara el trigger handle_new_user
-        // que crea la fila en public.users con el id correcto).
-        const { data: authUser, error: authErr } = await supabase.auth.admin.createUser({
-          email,
-          email_confirm: true,
-          user_metadata: { full_name: body.sellerName || email },
-          password: Math.random().toString(36).slice(2) + "Ab1!",
-        });
-        if (authErr) {
-          console.error("[API /publish] Error creando auth user:", authErr);
-        }
-        if (authUser?.user?.id) {
-          sellerId = authUser.user.id;
-        } else {
-          const { data: fallbackUser } = await supabase
-            .from("users")
-            .insert({
-              id: authUser?.user?.id || undefined,
-              email,
-              username: email.split("@")[0],
-              name: body.sellerName || email,
-              member_since: new Date().toISOString(),
-            })
-            .select("id")
-            .single();
-          if (fallbackUser) sellerId = fallbackUser.id;
-        }
-      }
+    if (authError) {
+      return NextResponse.json({ error: authError }, { status: 401 });
     }
 
-    if (!sellerId) {
-      return NextResponse.json({ error: "No se pudo resolver el vendedor" }, { status: 400 });
-    }
+    const body = await req.json();
+    const status = PRODUCT_STATUSES.has(body.status) ? body.status : "ACTIVE";
+    logDebug(`body: seller=${user.id} title=${body.title} img=${String(body.image).slice(0, 60)}`);
+    const supabase = createClient(url, key);
 
     const { data, error } = await supabase
       .from("products")
@@ -97,13 +49,14 @@ export async function POST(req) {
         image: body.image,
         category: body.category,
         condition: body.condition,
-        seller: sellerId,
+        seller: user.id,
         code: body.code,
         rarity: body.rarity,
         description: body.description,
         set: body.set,
         language: body.language,
         year: body.year,
+        status,
         created_at: new Date().toISOString(),
       })
       .select()

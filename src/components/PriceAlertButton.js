@@ -21,7 +21,6 @@ export default function PriceAlertButton({ productId, currentPrice }) {
       const token = session?.access_token || session?.accessToken;
       const headers = {};
       if (token) headers.Authorization = `Bearer ${token}`;
-      if (session?.email) headers["x-user-email"] = session.email;
 
       const res = await fetch("/api/alerts/price", { headers });
       const data = await res.json();
@@ -43,9 +42,9 @@ export default function PriceAlertButton({ productId, currentPrice }) {
     try {
       const session = JSON.parse(localStorage.getItem("colecciona_session") || "null");
       const token = session?.access_token || session?.accessToken;
+      if (!token) return;
       const headers = { "Content-Type": "application/json" };
       if (token) headers.Authorization = `Bearer ${token}`;
-      if (session?.email) headers["x-user-email"] = session.email;
 
       await fetch("/api/alerts/price", {
         method: "POST",
@@ -62,9 +61,9 @@ export default function PriceAlertButton({ productId, currentPrice }) {
     try {
       const session = JSON.parse(localStorage.getItem("colecciona_session") || "null");
       const token = session?.access_token || session?.accessToken;
+      if (!token) return;
       const headers = {};
       if (token) headers.Authorization = `Bearer ${token}`;
-      if (session?.email) headers["x-user-email"] = session.email;
 
       await fetch("/api/alerts/price", {
         method: "DELETE",

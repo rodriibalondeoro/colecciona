@@ -1,27 +1,14 @@
 import { NextResponse } from "next/server";
 import { getServerSupabase } from "@/lib/serverSupabase";
+import { verifyAuth } from "@/lib/serverAuth";
 
 export async function GET(req) {
   try {
-    const authHeader = req.headers.get("authorization");
-    const emailHeader = req.headers.get("x-user-email");
-
     const supabase = getServerSupabase();
     if (!supabase) return NextResponse.json({ alerts: [] });
 
-    let userId = null;
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.slice(7);
-      const { data } = await supabase.auth.getUser(token);
-      userId = data?.user?.id;
-    }
-    if (!userId && emailHeader) {
-      const { data: users } = await supabase
-        .from("users").select("id").eq("email", emailHeader).single();
-      userId = users?.id;
-    }
-
-    if (!userId) {
+    const { user } = await verifyAuth(req);
+    if (!user) {
       return NextResponse.json({ alerts: [] });
     }
 
@@ -31,7 +18,7 @@ export async function GET(req) {
         id, target_price, active, triggered, created_at,
         product:products(id, title, price, image, category)
       `)
-      .eq("user_id", userId)
+      .eq("user_id", user.id)
       .order("created_at", { ascending: false });
 
     return NextResponse.json({ alerts: alerts || [] });
@@ -43,32 +30,19 @@ export async function GET(req) {
 
 export async function POST(req) {
   try {
-    const authHeader = req.headers.get("authorization");
-    const emailHeader = req.headers.get("x-user-email");
     const { productId, targetPrice } = await req.json();
 
     const supabase = getServerSupabase();
     if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 
-    let userId = null;
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.slice(7);
-      const { data } = await supabase.auth.getUser(token);
-      userId = data?.user?.id;
-    }
-    if (!userId && emailHeader) {
-      const { data: users } = await supabase
-        .from("users").select("id").eq("email", emailHeader).single();
-      userId = users?.id;
-    }
-
-    if (!userId) {
+    const { user } = await verifyAuth(req);
+    if (!user) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
     // Verificar premium
     const { data: profile } = await supabase
-      .from("users").select("is_premium").eq("id", userId).single();
+      .from("users").select("is_premium").eq("id", user.id).single();
 
     if (!profile?.is_premium) {
       return NextResponse.json({ error: "Función exclusiva de Premium" }, { status: 403 });
@@ -77,7 +51,7 @@ export async function POST(req) {
     const { data, error } = await supabase
       .from("price_alerts")
       .upsert(
-        { user_id: userId, product_id: productId, target_price: targetPrice, active: true },
+        { user_id: user.id, product_id: productId, target_price: targetPrice, active: true },
         { onConflict: "user_id,product_id" }
       )
       .select()
@@ -94,27 +68,14 @@ export async function POST(req) {
 
 export async function DELETE(req) {
   try {
-    const authHeader = req.headers.get("authorization");
-    const emailHeader = req.headers.get("x-user-email");
     const { searchParams } = new URL(req.url);
     const alertId = searchParams.get("id");
 
     const supabase = getServerSupabase();
     if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 
-    let userId = null;
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.slice(7);
-      const { data } = await supabase.auth.getUser(token);
-      userId = data?.user?.id;
-    }
-    if (!userId && emailHeader) {
-      const { data: users } = await supabase
-        .from("users").select("id").eq("email", emailHeader).single();
-      userId = users?.id;
-    }
-
-    if (!userId) {
+    const { user } = await verifyAuth(req);
+    if (!user) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
@@ -122,7 +83,7 @@ export async function DELETE(req) {
       .from("price_alerts")
       .delete()
       .eq("id", alertId)
-      .eq("user_id", userId);
+      .eq("user_id", user.id);
 
     return NextResponse.json({ ok: true });
   } catch (err) {

@@ -6,38 +6,32 @@ const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function GET(req) {
+  if (!url || !serviceKey) {
+    return NextResponse.json({ profile: null }, { status: 500 });
+  }
+
   const supabase = createClient(url, serviceKey);
 
-  const { user } = await verifyAuth(req);
+  const { user, error: authError } = await verifyAuth(req);
   if (user) {
     const { data } = await supabase.from("users").select("*").eq("id", user.id).single();
     if (data) return NextResponse.json({ profile: data });
   }
 
-  const email = req.headers.get("x-user-email");
-  if (email) {
-    const { data } = await supabase.from("users").select("*").eq("email", email).limit(1).single();
-    if (data) return NextResponse.json({ profile: data });
-  }
-
-  return NextResponse.json({ profile: null });
+  return NextResponse.json({ error: authError || "No autenticado", profile: null }, { status: 401 });
 }
 
 export async function PATCH(req) {
+  if (!url || !serviceKey) {
+    return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
+  }
+
   const supabase = createClient(url, serviceKey);
 
-  let userId = null;
-  const { user } = await verifyAuth(req);
-  if (user) {
-    userId = user.id;
-  } else {
-    const email = req.headers.get("x-user-email");
-    if (email) {
-      const { data } = await supabase.from("users").select("id").eq("email", email).limit(1).single();
-      if (data) userId = data.id;
-    }
+  const { user, error: authError } = await verifyAuth(req);
+  if (!user) {
+    return NextResponse.json({ error: authError || "No autenticado" }, { status: 401 });
   }
-  if (!userId) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
   const body = await req.json();
   const updates = {};
@@ -72,7 +66,7 @@ export async function PATCH(req) {
   const { data, error: updateError } = await supabase
     .from("users")
     .update(updates)
-    .eq("id", userId)
+    .eq("id", user.id)
     .select()
     .single();
 
