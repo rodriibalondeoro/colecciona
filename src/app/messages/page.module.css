@@ -294,6 +294,25 @@
   font-size: 0.8125rem;
 }
 
+.proposalBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(16,185,129,0.08));
+  border-bottom: 1px solid var(--border-subtle);
+  text-decoration: none;
+  color: inherit;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.proposalBanner:hover { background: linear-gradient(135deg, rgba(99,102,241,0.14), rgba(16,185,129,0.14)); }
+.proposalBannerIcon { font-size: 20px; }
+.proposalBannerInfo { flex: 1; }
+.proposalBannerTitle { font-size: 13px; font-weight: 700; color: var(--text-primary); display: block; }
+.proposalBannerStatus { font-size: 11px; color: var(--text-muted); text-transform: capitalize; }
+.proposalBannerArrow { font-size: 16px; color: var(--text-muted); }
+
 .messagesContainer {
   flex: 1;
   padding: 20px 36px 12px;

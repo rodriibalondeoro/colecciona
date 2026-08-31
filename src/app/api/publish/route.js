@@ -67,6 +67,32 @@ export async function POST(req) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    // Check if any users have this card as MISSING and notify them
+    try {
+      const cardTitle = body.title || "";
+      const { data: missingHolders } = await supabase
+        .from("collection_items")
+        .select("user_id, card_name")
+        .eq("status", "MISSING")
+        .ilike("card_name", cardTitle)
+        .neq("user_id", user.id);
+
+      if (missingHolders && missingHolders.length > 0) {
+        const notifications = missingHolders.map(h => ({
+          user_id: h.user_id,
+          type: "price_alert",
+          title: "🔥 ¡Cromo de tu lista de faltas disponible!",
+          message: `"${cardTitle}" acaba de ser publicado por ${user.id} a ${body.price}€.`,
+          data: { product_id: data.id, card_name: h.card_name },
+          read: false,
+          created_at: new Date().toISOString(),
+        }));
+        await supabase.from("notifications").insert(notifications);
+      }
+    } catch (notifErr) {
+      console.warn("[API /publish] Error sending price alerts:", notifErr);
+    }
+
     return NextResponse.json({ success: true, product: data });
   } catch (err) {
     console.error("[API /publish] Error interno:", err);

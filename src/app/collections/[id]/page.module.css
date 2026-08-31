@@ -19,6 +19,7 @@
 .filterBtn { padding: 6px 12px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-full); color: var(--text-muted); font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
 .filterBtn:hover { border-color: var(--accent-primary); color: var(--text-primary); }
 .filterActive { background: var(--accent-primary); border-color: var(--accent-primary); color: white; }
+.filterLabel { font-size: 11px; color: var(--text-muted); font-weight: 600; display: flex; align-items: center; }
 .searchRow { display: flex; gap: 8px; }
 .searchInput { flex: 1; padding: 8px 12px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-xs); color: var(--text-primary); font-size: 13px; outline: none; }
 .searchInput:focus { border-color: var(--accent-primary); }
@@ -42,10 +43,29 @@
 .itemInfo { flex: 1; min-width: 0; }
 .itemName { font-size: 13px; font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .itemMeta { font-size: 11px; color: var(--text-muted); }
+.priorityBadge { font-weight: 700; }
 .itemActions { display: flex; gap: 6px; align-items: center; }
 .statusSelect { padding: 4px 8px; background: var(--bg-dark); border: 1px solid var(--border-subtle); border-radius: var(--radius-xs); color: var(--text-primary); font-size: 11px; cursor: pointer; }
 .itemDelete { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 4px; }
 .itemDelete:hover { color: #ef4444; }
+
+.searchBtn { background: none; border: 1px solid var(--border-subtle); border-radius: var(--radius-xs); cursor: pointer; font-size: 14px; padding: 4px 6px; transition: border-color 0.2s; }
+.searchBtn:hover { border-color: var(--accent-primary); }
+
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
+.modalContent { background: var(--bg-surface); border: 1px solid var(--border-medium); border-radius: var(--radius-md); padding: 24px; width: 100%; max-width: 500px; max-height: 80vh; overflow-y: auto; }
+.modalContent h2 { font-size: 16px; margin: 0 0 16px; }
+.searchHint { font-size: 13px; color: var(--text-muted); text-align: center; padding: 20px 0; }
+.sellerList { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.sellerCard { display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--bg-overlay); border-radius: var(--radius-sm); }
+.sellerAvatar { width: 36px; height: 36px; border-radius: 50%; background: var(--accent-gradient); color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex-shrink: 0; }
+.sellerInfo { flex: 1; min-width: 0; }
+.sellerName { font-size: 13px; font-weight: 700; color: var(--text-primary); text-decoration: none; }
+.sellerName:hover { color: var(--accent-light); }
+.sellerMeta { display: flex; gap: 8px; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.sellerItems { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.sellerItemBadge { font-size: 10px; padding: 2px 6px; background: var(--bg-dark); border-radius: var(--radius-full); color: var(--text-muted); }
+.sellerProposeBtn { padding: 6px 12px; background: var(--accent-primary); border: none; border-radius: var(--radius-xs); color: white; font-size: 11px; font-weight: 700; cursor: pointer; text-decoration: none; white-space: nowrap; flex-shrink: 0; }
 
 .loading { padding: 100px 20px; text-align: center; color: var(--text-muted); }
 

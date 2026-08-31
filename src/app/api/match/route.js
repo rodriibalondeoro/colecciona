@@ -88,11 +88,24 @@ export async function GET(req) {
       name: userMap[uid]?.name,
       username: userMap[uid]?.username,
       avatar_url: userMap[uid]?.avatar_url,
+      rating: userMap[uid]?.rating || 0,
+      location: userMap[uid]?.location || "",
       offers: userOffers[uid] || [],
       wants: userWants[uid] || [],
     }));
 
-    const matches = findMatches(targetUser, otherUsers, { minScore: 10, maxResults: 20 });
+    // Get current user's location for proximity scoring
+    const { data: me } = await supabase
+      .from("users")
+      .select("location")
+      .eq("id", user.id)
+      .single();
+
+    const matches = findMatches(targetUser, otherUsers, {
+      minScore: 10,
+      maxResults: 20,
+      userLocation: me?.location || "",
+    });
 
     return NextResponse.json({
       matches,

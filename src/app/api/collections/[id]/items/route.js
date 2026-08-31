@@ -60,7 +60,7 @@ export async function POST(req, { params }) {
     }
 
     const body = await req.json();
-    const { card_name, card_number, card_code, set_name, category, image_url, status: itemStatus, total_quantity, notes } = body;
+    const { card_name, card_number, card_code, set_name, category, image_url, status: itemStatus, total_quantity, notes, priority } = body;
 
     if (!card_name || !card_name.trim()) {
       return NextResponse.json({ error: "El nombre del cromo es obligatorio" }, { status: 400 });
@@ -82,6 +82,8 @@ export async function POST(req, { params }) {
       default: ownedQty = qty;
     }
 
+    const priorityVal = ['low', 'normal', 'high', 'urgent'].includes(priority) ? priority : 'normal';
+
     // Use upsert for unique constraint
     const { data, error } = await supabase
       .from("collection_items")
@@ -101,6 +103,7 @@ export async function POST(req, { params }) {
         trade_quantity: tradeQty,
         sale_quantity: saleQty,
         notes: notes || null,
+        priority: priorityVal,
       }, { onConflict: "collection_id,card_name,card_number" })
       .select()
       .single();
@@ -126,7 +129,7 @@ export async function PATCH(req, { params }) {
     if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 
     const body = await req.json();
-    const { itemId, status, total_quantity, notes } = body;
+    const { itemId, status, total_quantity, notes, priority } = body;
 
     if (!itemId) {
       return NextResponse.json({ error: "itemId requerido" }, { status: 400 });
@@ -160,6 +163,9 @@ export async function PATCH(req, { params }) {
       updates.total_quantity = parseInt(total_quantity) || 1;
     }
     if (notes !== undefined) updates.notes = notes;
+    if (priority !== undefined && ['low', 'normal', 'high', 'urgent'].includes(priority)) {
+      updates.priority = priority;
+    }
     updates.updated_at = new Date().toISOString();
 
     const { data, error } = await supabase

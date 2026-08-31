@@ -56,6 +56,7 @@ function MessagesInner() {
   const [messageText, setMessageText] = useState('');
   const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [proposals, setProposals] = useState([]);
   const messagesEndRef = useRef(null);
 
   const handleDeleteThread = () => {
@@ -71,6 +72,20 @@ function MessagesInner() {
   };
 
   const activeThread = threads.find(t => t.id === activeThreadId);
+
+  useEffect(() => {
+    if (!session?.id) return;
+    fetch('/api/trade-proposals', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('colecciona_session') ? JSON.parse(localStorage.getItem('colecciona_session')).access_token || JSON.parse(localStorage.getItem('colecciona_session')).accessToken : ''}` }
+    }).then(r => r.json()).then(d => setProposals(d.proposals || [])).catch(() => {});
+  }, [session]);
+
+  const activeProposal = activeThread?.partner?.id
+    ? proposals.find(p => {
+        const otherId = p.proposer_id === session?.id ? p.receiver_id : p.proposer_id;
+        return otherId === activeThread.partner.id && !['COMPLETED', 'CANCELLED'].includes(p.status);
+      })
+    : null;
 
   useEffect(() => {
     const iv = setInterval(() => setNow(Date.now()), 60000);
@@ -263,6 +278,17 @@ function MessagesInner() {
                   <div className={styles.productMiniPrice}>{activeThread.product.price.toFixed(2)} €</div>
                 </div>
               </div>
+            )}
+
+            {activeProposal && (
+              <Link href={`/intercambios/${activeProposal.id}`} className={styles.proposalBanner}>
+                <span className={styles.proposalBannerIcon}>🤝</span>
+                <div className={styles.proposalBannerInfo}>
+                  <span className={styles.proposalBannerTitle}>Propuesta de intercambio activa</span>
+                  <span className={styles.proposalBannerStatus}>Estado: {activeProposal.status.replace('_', ' ')}</span>
+                </div>
+                <span className={styles.proposalBannerArrow}>→</span>
+              </Link>
             )}
 
             <div className={styles.messagesContainer}>

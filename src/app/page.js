@@ -25,6 +25,8 @@ export default function Home() {
   const [featuredProducts, setFeaturedProducts] = useState([]);
   const [stats, setStats] = useState({ totalProducts: 0, activeSellers: 0, salesToday: 0 });
   const [statsReady, setStatsReady] = useState(false);
+  const [session, setSession] = useState(null);
+  const [userStats, setUserStats] = useState({ collections: 0, missing: 0, proposals: 0, matches: 0 });
   const gridRef = useStaggerReveal({ delay: 50 });
   const heroRef = useHeroScroll(650);
   const subRowRef = useRef(null);
@@ -62,6 +64,40 @@ export default function Home() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem("colecciona_session") || "null");
+      setSession(s);
+      if (s?.id) loadUserStats(s.id);
+    } catch {}
+  }, []);
+
+  const loadUserStats = async (userId) => {
+    try {
+      const token = (() => { try { return JSON.parse(localStorage.getItem("colecciona_session") || "{}").access_token || JSON.parse(localStorage.getItem("colecciona_session") || "{}").accessToken || ''; } catch { return ''; } })();
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const [colRes, propRes] = await Promise.all([
+        fetch(`/api/collections?userId=${userId}`, { headers }),
+        fetch('/api/trade-proposals', { headers }),
+      ]);
+      const colData = await colRes.json();
+      const propData = await propRes.json();
+      const collections = colData.collections || [];
+      let missing = 0;
+      for (const col of collections) {
+        const itemRes = await fetch(`/api/collections/${col.id}/items?status=MISSING`, { headers });
+        const itemData = await itemRes.json();
+        missing += (itemData.items || []).length;
+      }
+      setUserStats({
+        collections: collections.length,
+        missing,
+        proposals: (propData.proposals || []).length,
+        matches: 0,
+      });
+    } catch {}
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -152,6 +188,36 @@ export default function Home() {
           </span>
         </div>
       </div>
+
+      {/* Personal Dashboard (logged in) */}
+      {session?.id && (
+        <section className={styles.dashboardSection}>
+          <div className="container">
+            <div className={styles.dashboardGrid}>
+              <Link href="/collections" className={styles.dashCard}>
+                <span className={styles.dashIcon}>📚</span>
+                <span className={styles.dashVal}>{userStats.collections}</span>
+                <span className={styles.dashLabel}>Mis colecciones</span>
+              </Link>
+              <Link href="/collections" className={styles.dashCard}>
+                <span className={styles.dashIcon}>❌</span>
+                <span className={styles.dashVal}>{userStats.missing}</span>
+                <span className={styles.dashLabel}>Faltas</span>
+              </Link>
+              <Link href="/intercambios" className={styles.dashCard}>
+                <span className={styles.dashIcon}>🤝</span>
+                <span className={styles.dashVal}>{userStats.proposals}</span>
+                <span className={styles.dashLabel}>Propuestas</span>
+              </Link>
+              <Link href="/intercambios" className={styles.dashCard}>
+                <span className={styles.dashIcon}>🔥</span>
+                <span className={styles.dashVal}>{userStats.matches}</span>
+                <span className={styles.dashLabel}>Matches</span>
+              </Link>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Hero Section */}
       <section ref={heroRef} className={styles.heroSection}>

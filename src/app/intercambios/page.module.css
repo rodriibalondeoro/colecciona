@@ -29,6 +29,9 @@
 .matchAvatar img { width: 100%; height: 100%; object-fit: cover; }
 .matchName { font-size: 15px; font-weight: 700; text-decoration: none; color: var(--text-primary); }
 .matchName:hover { color: var(--accent-light); }
+.matchMeta { display: flex; gap: 8px; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.matchRating { color: #f59e0b; }
+.matchLocation { color: var(--text-muted); }
 .hotBadge { margin-left: 6px; font-size: 16px; }
 
 .scoreCircle { margin-left: auto; width: 52px; height: 52px; border-radius: 50%; background: var(--bg-overlay); border: 2px solid var(--accent-primary); display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -51,7 +54,8 @@
 
 /* Proposals */
 .proposalList { display: flex; flex-direction: column; gap: 12px; }
-.proposalCard { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 16px; }
+.proposalCard { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 16px; text-decoration: none; color: inherit; display: block; transition: border-color 0.2s; }
+.proposalCard:hover { border-color: var(--accent-primary); }
 .proposalHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .proposalWith { font-size: 14px; font-weight: 700; margin-right: 8px; }
 .proposalDate { font-size: 11px; color: var(--text-muted); }

@@ -40,6 +40,7 @@ export default function SellPage() {
   const [price, setPrice] = useState("");
   const [description, setDescription] = useState("");
   const [shippingMethod, setShippingMethod] = useState("sm1");
+  const [shippingPreferences, setShippingPreferences] = useState(["sm1"]);
   const [isPublished, setIsPublished] = useState(false);
   const [showIdentifier, setShowIdentifier] = useState(false);
 
@@ -508,24 +509,39 @@ export default function SellPage() {
           {/* Step 3: Envío */}
           {step === 3 && (
             <div className={styles.stepBox}>
-              <h2 className={styles.stepTitle}>3. Método de Envío Pre-configurado</h2>
+              <h2 className={styles.stepTitle}>3. Métodos de Envío</h2>
               <p className={styles.stepDesc}>
-                El comprador asume el coste del transporte. Cuando se realice la compra, se generará un código QR en tu app.
+                Selecciona los métodos de envío que aceptas. El comprador asume el coste del transporte.
               </p>
 
               <div className={styles.shippingList}>
                 {shippingMethods.map((m) => (
-                  <div
+                  <label
                     key={m.id}
-                    className={`${styles.shippingRow} ${shippingMethod === m.id ? styles.shippingActive : ""}`}
-                    onClick={() => setShippingMethod(m.id)}
+                    className={`${styles.shippingRow} ${shippingPreferences.includes(m.id) ? styles.shippingActive : ""}`}
                   >
+                    <input
+                      type="checkbox"
+                      checked={shippingPreferences.includes(m.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setShippingPreferences(prev => [...prev, m.id]);
+                          setShippingMethod(m.id);
+                        } else {
+                          setShippingPreferences(prev => prev.filter(id => id !== m.id));
+                          if (shippingMethod === m.id) {
+                            setShippingMethod(shippingPreferences.find(id => id !== m.id) || "sm1");
+                          }
+                        }
+                      }}
+                      style={{ accentColor: 'var(--accent-primary)' }}
+                    />
                     <div className={styles.shippingInfo}>
                       <span className={styles.shippingTitle}>{m.name}</span>
                       <span className={styles.shippingDesc}>{m.description}</span>
                     </div>
                     <span className={styles.shippingPrice}>{m.price.toFixed(2)} €</span>
-                  </div>
+                  </label>
                 ))}
               </div>
 
@@ -533,7 +549,11 @@ export default function SellPage() {
                 <button className={styles.secondaryBtn} onClick={() => setStep(2)}>
                   ← Atrás
                 </button>
-                <button className={styles.primaryBtn} onClick={() => setStep(4)}>
+                <button
+                  className={styles.primaryBtn}
+                  disabled={shippingPreferences.length === 0}
+                  onClick={() => setStep(4)}
+                >
                   Continuar: Revisión →
                 </button>
               </div>

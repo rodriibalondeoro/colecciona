@@ -193,10 +193,14 @@ export default function IntercambiosPage() {
                       <div className={styles.matchAvatar}>{m.userName?.[0] || '?'}</div>
                       <div>
                         <span className={styles.matchName}>{m.userName}</span>
-                        {m.score >= 75 && <span className={styles.hotBadge}>🔥</span>}
+                        <div className={styles.matchMeta}>
+                          {m.rating > 0 && <span className={styles.matchRating}>⭐ {m.rating.toFixed(1)}</span>}
+                          {m.location && <span className={styles.matchLocation}>📍 {m.location}</span>}
+                        </div>
+                        {m.finalScore >= 75 && <span className={styles.hotBadge}>🔥</span>}
                       </div>
                       <div className={styles.scoreCircle}>
-                        <span className={styles.scoreVal}>{m.score}</span>
+                        <span className={styles.scoreVal}>{m.finalScore}</span>
                         <span className={styles.scorePct}>%</span>
                       </div>
                     </div>
@@ -255,7 +259,7 @@ export default function IntercambiosPage() {
                   const receiverItems = (p.items || []).filter(i => i.side === 'receiver');
 
                   return (
-                    <div key={p.id} className={styles.proposalCard}>
+                    <Link key={p.id} href={`/intercambios/${p.id}`} className={styles.proposalCard}>
                       <div className={styles.proposalHeader}>
                         <div>
                           <span className={styles.proposalWith}>{isProposer ? `Para: ${other?.name}` : `De: ${other?.name}`}</span>
@@ -289,26 +293,26 @@ export default function IntercambiosPage() {
                       {p.message && <p className={styles.proposalMsg}>"{p.message}"</p>}
                       {['PROPOSED', 'COUNTERED'].includes(p.status) && !isProposer && (
                         <div className={styles.proposalActions}>
-                          <button onClick={() => handleStatusChange(p.id, 'ACCEPTED')} className={styles.acceptBtn}>✓ Aceptar</button>
-                          <button onClick={() => handleStatusChange(p.id, 'CANCELLED')} className={styles.rejectBtn}>✕ Rechazar</button>
+                          <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'ACCEPTED'); }} className={styles.acceptBtn}>✓ Aceptar</button>
+                          <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'CANCELLED'); }} className={styles.rejectBtn}>✕ Rechazar</button>
                         </div>
                       )}
                       {p.status === 'ACCEPTED' && isProposer && (
                         <div className={styles.proposalActions}>
-                          <button onClick={() => handleStatusChange(p.id, 'SHIPPING_PENDING')} className={styles.acceptBtn}>📦 Envío pendiente</button>
+                          <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'SHIPPING_PENDING'); }} className={styles.acceptBtn}>📦 Envío pendiente</button>
                         </div>
                       )}
                       {p.status === 'SHIPPED' && !isProposer && (
                         <div className={styles.proposalActions}>
-                          <button onClick={() => handleStatusChange(p.id, 'RECEIVED')} className={styles.acceptBtn}>✓ Confirmar recepción</button>
+                          <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'RECEIVED'); }} className={styles.acceptBtn}>✓ Confirmar recepción</button>
                         </div>
                       )}
                       {p.status === 'RECEIVED' && (
                         <div className={styles.proposalActions}>
-                          <button onClick={() => handleStatusChange(p.id, 'COMPLETED')} className={styles.acceptBtn}>✓ Completar</button>
+                          <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'COMPLETED'); }} className={styles.acceptBtn}>✓ Completar</button>
                         </div>
                       )}
-                    </div>
+                    </Link>
                   );
                 })}
               </div>
