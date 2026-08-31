@@ -4,7 +4,8 @@ alter table public.users
   add column if not exists address_city text,
   add column if not exists address_zip text,
   add column if not exists address_country text default 'España',
-  add column if not exists address_complete boolean default false;
+  add column if not exists address_complete boolean default false,
+  add column if not exists seller_shipping_methods text[] not null default array['sm1']::text[];
 
 -- Columna bio y avatar_url usadas por la edición de perfil
 alter table public.users

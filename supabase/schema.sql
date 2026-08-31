@@ -32,6 +32,7 @@ create table if not exists public.users (
   address_zip text,
   address_country text default 'España',
   address_complete boolean default false,
+  seller_shipping_methods text[] not null default array['sm1']::text[],
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 

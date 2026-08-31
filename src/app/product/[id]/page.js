@@ -4,16 +4,15 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { products as mockProducts, users, shippingMethods, cardConditions } from "@/data/mockData";
+import { products as mockProducts, users, shippingMethods, mockReviews } from "@/data/mockData";
 
-import { VerifiedBadge, LevelBadge } from "@/components/Badge";
+import { VerifiedBadge } from "@/components/Badge";
 import ProductCard from "@/components/ProductCard";
-import PriceChart from "@/components/PriceChart";
 import MakeOfferModal from "@/components/MakeOfferModal";
 import FoilCard from "@/components/FoilCard";
 import PriceAlertButton from "@/components/PriceAlertButton";
 import { useApp } from "@/context/AppContext";
-import { addRecentlyViewed, getRecentlyViewed } from "@/lib/recentlyViewed";
+import { addRecentlyViewed } from "@/lib/recentlyViewed";
 import { collections } from "@/data/collections";
 import styles from "./page.module.css";
 
@@ -23,12 +22,10 @@ export default function ProductDetailPage() {
   const router = useRouter();
   const [isOfferModalOpen, setIsOfferModalOpen] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const [selectedShipping, setSelectedShipping] = useState(shippingMethods[0]?.id);
   const [addedToCart, setAddedToCart] = useState(false);
   const [relatedProducts, setRelatedProducts] = useState([]);
   const [product, setProduct] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [recentItems, setRecentItems] = useState([]);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [lightboxZoom, setLightboxZoom] = useState(1);
 
@@ -69,7 +66,11 @@ export default function ProductDetailPage() {
   }, [lightboxOpen, isOfferModalOpen]);
 
   const seller = typeof product?.seller === "object" ? product.seller : (product?.seller ? users.find((u) => u.id === product.seller) : null);
-  const conditionInfo = product ? cardConditions[product.condition] : null;
+  const sellerShippingIds = Array.isArray(seller?.seller_shipping_methods) && seller.seller_shipping_methods.length
+    ? seller.seller_shipping_methods
+    : shippingMethods.map((method) => method.id);
+  const sellerShippingMethods = shippingMethods.filter((method) => sellerShippingIds.includes(method.id));
+  const visibleShippingMethods = sellerShippingMethods.length ? sellerShippingMethods : shippingMethods;
 
   const handleMessageSeller = () => {
     if (!session?.id) {
@@ -147,7 +148,6 @@ export default function ProductDetailPage() {
   // Recently viewed
   useEffect(() => {
     if (product) addRecentlyViewed(product);
-    setRecentItems(getRecentlyViewed().filter((p) => p.id !== product?.id).slice(0, 8));
   }, [product]);
 
   // Related products
@@ -183,8 +183,7 @@ export default function ProductDetailPage() {
     );
   }
 
-  const shippingObj = shippingMethods.find((m) => m.id === selectedShipping) || shippingMethods[0];
-  const totalPrice = product.price + shippingObj.price;
+  const detailPrice = product.price;
 
   function getCollectionName(categoryId) {
     for (const col of collections) {
@@ -219,6 +218,15 @@ export default function ProductDetailPage() {
   const otherProducts = mockProducts.filter(
     (p) => p.seller === seller?.id && p.id !== product.id
   );
+  const mockReviewCount = seller
+    ? (mockReviews[seller.id]?.asSeller?.length || 0) + (mockReviews[seller.id]?.asBuyer?.length || 0)
+    : 0;
+  const sellerReviewCount = mockReviewCount || Number(seller?.sellerReviews || 0) + Number(seller?.buyerReviews || 0);
+  const sellerRating = Number(seller?.rating || 0);
+  const sellerMemberSince = seller?.memberSince || (
+    seller?.member_since ? new Date(seller.member_since).getFullYear() : null
+  );
+  const sellerProfileHref = seller?.username ? `/seller/${seller.username}` : "#";
 
   return (
     <div className={`${styles.wrapper} page-enter`}>
@@ -275,7 +283,7 @@ export default function ProductDetailPage() {
                 </svg>
               </div>
               <div className={styles.authText}>
-                <span className={styles.authTitle}>Garantía de Autenticidad Colecciona</span>
+                <span className={styles.authTitle}>Garantía de Autenticidad en Colecciona</span>
                 <span className={styles.authSub}>Protección de reembolso completo si la carta no coincide 100% con la descripción.</span>
               </div>
             </div>
@@ -290,12 +298,12 @@ export default function ProductDetailPage() {
             </div>
 
             <div className={styles.priceBox}>
-              <div className={styles.priceHeader}>
-                <span className={styles.priceTagLbl}>Precio</span>
-              </div>
-
               <div className={styles.priceValRow}>
-                <span className={styles.mainPrice}>{product.price.toFixed(2)} €</span>
+                <span className={styles.priceTagLbl}>Precio</span>
+                <span className={styles.mainPrice}>
+                  {product.price.toFixed(2)}
+                  <span className={styles.currencySymbol}> €</span>
+                </span>
               </div>
 
               <div className={styles.escrowNotice}>
@@ -312,26 +320,60 @@ export default function ProductDetailPage() {
               <p>{product.description || "Sin descripción."}</p>
             </div>
 
+            {seller && (
+              <div className={styles.sellerTrustBox}>
+                <div className={styles.sellerAccent} />
+                <div className={styles.sellerTop}>
+                  <Link href={sellerProfileHref} className={styles.sellerAvatarLink} aria-label={`Ver perfil de ${seller.name}`}>
+                    <div className={styles.sellerAvatarCircle}>
+                      {seller.initials || seller.name.charAt(0)}
+                    </div>
+                  </Link>
+                  <div className={styles.sellerNameCol}>
+                    <span className={styles.sellerOverline}>Vendedor</span>
+                    <div className={styles.sellerNameRow}>
+                      <Link href={sellerProfileHref} className={styles.sellerNameLink}>{seller.name}</Link>
+                      {seller.verified && (
+                        <span className={styles.verifiedSpacer}>
+                          <VerifiedBadge />
+                        </span>
+                      )}
+                    </div>
+                    <span className={styles.sellerLocation}>{seller.location || "Localidad no indicada"}</span>
+                  </div>
+                  <button className={styles.sellerChatBtn} onClick={handleMessageSeller} aria-label="Enviar mensaje al vendedor">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                  </button>
+                </div>
+                <div className={styles.sellerStatsLine}>
+                  <strong>{seller.sales || 0}</strong> ventas
+                  <span>•</span>
+                  <strong>{seller.purchases || 0}</strong> compras
+                  <span>•</span>
+                  <strong>{sellerRating > 0 ? sellerRating.toFixed(2) : "--"}</strong> <strong>★</strong> ({sellerReviewCount})
+                  {sellerMemberSince && (
+                    <>
+                      <span>•</span>
+                      Miembro desde {sellerMemberSince}
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className={styles.shippingBox}>
-              <span className={styles.boxTitle}>Opciones de Envío Directo</span>
+              <span className={styles.boxTitle}>Envíos disponibles del vendedor</span>
               <div className={styles.shippingOptions}>
-                {shippingMethods.map((method) => {
-                  const isSelected = selectedShipping === method.id;
+                {visibleShippingMethods.map((method) => {
                   return (
                     <div
                       key={method.id}
-                      className={`${styles.shippingCard} ${isSelected ? styles.shippingActive : ""}`}
-                      onClick={() => setSelectedShipping(method.id)}
+                      className={styles.shippingCard}
                     >
-                      <div className={styles.shippingRadio}>
-                        <div className={`${styles.radioDot} ${isSelected ? styles.radioActive : ""}`} />
-                      </div>
                       <div className={styles.shippingContent}>
-                        <div className={styles.shippingNameRow}>
-                          <span className={styles.shippingName}>{method.name}</span>
-                          <span className={styles.shippingCost}>{method.price.toFixed(2)} €</span>
-                        </div>
-                        <span className={styles.shippingDays}>Estimación: {method.estimatedDays}</span>
+                        <span className={styles.shippingName}>{method.name}</span>
                       </div>
                     </div>
                   );
@@ -339,45 +381,16 @@ export default function ProductDetailPage() {
               </div>
             </div>
 
-            {seller && (
-              <div className={styles.sellerTrustBox}>
-                <div className={styles.sellerTop}>
-                  <div className={styles.sellerAvatarCircle}>
-                    {seller.initials || seller.name.charAt(0)}
-                  </div>
-                  <div className={styles.sellerNameCol}>
-                    <div className={styles.sellerNameRow}>
-                      <span className={styles.sellerName}>{seller.name}</span>
-                      {seller.verified && <VerifiedBadge />}
-                    </div>
-                    <span className={styles.sellerHandle}>@{seller.username} • {seller.location}</span>
-                  </div>
-                  <LevelBadge level={seller.level} />
-                </div>
-
-                <div className={styles.sellerMetricsGrid}>
-                  <div className={styles.sellerMetric}>
-                    <span className={styles.mVal}>{seller.sales || 0}</span>
-                    <span className={styles.mLbl}>Ventas</span>
-                  </div>
-                  <div className={styles.sellerMetric}>
-                    <span className={styles.mVal}>
-                      {Number(seller.rating) > 0 ? `★ ${seller.rating}` : "—"}
-                    </span>
-                    <span className={styles.mLbl}>{Number(seller.rating) > 0 ? "Valoración" : "Sin valoraciones"}</span>
-                  </div>
-                </div>
-
-                <button className={styles.messageSellerBtn} onClick={handleMessageSeller}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  </svg>
-                  Mensaje al vendedor
-                </button>
-              </div>
-            )}
-
             <div className={styles.desktopActions}>
+              <button
+                className={styles.buyNowBtn}
+                onClick={() => {
+                  addToCart(product);
+                  router.push("/checkout");
+                }}
+              >
+                Comprar
+              </button>
               <button 
                 className={`${styles.cartBtn} ${addedToCart ? styles.cartActive : ""}`}
                 onClick={() => {
@@ -385,7 +398,7 @@ export default function ProductDetailPage() {
                   setAddedToCart(true);
                 }}
               >
-                {addedToCart ? "✓ Añadido a Cesta" : `Añadir a Cesta • ${totalPrice.toFixed(2)} €`}
+                {addedToCart ? "✓ Añadido a Cesta" : "Añadir a Cesta"}
               </button>
               <button 
                 className={styles.offerBtn}
@@ -413,34 +426,28 @@ export default function ProductDetailPage() {
           </div>
         </div>
         
-        {recentItems.length > 0 && (
-          <section className={styles.moreSection} style={{ marginTop: '3rem' }}>
-            <h2 className={styles.moreTitle}>Vistos recientemente</h2>
-            <div className={styles.recentRow}>
-              {recentItems.map((item) => (
-                <Link key={item.id} href={`/product/${item.id}`} className={styles.recentCard}>
-                  <div className={styles.recentThumb}>
-                    <Image src={item.image} alt={item.title} fill sizes="120px" style={{ objectFit: 'cover' }} />
-                  </div>
-                  <span className={styles.recentName}>{item.title}</span>
-                  <span className={styles.recentPrice}>{Number(item.price || 0).toFixed(2)} €</span>
-                </Link>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <div style={{ marginTop: '3rem' }}>
-          <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Historial de Precio</h2>
-          <PriceChart currentPrice={product.price} />
-        </div>
-
         {otherProducts.length > 0 && (
-          <section className={styles.moreSection}>
-            <h2 className={styles.moreTitle}>Más cartas de este vendedor</h2>
-            <div className={styles.moreGrid}>
-              {otherProducts.map((item) => (
-                <ProductCard key={item.id} product={item} />
+          <section className={styles.sellerShelf}>
+            <div className={styles.sellerShelfHeader}>
+              <div>
+                <span className={styles.shelfEyebrow}>Del mismo vendedor</span>
+                <h2 className={styles.shelfTitle}>Más cartas de {seller?.name}</h2>
+              </div>
+              {seller?.username && (
+                <Link href={`/seller/${seller.username}`} className={styles.shelfLink}>
+                  Ver perfil
+                </Link>
+              )}
+            </div>
+            <div className={styles.sellerShelfTrack}>
+              {otherProducts.slice(0, 6).map((item) => (
+                <Link key={item.id} href={`/product/${item.id}`} className={styles.sellerShelfItem}>
+                  <div className={styles.sellerShelfThumb}>
+                    <Image src={item.image} alt={item.title} fill sizes="140px" style={{ objectFit: "cover" }} />
+                  </div>
+                  <span className={styles.sellerShelfName}>{item.title}</span>
+                  <span className={styles.sellerShelfPrice}>{Number(item.price || 0).toFixed(2)} €</span>
+                </Link>
               ))}
             </div>
           </section>
@@ -460,14 +467,17 @@ export default function ProductDetailPage() {
 
       <div className={styles.mobileBar}>
         <div className={styles.mobilePriceGroup}>
-          <span className={styles.mobileTotalLbl}>Total con Envío ({shippingObj.name.split(" ")[0]})</span>
-          <span className={styles.mobileTotalVal}>{totalPrice.toFixed(2)} €</span>
+          <span className={styles.mobileTotalLbl}>Precio del cromo</span>
+          <span className={styles.mobileTotalVal}>{detailPrice.toFixed(2)} €</span>
         </div>
         <button 
           className={styles.mobileBuyBtn}
-          onClick={() => addToCart(product)}
+          onClick={() => {
+            addToCart(product);
+            router.push("/checkout");
+          }}
         >
-          Añadir
+          Comprar
         </button>
       </div>
 

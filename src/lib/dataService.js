@@ -112,6 +112,7 @@ export async function registerUser(user) {
     memberSince: new Date().getFullYear(),
     location: "España",
     responseTime: "< 1 hora",
+    seller_shipping_methods: ["sm1"],
     registeredAt: new Date().toISOString(),
   };
   db.users.push(record);

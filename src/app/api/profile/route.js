@@ -46,6 +46,13 @@ export async function PATCH(req) {
   if (body.bio !== undefined) updates.bio = body.bio;
   if (body.location !== undefined) updates.location = body.location;
   if (body.avatar_url !== undefined) updates.avatar = body.avatar_url;
+  if (body.seller_shipping_methods !== undefined) {
+    const allowed = new Set(["sm1", "sm2", "sm3"]);
+    const selected = Array.isArray(body.seller_shipping_methods)
+      ? body.seller_shipping_methods.filter((id) => allowed.has(id))
+      : [];
+    updates.seller_shipping_methods = selected.length ? selected : ["sm1"];
+  }
 
   // Dirección (obligatoria para vender)
   const addressFields = ["address_street", "address_city", "address_zip", "address_country"];

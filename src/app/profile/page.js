@@ -10,6 +10,7 @@ import Magnetic from "@/components/Magnetic";
 import CountryGlobe from "@/components/CountryGlobe";
 import { getProfile, updateProfile } from "@/lib/dataService";
 import { COUNTRIES, findCountry } from "@/data/countries";
+import { shippingMethods } from "@/data/mockData";
 import { useApp } from "@/context/AppContext";
 import styles from "./page.module.css";
 
@@ -31,6 +32,7 @@ export default function ProfilePage() {
     address_city: "",
     address_zip: "",
     address_country: "España",
+    seller_shipping_methods: ["sm1"],
   });
 
   const [profile, setProfile] = useState(null);
@@ -51,6 +53,7 @@ export default function ProfilePage() {
     location: session?.location || "",
     bio: "",
     address_complete: false,
+    seller_shipping_methods: ["sm1"],
   };
   const memberSince = rawUser.member_since || rawUser.memberSince;
   const memberSinceText = memberSince
@@ -118,9 +121,24 @@ export default function ProfilePage() {
         address_city: profile.address_city || "",
         address_zip: profile.address_zip || "",
         address_country: profile.address_country || "España",
+        seller_shipping_methods: Array.isArray(profile.seller_shipping_methods) && profile.seller_shipping_methods.length
+          ? profile.seller_shipping_methods
+          : ["sm1"],
       });
     }
   }, [profile]);
+
+  const toggleShippingMethod = (methodId) => {
+    setForm((current) => {
+      const selected = new Set(current.seller_shipping_methods || []);
+      if (selected.has(methodId)) selected.delete(methodId);
+      else selected.add(methodId);
+      return {
+        ...current,
+        seller_shipping_methods: selected.size ? Array.from(selected) : [methodId],
+      };
+    });
+  };
 
   const handleWithdrawConfirm = () => {
     setWithdrawDone(true);
@@ -212,46 +230,67 @@ export default function ProfilePage() {
                         onChange={(e) => setForm({ ...form, address_city: e.target.value })}
                         placeholder="Ciudad"
                       />
-<input
-                      className={styles.input}
-                      value={form.address_zip}
-                      onChange={(e) => setForm({ ...form, address_zip: e.target.value })}
-                      placeholder="C.P."
-                    />
+                      <input
+                        className={styles.input}
+                        value={form.address_zip}
+                        onChange={(e) => setForm({ ...form, address_zip: e.target.value })}
+                        placeholder="C.P."
+                      />
+                    </div>
                   </div>
-                </div>
-                <div className={styles.countrySection}>
-                  <div className={styles.countryGlobe}>
-                    <CountryGlobe
-                      lat={selectedCountry.lat}
-                      lon={selectedCountry.lon}
-                      label={selectedCountry.name}
-                      code={selectedCountry.code}
-                      size={220}
-                    />
+                  <div className={styles.sellerShippingSection}>
+                    <span className={styles.addressTitle}>Opciones de envío como vendedor</span>
+                    <div className={styles.sellerShippingGrid}>
+                      {shippingMethods.map((method) => {
+                        const checked = (form.seller_shipping_methods || []).includes(method.id);
+                        return (
+                          <label
+                            key={method.id}
+                            className={`${styles.sellerShippingOption} ${checked ? styles.sellerShippingChecked : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleShippingMethod(method.id)}
+                            />
+                            <span>{method.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className={styles.countryFields}>
-                    <label className={styles.fieldLabel} htmlFor="country-select">País donde vives</label>
-                    <select
-                      id="country-select"
-                      className={styles.input}
-                      value={form.address_country}
-                      onChange={(e) => setForm({ ...form, address_country: e.target.value })}
-                    >
-                      {!COUNTRIES.some((c) => c.name === form.address_country) &&
-                        form.address_country && (
-                          <option value={form.address_country}>{form.address_country}</option>
-                        )}
-                      {COUNTRIES.map((c) => (
-                        <option key={c.code} value={c.name}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    <p className={styles.countryHint}>Se marca en el globo con un punto esmeralda.</p>
+                  <div className={styles.countrySection}>
+                    <div className={styles.countryGlobe}>
+                      <CountryGlobe
+                        lat={selectedCountry.lat}
+                        lon={selectedCountry.lon}
+                        label={selectedCountry.name}
+                        code={selectedCountry.code}
+                        size={220}
+                      />
+                    </div>
+                    <div className={styles.countryFields}>
+                      <label className={styles.fieldLabel} htmlFor="country-select">País donde vives</label>
+                      <select
+                        id="country-select"
+                        className={styles.input}
+                        value={form.address_country}
+                        onChange={(e) => setForm({ ...form, address_country: e.target.value })}
+                      >
+                        {!COUNTRIES.some((c) => c.name === form.address_country) &&
+                          form.address_country && (
+                            <option value={form.address_country}>{form.address_country}</option>
+                          )}
+                        {COUNTRIES.map((c) => (
+                          <option key={c.code} value={c.name}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                      <p className={styles.countryHint}>Se marca en el globo con un punto esmeralda.</p>
+                    </div>
                   </div>
-                </div>
-              <div className={styles.editActions}>
+                  <div className={styles.editActions}>
                     <button className={styles.cancelBtnSmall} onClick={() => setEditing(false)}>Cancelar</button>
                     <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>{saving ? "Guardando..." : "Guardar"}</button>
                   </div>

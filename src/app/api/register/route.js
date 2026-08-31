@@ -64,7 +64,7 @@ export async function POST(req) {
       // Ajustamos la fila creada por el trigger (lleva email como nombre por defecto)
       const { error: updateError } = await supabase
         .from("users")
-        .update({ name, username, phone, member_since: new Date().toISOString() })
+        .update({ name, username, phone, member_since: new Date().toISOString(), seller_shipping_methods: ["sm1"] })
         .eq("id", userId);
       if (updateError) console.error("[API /register] update fila:", updateError.message);
     } else {

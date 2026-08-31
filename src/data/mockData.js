@@ -53,11 +53,12 @@ export const users = [
     articles: 328,
     buyerReviews: 15,
     sellerReviews: 285,
-    rating: 4.98, 
+    rating: 4.73, 
     memberSince: '2021', 
     location: 'Madrid, ES',
     responseTime: '< 15 min',
-    lastSeen: '2026-08-26T10:30:00Z'
+    lastSeen: '2026-08-26T10:30:00Z',
+    seller_shipping_methods: ['sm1', 'sm2', 'sm3']
   },
   { 
     id: 'u2', 
@@ -81,7 +82,8 @@ export const users = [
     memberSince: '2022', 
     location: 'Barcelona, ES',
     responseTime: '< 1 hora',
-    lastSeen: '2026-08-26T08:15:00Z'
+    lastSeen: '2026-08-26T08:15:00Z',
+    seller_shipping_methods: ['sm1', 'sm2']
   },
   { 
     id: 'u3', 
@@ -105,7 +107,8 @@ export const users = [
     memberSince: '2023', 
     location: 'Valencia, ES',
     responseTime: '< 3 horas',
-    lastSeen: '2026-08-25T22:45:00Z'
+    lastSeen: '2026-08-25T22:45:00Z',
+    seller_shipping_methods: ['sm2']
   },
   { 
     id: 'u4', 
@@ -129,7 +132,8 @@ export const users = [
     memberSince: '2024', 
     location: 'Sevilla, ES',
     responseTime: '< 6 horas',
-    lastSeen: '2026-08-26T12:00:00Z'
+    lastSeen: '2026-08-26T12:00:00Z',
+    seller_shipping_methods: ['sm1']
   },
   { 
     id: 'u5', 
@@ -153,7 +157,8 @@ export const users = [
     memberSince: '2021', 
     location: 'Bilbao, ES',
     responseTime: '< 30 min',
-    lastSeen: '2026-08-26T11:20:00Z'
+    lastSeen: '2026-08-26T11:20:00Z',
+    seller_shipping_methods: ['sm1', 'sm3']
   },
   { 
     id: 'u6', 
@@ -177,7 +182,8 @@ export const users = [
     memberSince: '2020', 
     location: 'Zaragoza, ES',
     responseTime: '< 10 min',
-    lastSeen: '2026-08-26T09:00:00Z'
+    lastSeen: '2026-08-26T09:00:00Z',
+    seller_shipping_methods: ['sm2', 'sm3']
   }
 ];
 
@@ -485,9 +491,13 @@ export const recentSalesTicker = [
 ];
 
 export const shippingMethods = [
+  { id: 'sm0', name: 'Carta Ordinaria Correos', price: 0.85, estimatedDays: '3-5 días', description: 'Sobre normal sin seguimiento. Para cartas de bajo riesgo.' },
   { id: 'sm1', name: 'Carta Certificada Correos', price: 1.65, estimatedDays: '24-48h', description: 'Sobre acolchado blindado con número de seguimiento oficial.', recommended: true },
   { id: 'sm2', name: 'Locker InPost / Punto Pack', price: 1.80, estimatedDays: '48h', description: 'Recogida sin esperas con código QR en taquilla de tu zona.' },
-  { id: 'sm3', name: 'Mensajería Urgente SEUR 24h', price: 3.50, estimatedDays: '24h', description: 'Entrega prioritaria a domicilio con seguro hasta 500€.' }
+  { id: 'sm4', name: 'Bulto Económico Correos', price: 2.95, estimatedDays: '3-5 días', description: 'Paquete pequeño con seguimiento. Ideal para varios cromos.' },
+  { id: 'sm3', name: 'Mensajería Urgente SEUR 24h', price: 3.50, estimatedDays: '24h', description: 'Entrega prioritaria a domicilio con seguro hasta 500€.' },
+  { id: 'sm5', name: 'Envío gratuito del vendedor', price: 0, estimatedDays: 'A pactar', description: 'El vendedor asume los gastos de envío.' },
+  { id: 'sm6', name: 'Retiro en mano', price: 0, estimatedDays: 'Inmediato', description: 'Acordar punto de encuentro en la misma ciudad.' },
 ];
 
 export const transactions = [
