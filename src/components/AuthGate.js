@@ -4,51 +4,64 @@ import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Navbar from "./Navbar";
 import BottomNav from "./BottomNav";
+import { supabase } from "@/lib/supabase";
 
 export default function AuthGate({ children }) {
   const pathname = usePathname();
   const router = useRouter();
   const [status, setStatus] = useState("checking"); // checking | allowed | denied
 
-  // MODO PRUEBAS: con `true`, cada vez que se cargue la app ignora la sesión guardada
-  // y arranca como usuario NUEVO, así llevará al login para probar el onboarding.
-  // Tras iniciar sesión funciona normal (entra al menú). Pónlo en `false`
-  // para el flujo real (con sesión guardada → menú principal).
   const TEST_START_AS_NEW_USER = false;
   const ignoreStoredRef = useRef(TEST_START_AS_NEW_USER);
 
   useEffect(() => {
-    if (ignoreStoredRef.current) {
-      // MODO PRUEBAS: cada carga arranca como usuario nuevo, sin sesión previa
-      try {
-        localStorage.removeItem("colecciona_session");
-      } catch {}
-      ignoreStoredRef.current = false;
-    }
+    let mounted = true;
 
-    let session = null;
-    try {
-      const raw = localStorage.getItem("colecciona_session");
-      if (raw) session = JSON.parse(raw);
-    } catch {}
-
-    const isAuthPage = pathname === "/auth";
-    const isPublic = isAuthPage || pathname === "/terminos" || pathname === "/privacidad";
-
-    if (session && session.email && session.verified) {
-      setStatus("allowed");
-      if (isAuthPage) {
-        router.replace("/");
+    const checkAuth = async () => {
+      if (ignoreStoredRef.current) {
+        try {
+          localStorage.removeItem("colecciona_session");
+          if (supabase) await supabase.auth.signOut();
+        } catch {}
+        ignoreStoredRef.current = false;
       }
-    } else {
-      setStatus("denied");
-      if (!isPublic) {
-        router.replace("/auth");
+
+      let session = null;
+
+      // Try Supabase Auth first
+      if (supabase) {
+        try {
+          const { data } = await supabase.auth.getSession();
+          session = data?.session;
+        } catch {}
       }
-    }
+
+      // Fallback to localStorage (demo mode)
+      if (!session) {
+        try {
+          const raw = localStorage.getItem("colecciona_session");
+          if (raw) session = JSON.parse(raw);
+        } catch {}
+      }
+
+      if (!mounted) return;
+
+      const isAuthPage = pathname === "/auth";
+      const isPublic = isAuthPage || pathname === "/terminos" || pathname === "/privacidad";
+
+      if (session && (session.user || session.email)) {
+        setStatus("allowed");
+        if (isAuthPage) router.replace("/");
+      } else {
+        setStatus("denied");
+        if (!isPublic) router.replace("/auth");
+      }
+    };
+
+    checkAuth();
+    return () => { mounted = false; };
   }, [pathname, router]);
 
-  // Evitar parpadeo mientras se comprueba la sesión
   if (status === "checking") {
     return (
       <div style={{ minHeight: "60vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -59,14 +72,9 @@ export default function AuthGate({ children }) {
 
   const isAuthPage = pathname === "/auth";
   const isPublic = isAuthPage || pathname === "/terminos" || pathname === "/privacidad";
-  if (status === "denied" && !isPublic) {
-    return null;
-  }
+  if (status === "denied" && !isPublic) return null;
 
-  // Páginas públicas (auth, términos, privacidad): solo el contenido, sin navbar
-  if (isPublic) {
-    return <>{children}</>;
-  }
+  if (isPublic) return <>{children}</>;
 
   return (
     <>

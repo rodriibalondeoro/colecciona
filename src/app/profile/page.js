@@ -165,10 +165,12 @@ export default function ProfilePage() {
     setEditing(false);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setLogoutModal(false);
     try {
       localStorage.removeItem("colecciona_session");
+      const { supabase } = await import("@/lib/supabase");
+      if (supabase) await supabase.auth.signOut();
     } catch {}
     setSession(null);
     window.location.href = "/auth";

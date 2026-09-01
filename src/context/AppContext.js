@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import { products, users } from "@/data/mockData";
 import { persistMessage, getFavorites, toggleFavoriteAPI, notifyUser, getOffers, createOffer, updateOffer, sendPush } from "@/lib/dataService";
-import { subscribeToMessages, subscribeToNotifications } from "@/lib/supabase";
+import { subscribeToMessages, subscribeToNotifications, supabase } from "@/lib/supabase";
 import { ORDER_STATES } from "@/lib/orderStates";
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -15,39 +15,49 @@ const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
   // ── Session ──
+  // Supabase Auth is the source of truth. localStorage is fallback for demo only.
   const [session, setSession] = useState(null);
+  const prevSessionIdRef = useRef(null);
 
-  // ── Cart ──
-  const [cart, setCart] = useState(() => {
-    try {
-      const stored = localStorage.getItem("colecciona_cart");
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  }); // [{product, qty, shippingMethod}]
-
-  // Migrate cart to per-user storage
-  const migrateCartRef = useRef(false);
+  // Initialize session from Supabase Auth on mount
   useEffect(() => {
-    if (!session?.id || migrateCartRef.current) return;
-    migrateCartRef.current = true;
+    if (!supabase) {
+      // Demo mode: fall back to localStorage
+      try {
+        const stored = localStorage.getItem("colecciona_session");
+        if (stored) setSession(JSON.parse(stored));
+      } catch {}
+      return;
+    }
+
+    // Get current session from Supabase
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+    });
+
+    // Listen for auth changes (login, logout, token refresh, other tabs)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // ── Cart ── (per-user, loaded lazily after session is known)
+  const [cart, setCart] = useState([]);
+
+  // Load cart for current user when session changes
+  const cartLoadedRef = useRef(null);
+  useEffect(() => {
+    const userId = session?.id || session?.user?.id || "guest";
+    if (cartLoadedRef.current === userId) return;
+    cartLoadedRef.current = userId;
     try {
-      const globalKey = "colecciona_cart";
-      const userKey = `colecciona_cart_${session.id}`;
-      const userStored = localStorage.getItem(userKey);
-      const globalStored = localStorage.getItem(globalKey);
-      if (userStored) {
-        setCart(JSON.parse(userStored));
-      } else if (globalStored) {
-        const globalCart = JSON.parse(globalStored);
-        if (globalCart.length > 0) {
-          localStorage.setItem(userKey, globalStored);
-          setCart(globalCart);
-        }
-        localStorage.removeItem(globalKey);
-      }
-    } catch {}
+      const stored = localStorage.getItem(`colecciona_cart_${userId}`);
+      setCart(stored ? JSON.parse(stored) : []);
+    } catch {
+      setCart([]);
+    }
   }, [session]);
 
   // ── Favorites / Wishlist ──
@@ -102,14 +112,21 @@ export function AppProvider({ children }) {
   const [toasts, setToasts] = useState([]);
 
   // ─────────────────────────────────────────────────────────────
-  // Load session on mount
+  // Clear all private state on logout / user change
   // ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("colecciona_session");
-      if (stored) setSession(JSON.parse(stored));
-    } catch {}
-  }, []);
+    const currentId = session?.id || session?.user?.id || null;
+
+    // Detect user change (logout or different user login)
+    if (prevSessionIdRef.current && prevSessionIdRef.current !== currentId) {
+      setThreads([]);
+      setNotifications([]);
+      setOffers([]);
+      setOrders([]);
+      setSales([]);
+    }
+    prevSessionIdRef.current = currentId;
+  }, [session]);
 
   // ─────────────────────────────────────────────────────────────
   // Fetch notifications from API & subscribe to realtime
@@ -398,11 +415,10 @@ export function AppProvider({ children }) {
 
   // ─────────────────────────────────────────────────────────────
   // Persist cart in localStorage (per-user)
-  // ─────────────────────────────────────────────────────────────
   useEffect(() => {
     try {
-      const key = session?.id ? `colecciona_cart_${session.id}` : "colecciona_cart";
-      localStorage.setItem(key, JSON.stringify(cart));
+      const userId = session?.id || session?.user?.id || "guest";
+      localStorage.setItem(`colecciona_cart_${userId}`, JSON.stringify(cart));
     } catch {}
   }, [cart, session]);
 
