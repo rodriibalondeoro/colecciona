@@ -137,27 +137,23 @@ export function AppProvider({ children }) {
     // Fetch existing notifications
     const fetchNotifications = async () => {
       try {
-        const token = session?.access_token || session?.accessToken;
+        const token = session?.access_token;
         if (!token) return;
         const res = await fetch("/api/notifications", {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = await res.json();
         if (data.notifications?.length) {
-          setNotifications((prev) => {
-            const mockIds = new Set(prev.filter((n) => n.id.startsWith("n")).map((n) => n.id));
-            const serverNotifs = data.notifications.map((n) => ({
-              id: n.id,
-              type: n.type,
-              read: n.read,
-              title: n.title,
-              body: n.body,
-              icon: n.type === "favorite" ? "heart" : n.type === "message" ? "chart" : n.type === "offer" ? "offer" : "package",
-              time: n.created_at,
-              link: n.link || "#",
-            }));
-            return [...serverNotifs, ...prev.filter((n) => !mockIds.has(n.id))];
-          });
+          setNotifications(data.notifications.map((n) => ({
+            id: n.id,
+            type: n.type,
+            read: n.read,
+            title: n.title,
+            body: n.body,
+            icon: n.type === "favorite" ? "heart" : n.type === "message" ? "chart" : n.type === "offer" ? "offer" : "package",
+            time: n.created_at,
+            link: n.link || "#",
+          })));
         }
       } catch {}
     };
@@ -379,7 +375,7 @@ export function AppProvider({ children }) {
 
   const markAllRead = useCallback(() => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-    const token = session?.access_token || session?.accessToken;
+    const token = session?.access_token;
     if (!token) return;
     fetch("/api/notifications", {
       method: "PATCH",
@@ -390,7 +386,7 @@ export function AppProvider({ children }) {
 
   const markRead = useCallback((id) => {
     setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read: true } : n));
-    const token = session?.access_token || session?.accessToken;
+    const token = session?.access_token;
     if (!token) return;
     fetch("/api/notifications", {
       method: "PATCH",
