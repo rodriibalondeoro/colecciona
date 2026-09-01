@@ -206,6 +206,11 @@ BEGIN
   SELECT count(DISTINCT id) INTO expected_count FROM unnest(p_product_ids) AS ids(id);
   IF expected_count = 0 THEN RAISE EXCEPTION 'No products provided'; END IF;
 
+  -- Auto-release expired reservations before attempting new ones
+  UPDATE products
+  SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
+  WHERE status = 'RESERVED' AND reserved_until < now();
+
   CREATE TEMPORARY TABLE reserved_rows ON COMMIT DROP AS
   WITH requested AS (
     SELECT DISTINCT id FROM unnest(p_product_ids) AS ids(id)
@@ -225,6 +230,23 @@ BEGIN
   END IF;
 
   RETURN QUERY SELECT * FROM reserved_rows;
+END;
+$$;
+
+-- Release expired reservations (call via cron or scheduled function)
+CREATE OR REPLACE FUNCTION cleanup_expired_reservations()
+RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  released_count INTEGER;
+BEGIN
+  UPDATE products
+  SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
+  WHERE status = 'RESERVED' AND reserved_until < now();
+
+  GET DIAGNOSTICS released_count = ROW_COUNT;
+  RETURN released_count;
 END;
 $$;
 
@@ -258,7 +280,7 @@ BEGIN
 
   -- Validate all products exist, are RESERVED by this buyer, same seller
   FOR v_product IN
-    SELECT p.id, p.price, p.seller, p.reserved_by, p.status
+    SELECT p.id, p.price, p.seller, p.reserved_by, p.reserved_until, p.status
     FROM products p
     JOIN unnest(p_product_ids) AS ids(id) ON p.id = ids.id
   LOOP
@@ -267,6 +289,10 @@ BEGIN
     END IF;
     IF v_product.status <> 'RESERVED' THEN
       RAISE EXCEPTION 'Product % is not in RESERVED status', v_product.id;
+    END IF;
+    -- Check reservation hasn't expired
+    IF v_product.reserved_until IS NULL OR v_product.reserved_until <= now() THEN
+      RAISE EXCEPTION 'Product % reservation has expired', v_product.id;
     END IF;
     IF v_product.seller = auth.uid() THEN
       RAISE EXCEPTION 'Cannot buy your own product %', v_product.id;
