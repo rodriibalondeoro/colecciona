@@ -796,8 +796,8 @@ export function AppProvider({ children }) {
       const productIds = cart.map((item) => item.product.id).filter(Boolean);
       if (productIds.length === 0) throw new Error("Carrito vacío");
 
-      // 1. Create order + reserve products via API
-      const orderRes = await fetch("/api/orders", {
+      // Single endpoint: reserve → order → Stripe
+      const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -806,25 +806,12 @@ export function AppProvider({ children }) {
           shippingAddress: address,
         }),
       });
-      const orderData = await orderRes.json();
-      if (!orderRes.ok) throw new Error(orderData.error);
-
-      // 2. Create Stripe PaymentIntent
-      const stripeRes = await fetch("/api/stripe/create-payment-intent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          productIds,
-          shippingMethod: cart[0]?.shippingMethod?.id || "standard",
-          shippingAddress: address,
-        }),
-      });
-      const stripeData = await stripeRes.json();
-      if (!stripeRes.ok) throw new Error(stripeData.error);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
 
       clearCart();
       showToast("¡Pedido realizado! Procesando pago...", "success");
-      return { orderId: orderData.order?.order_id || stripeData.orderId, clientSecret: stripeData.clientSecret };
+      return { orderId: data.orderId, clientSecret: data.clientSecret };
     } catch (err) {
       showToast(err.message || "Error al procesar el pedido", "error");
       return null;
