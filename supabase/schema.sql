@@ -195,6 +195,81 @@ CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_seller ON orders(seller_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 
+-- Order state machine: validate transitions + block immutable fields
+CREATE OR REPLACE FUNCTION validate_order_transition()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE allowed BOOLEAN := false;
+BEGIN
+  -- Block changes to immutable fields
+  IF OLD.product_id IS DISTINCT FROM NEW.product_id THEN RAISE EXCEPTION 'Cannot change product_id'; END IF;
+  IF OLD.seller_id IS DISTINCT FROM NEW.seller_id THEN RAISE EXCEPTION 'Cannot change seller_id'; END IF;
+  IF OLD.buyer_id IS DISTINCT FROM NEW.buyer_id THEN RAISE EXCEPTION 'Cannot change buyer_id'; END IF;
+  IF OLD.price IS DISTINCT FROM NEW.price THEN RAISE EXCEPTION 'Cannot change price'; END IF;
+  IF OLD.commission IS DISTINCT FROM NEW.commission THEN RAISE EXCEPTION 'Cannot change commission'; END IF;
+  IF OLD.total IS DISTINCT FROM NEW.total THEN RAISE EXCEPTION 'Cannot change total'; END IF;
+
+  IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    allowed := CASE
+      -- Payment flow (system/Stripe webhook)
+      WHEN OLD.status = 'PENDING' AND NEW.status = 'PAYMENT_PROCESSING' THEN true
+      WHEN OLD.status = 'PAYMENT_PROCESSING' AND NEW.status = 'PAID' THEN true
+
+      -- Seller prepares
+      WHEN OLD.status = 'PAID' AND NEW.status = 'PREPARING'
+        AND auth.uid() = OLD.seller_id THEN true
+
+      -- Seller ships
+      WHEN OLD.status = 'PREPARING' AND NEW.status = 'SHIPPED'
+        AND auth.uid() = OLD.seller_id THEN true
+
+      -- Buyer confirms delivery
+      WHEN OLD.status = 'SHIPPED' AND NEW.status = 'DELIVERED'
+        AND auth.uid() = OLD.buyer_id THEN true
+
+      -- Either party completes
+      WHEN OLD.status = 'DELIVERED' AND NEW.status = 'COMPLETED'
+        AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
+
+      -- Cancellation (before shipped)
+      WHEN OLD.status IN ('PENDING','PAYMENT_PROCESSING','PAID','PREPARING')
+        AND NEW.status = 'CANCELLED'
+        AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
+
+      -- Refund (after payment, before completion)
+      WHEN OLD.status IN ('PAID','PREPARING','SHIPPED','DELIVERED')
+        AND NEW.status = 'REFUNDED'
+        AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
+
+      -- Dispute (any time before completed/cancelled)
+      WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','REFUNDED','DISPUTED')
+        AND NEW.status = 'DISPUTED'
+        AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
+
+      ELSE false
+    END;
+
+    IF NOT allowed THEN
+      RAISE EXCEPTION 'Invalid order transition: % -> %', OLD.status, NEW.status;
+    END IF;
+
+    -- Set timestamps
+    IF NEW.status = 'PAID' AND OLD.status IS DISTINCT FROM 'PAID' THEN NEW.confirmed_at := now();
+    ELSIF NEW.status = 'SHIPPED' AND OLD.status IS DISTINCT FROM 'SHIPPED' THEN NEW.shipped_at := now();
+    ELSIF NEW.status = 'DELIVERED' AND OLD.status IS DISTINCT FROM 'DELIVERED' THEN NEW.delivered_at := now();
+    ELSIF NEW.status = 'COMPLETED' AND OLD.status IS DISTINCT FROM 'COMPLETED' THEN NEW.completed_at := now();
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validate_order_transition ON orders;
+CREATE TRIGGER trg_validate_order_transition
+  BEFORE UPDATE ON orders
+  FOR EACH ROW EXECUTE FUNCTION validate_order_transition();
+
 -- ============================================================================
 -- 6. COLLECTIONS — user card collections
 -- ============================================================================
@@ -572,8 +647,7 @@ CREATE POLICY "offers_update_recipient" ON offers FOR UPDATE USING (auth.uid() =
 ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "reviews_select_public" ON reviews;
 CREATE POLICY "reviews_select_public" ON reviews FOR SELECT USING (true);
-DROP POLICY IF EXISTS "reviews_insert_validated" ON reviews;
-CREATE POLICY "reviews_insert_validated" ON reviews FOR INSERT WITH CHECK (auth.uid() = reviewer_id);
+-- No INSERT policy: reviews must go through create_review() RPC
 
 ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "follows_select_public" ON follows;
