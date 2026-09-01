@@ -1,11 +1,8 @@
 -- ============================================================================
--- COLECCIONA — Production Database Schema (Consolidated)
--- ============================================================================
--- This is the single source of truth for the database.
--- Run this on a fresh Supabase project. For existing projects, use migrations.
+-- COLECCIONA — Definitive Production Schema
+-- Single source of truth. Run on clean Supabase with 000_clean_slate.sql first.
 -- ============================================================================
 
--- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================================================
@@ -16,13 +13,11 @@ DO $$ BEGIN
   CREATE TYPE collection_item_status AS ENUM (
     'OWNED', 'MISSING', 'DUPLICATE', 'FOR_TRADE', 'FOR_SALE'
   );
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE collection_visibility AS ENUM ('private', 'public', 'followers');
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
   CREATE TYPE trade_status AS ENUM (
@@ -30,11 +25,10 @@ DO $$ BEGIN
     'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED',
     'COMPLETED', 'CANCELLED', 'DISPUTED'
   );
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- ============================================================================
--- 1. PROFILES — public user profile (safe to expose)
+-- 1. PROFILES — public user profile
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -52,11 +46,10 @@ CREATE TABLE IF NOT EXISTS profiles (
   member_since TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_profiles_username ON profiles(username);
 
 -- ============================================================================
--- 2. USER_PRIVATE — private user data (only owner can read)
+-- 2. USER_PRIVATE — private user data (owner only)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS user_private (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -72,7 +65,7 @@ CREATE TABLE IF NOT EXISTS user_private (
 );
 
 -- ============================================================================
--- 3. WALLET — user balance (only owner can read)
+-- 3. WALLET — user balance (read-only for users)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS wallet (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -83,7 +76,24 @@ CREATE TABLE IF NOT EXISTS wallet (
 );
 
 -- ============================================================================
--- 4. PRODUCTS — marketplace listings
+-- 4. WALLET_TRANSACTIONS — audit trail
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('SALE','COMMISSION','REFUND','WITHDRAWAL','DEPOSIT','ADJUSTMENT')),
+  amount NUMERIC(10,2) NOT NULL,
+  balance_before NUMERIC(10,2) NOT NULL,
+  balance_after NUMERIC(10,2) NOT NULL,
+  reference_id UUID,
+  reference_type TEXT,
+  description TEXT,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user ON wallet_transactions(user_id, created_at DESC);
+
+-- ============================================================================
+-- 5. PRODUCTS — marketplace listings
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS products (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -93,7 +103,7 @@ CREATE TABLE IF NOT EXISTS products (
   price_change TEXT,
   image TEXT NOT NULL,
   category TEXT NOT NULL,
-  condition TEXT NOT NULL CHECK (condition IN ('PSA10', 'NM', 'LP', 'MP', 'HP', 'DMG')),
+  condition TEXT NOT NULL CHECK (condition IN ('PSA10','NM','LP','MP','HP','DMG')),
   seller UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   code TEXT,
   rarity TEXT,
@@ -101,7 +111,7 @@ CREATE TABLE IF NOT EXISTS products (
   set_name TEXT NOT NULL,
   language TEXT NOT NULL,
   year INTEGER NOT NULL CHECK (year >= 1900 AND year <= 2100),
-  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('DRAFT', 'ACTIVE', 'RESERVED', 'SOLD', 'INACTIVE', 'REMOVED')),
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('DRAFT','ACTIVE','RESERVED','SOLD','INACTIVE','REMOVED')),
   reserved_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
   reserved_until TIMESTAMPTZ,
   sold_at TIMESTAMPTZ,
@@ -111,40 +121,28 @@ CREATE TABLE IF NOT EXISTS products (
   psa_cert TEXT,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_products_seller ON products(seller);
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
 
--- Atomic reservation function
+-- Atomic reservation (auth.uid() = buyer check)
 CREATE OR REPLACE FUNCTION reserve_products_for_checkout(
   p_product_ids UUID[],
   p_buyer_id UUID,
   p_reserved_until TIMESTAMPTZ DEFAULT now() + interval '15 minutes'
 )
 RETURNS SETOF products
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
   expected_count INTEGER;
   updated_count INTEGER;
 BEGIN
-  IF auth.uid() IS NULL THEN
-    RAISE EXCEPTION 'Authentication required';
-  END IF;
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF auth.uid() <> p_buyer_id THEN RAISE EXCEPTION 'Cannot reserve products for another user'; END IF;
 
-  IF auth.uid() <> p_buyer_id THEN
-    RAISE EXCEPTION 'Cannot reserve products for another user';
-  END IF;
-
-  SELECT count(DISTINCT id) INTO expected_count
-  FROM unnest(p_product_ids) AS ids(id);
-
-  IF expected_count = 0 THEN
-    RAISE EXCEPTION 'No products provided';
-  END IF;
+  SELECT count(DISTINCT id) INTO expected_count FROM unnest(p_product_ids) AS ids(id);
+  IF expected_count = 0 THEN RAISE EXCEPTION 'No products provided'; END IF;
 
   CREATE TEMPORARY TABLE reserved_rows ON COMMIT DROP AS
   WITH requested AS (
@@ -160,7 +158,6 @@ BEGIN
   SELECT * FROM updated;
 
   SELECT count(*) INTO updated_count FROM reserved_rows;
-
   IF updated_count <> expected_count THEN
     RAISE EXCEPTION 'One or more products are not available';
   END IF;
@@ -170,7 +167,7 @@ END;
 $$;
 
 -- ============================================================================
--- 5. ORDERS — purchase transactions
+-- 5. ORDERS — purchase transactions (10 states)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS orders (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -184,11 +181,7 @@ CREATE TABLE IF NOT EXISTS orders (
   shipping_method TEXT NOT NULL,
   tracking_number TEXT,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
-    status IN (
-      'PENDING', 'PAYMENT_PROCESSING', 'PAID', 'PREPARING',
-      'SHIPPED', 'DELIVERED', 'COMPLETED',
-      'CANCELLED', 'REFUNDED', 'DISPUTED'
-    )
+    status IN ('PENDING','PAYMENT_PROCESSING','PAID','PREPARING','SHIPPED','DELIVERED','COMPLETED','CANCELLED','REFUNDED','DISPUTED')
   ),
   shipping_address TEXT NOT NULL,
   payment_intent_id TEXT,
@@ -198,7 +191,6 @@ CREATE TABLE IF NOT EXISTS orders (
   delivered_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ
 );
-
 CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_seller ON orders(seller_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
@@ -221,7 +213,6 @@ CREATE TABLE IF NOT EXISTS collections (
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
-
 CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id);
 CREATE INDEX IF NOT EXISTS idx_collections_visibility ON collections(visibility);
 
@@ -239,13 +230,13 @@ CREATE TABLE IF NOT EXISTS collection_items (
   category TEXT,
   image_url TEXT,
   status collection_item_status DEFAULT 'OWNED',
-  priority TEXT DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
-  -- Quantity model (cumulative):
-  -- owned_quantity = total cards you have
-  -- duplicate_quantity = extras (owned - 1 for your collection)
-  -- trade_quantity = available for trade (subset of duplicates)
-  -- sale_quantity = available for sale (subset of duplicates)
-  -- trade_quantity + sale_quantity <= duplicate_quantity
+  priority TEXT DEFAULT 'normal' CHECK (priority IN ('low','normal','high','urgent')),
+  -- Cumulative quantity model:
+  --   owned_quantity    = total cards you have
+  --   duplicate_quantity = extras (owned - 1 for your collection)
+  --   trade_quantity    = offered for trade (subset of duplicates)
+  --   sale_quantity     = offered for sale (subset of duplicates)
+  --   trade_quantity + sale_quantity <= duplicate_quantity
   total_quantity INTEGER DEFAULT 1 CHECK (total_quantity >= 0),
   owned_quantity INTEGER DEFAULT 1 CHECK (owned_quantity >= 0),
   duplicate_quantity INTEGER DEFAULT 0 CHECK (duplicate_quantity >= 0),
@@ -259,24 +250,19 @@ CREATE TABLE IF NOT EXISTS collection_items (
   CONSTRAINT chk_sale_not_exceed_duplicates CHECK (sale_quantity <= duplicate_quantity),
   CONSTRAINT chk_trade_sale_not_exceed_duplicates CHECK (trade_quantity + sale_quantity <= duplicate_quantity)
 );
-
 CREATE INDEX IF NOT EXISTS idx_collection_items_collection ON collection_items(collection_id);
 CREATE INDEX IF NOT EXISTS idx_collection_items_user ON collection_items(user_id);
 CREATE INDEX IF NOT EXISTS idx_collection_items_status ON collection_items(status);
 CREATE INDEX IF NOT EXISTS idx_collection_items_card_name ON collection_items(card_name);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_items_unique_card
-  ON collection_items(collection_id, card_name, card_number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_items_unique_card ON collection_items(collection_id, card_name, card_number);
 
 -- Auto-update collection totals
 CREATE OR REPLACE FUNCTION update_collection_totals()
 RETURNS TRIGGER AS $$
 BEGIN
   UPDATE collections
-  SET total_items = (
-    SELECT COUNT(*) FROM collection_items
-    WHERE collection_id = COALESCE(NEW.collection_id, OLD.collection_id)
-  ), updated_at = now()
+  SET total_items = (SELECT COUNT(*) FROM collection_items WHERE collection_id = COALESCE(NEW.collection_id, OLD.collection_id)),
+      updated_at = now()
   WHERE id = COALESCE(NEW.collection_id, OLD.collection_id);
   RETURN COALESCE(NEW, OLD);
 END;
@@ -287,41 +273,26 @@ CREATE TRIGGER trg_update_collection_totals
   AFTER INSERT OR UPDATE OR DELETE ON collection_items
   FOR EACH ROW EXECUTE FUNCTION update_collection_totals();
 
--- Validate collection_item quantities on insert/update
+-- Validate quantities (cumulative model)
 CREATE OR REPLACE FUNCTION validate_collection_item_quantities()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 BEGIN
-  IF NEW.owned_quantity < 0 THEN
-    RAISE EXCEPTION 'owned_quantity cannot be negative';
-  END IF;
-  IF NEW.duplicate_quantity < 0 THEN
-    RAISE EXCEPTION 'duplicate_quantity cannot be negative';
-  END IF;
+  IF NEW.owned_quantity < 0 THEN RAISE EXCEPTION 'owned_quantity cannot be negative'; END IF;
+  IF NEW.duplicate_quantity < 0 THEN RAISE EXCEPTION 'duplicate_quantity cannot be negative'; END IF;
   IF NEW.duplicate_quantity > NEW.owned_quantity THEN
-    RAISE EXCEPTION 'duplicate_quantity (%) cannot exceed owned_quantity (%)',
-      NEW.duplicate_quantity, NEW.owned_quantity;
+    RAISE EXCEPTION 'duplicate_quantity (%) cannot exceed owned_quantity (%)', NEW.duplicate_quantity, NEW.owned_quantity;
   END IF;
-  IF NEW.trade_quantity < 0 THEN
-    RAISE EXCEPTION 'trade_quantity cannot be negative';
-  END IF;
+  IF NEW.trade_quantity < 0 THEN RAISE EXCEPTION 'trade_quantity cannot be negative'; END IF;
   IF NEW.trade_quantity > NEW.duplicate_quantity THEN
-    RAISE EXCEPTION 'trade_quantity (%) cannot exceed duplicate_quantity (%)',
-      NEW.trade_quantity, NEW.duplicate_quantity;
+    RAISE EXCEPTION 'trade_quantity (%) cannot exceed duplicate_quantity (%)', NEW.trade_quantity, NEW.duplicate_quantity;
   END IF;
-  IF NEW.sale_quantity < 0 THEN
-    RAISE EXCEPTION 'sale_quantity cannot be negative';
-  END IF;
+  IF NEW.sale_quantity < 0 THEN RAISE EXCEPTION 'sale_quantity cannot be negative'; END IF;
   IF NEW.sale_quantity > NEW.duplicate_quantity THEN
-    RAISE EXCEPTION 'sale_quantity (%) cannot exceed duplicate_quantity (%)',
-      NEW.sale_quantity, NEW.duplicate_quantity;
+    RAISE EXCEPTION 'sale_quantity (%) cannot exceed duplicate_quantity (%)', NEW.sale_quantity, NEW.duplicate_quantity;
   END IF;
   IF (NEW.trade_quantity + NEW.sale_quantity) > NEW.duplicate_quantity THEN
-    RAISE EXCEPTION 'trade + sale (%) cannot exceed duplicate_quantity (%)',
-      NEW.trade_quantity + NEW.sale_quantity, NEW.duplicate_quantity;
+    RAISE EXCEPTION 'trade + sale (%) cannot exceed duplicate_quantity (%)', NEW.trade_quantity + NEW.sale_quantity, NEW.duplicate_quantity;
   END IF;
   RETURN NEW;
 END;
@@ -357,7 +328,7 @@ CREATE TABLE IF NOT EXISTS trade_proposal_items (
   collection_item_id UUID NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   quantity INTEGER DEFAULT 1,
-  side TEXT NOT NULL CHECK (side IN ('proposer', 'receiver')),
+  side TEXT NOT NULL CHECK (side IN ('proposer','receiver')),
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -390,7 +361,6 @@ CREATE TABLE IF NOT EXISTS messages (
   read BOOLEAN DEFAULT false NOT NULL,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(sender_id, receiver_id, created_at DESC);
 
 -- ============================================================================
@@ -403,15 +373,14 @@ CREATE TABLE IF NOT EXISTS offers (
   to_user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   amount NUMERIC(10,2) NOT NULL CHECK (amount > 0),
   original_price NUMERIC(10,2) NOT NULL CHECK (original_price > 0),
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'countered')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected','countered')),
   message TEXT,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_offers_to_user ON offers(to_user_id);
 
 -- ============================================================================
--- 11. REVIEWS — seller ratings
+-- 11. REVIEWS — buyer+seller reviews per order
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS reviews (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -434,7 +403,6 @@ CREATE TABLE IF NOT EXISTS follows (
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
   UNIQUE(follower_id, following_id)
 );
-
 CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
 CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
 
@@ -447,7 +415,6 @@ CREATE TABLE IF NOT EXISTS price_history (
   price NUMERIC(10,2) NOT NULL CHECK (price > 0),
   recorded_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_price_history_product ON price_history(product_id, recorded_at DESC);
 
 -- ============================================================================
@@ -475,33 +442,12 @@ CREATE TABLE IF NOT EXISTS notifications (
   read BOOLEAN DEFAULT false NOT NULL,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read);
-
--- ============================================================================
--- 16. WALLET_TRANSACTIONS — audit trail for wallet balance changes
--- ============================================================================
-CREATE TABLE IF NOT EXISTS wallet_transactions (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('SALE', 'COMMISSION', 'REFUND', 'WITHDRAWAL', 'DEPOSIT', 'ADJUSTMENT')),
-  amount NUMERIC(10,2) NOT NULL,
-  balance_before NUMERIC(10,2) NOT NULL,
-  balance_after NUMERIC(10,2) NOT NULL,
-  reference_id UUID,
-  reference_type TEXT,
-  description TEXT,
-  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user ON wallet_transactions(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_wallet_transactions_type ON wallet_transactions(type);
 
 -- ============================================================================
 -- ROW LEVEL SECURITY
 -- ============================================================================
 
--- PROFILES: public read, owner write
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "profiles_select_public" ON profiles;
 CREATE POLICY "profiles_select_public" ON profiles FOR SELECT USING (true);
@@ -512,9 +458,7 @@ CREATE POLICY "profiles_update_own" ON profiles FOR UPDATE USING (auth.uid() = i
 DROP POLICY IF EXISTS "profiles_delete_own" ON profiles;
 CREATE POLICY "profiles_delete_own" ON profiles FOR DELETE USING (auth.uid() = id);
 
--- USER_PRIVATE: owner read, controlled write
 ALTER TABLE user_private ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "user_private_owner_all" ON user_private;
 DROP POLICY IF EXISTS "user_private_select_own" ON user_private;
 CREATE POLICY "user_private_select_own" ON user_private FOR SELECT USING (auth.uid() = user_id);
 DROP POLICY IF EXISTS "user_private_update_own" ON user_private;
@@ -522,13 +466,14 @@ CREATE POLICY "user_private_update_own" ON user_private FOR UPDATE USING (auth.u
 DROP POLICY IF EXISTS "user_private_insert_own" ON user_private;
 CREATE POLICY "user_private_insert_own" ON user_private FOR INSERT WITH CHECK (auth.uid() = user_id);
 
--- WALLET: owner SELECT only, no direct INSERT/UPDATE (created/managed by triggers + service_role)
 ALTER TABLE wallet ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "wallet_owner_all" ON wallet;
 DROP POLICY IF EXISTS "wallet_select_own" ON wallet;
 CREATE POLICY "wallet_select_own" ON wallet FOR SELECT USING (auth.uid() = user_id);
 
--- PRODUCTS: public read, seller write
+ALTER TABLE wallet_transactions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "wallet_tx_select_own" ON wallet_transactions;
+CREATE POLICY "wallet_tx_select_own" ON wallet_transactions FOR SELECT USING (auth.uid() = user_id);
+
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "products_select_public" ON products;
 CREATE POLICY "products_select_public" ON products FOR SELECT USING (true);
@@ -539,7 +484,6 @@ CREATE POLICY "products_update_seller" ON products FOR UPDATE USING (auth.uid() 
 DROP POLICY IF EXISTS "products_delete_seller" ON products;
 CREATE POLICY "products_delete_seller" ON products FOR DELETE USING (auth.uid() = seller);
 
--- ORDERS: participants only
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "orders_select_participant" ON orders;
 CREATE POLICY "orders_select_participant" ON orders FOR SELECT USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
@@ -548,7 +492,6 @@ CREATE POLICY "orders_insert_buyer" ON orders FOR INSERT WITH CHECK (auth.uid() 
 DROP POLICY IF EXISTS "orders_update_participant" ON orders;
 CREATE POLICY "orders_update_participant" ON orders FOR UPDATE USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
 
--- COLLECTIONS: owner all, public read based on visibility
 ALTER TABLE collections ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "collections_owner_all" ON collections;
 CREATE POLICY "collections_owner_all" ON collections FOR ALL USING (auth.uid() = user_id);
@@ -560,7 +503,6 @@ CREATE POLICY "collections_public_read" ON collections FOR SELECT USING (
   ))
 );
 
--- COLLECTION_ITEMS: owner all, public read if collection is public
 ALTER TABLE collection_items ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "collection_items_owner_all" ON collection_items;
 CREATE POLICY "collection_items_owner_all" ON collection_items FOR ALL USING (auth.uid() = user_id);
@@ -569,18 +511,13 @@ CREATE POLICY "collection_items_public_read" ON collection_items FOR SELECT USIN
   EXISTS (
     SELECT 1 FROM collections
     WHERE collections.id = collection_items.collection_id
-    AND (
-      collections.visibility = 'public'
-      OR (collections.visibility = 'followers' AND EXISTS (
-        SELECT 1 FROM follows WHERE follower_id = auth.uid() AND following_id = collections.user_id
-      ))
-    )
+    AND (collections.visibility = 'public' OR (collections.visibility = 'followers' AND EXISTS (
+      SELECT 1 FROM follows WHERE follower_id = auth.uid() AND following_id = collections.user_id
+    )))
   )
 );
 
--- TRADE_PROPOSALS: granular by operation
 ALTER TABLE trade_proposals ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "trade_proposals_participant_all" ON trade_proposals;
 DROP POLICY IF EXISTS "trade_proposals_select_participant" ON trade_proposals;
 CREATE POLICY "trade_proposals_select_participant" ON trade_proposals
   FOR SELECT USING (auth.uid() = proposer_id OR auth.uid() = receiver_id);
@@ -593,43 +530,29 @@ CREATE POLICY "trade_proposals_update_participant" ON trade_proposals
   WITH CHECK (auth.uid() = proposer_id OR auth.uid() = receiver_id);
 DROP POLICY IF EXISTS "trade_proposals_delete_proposer_draft" ON trade_proposals;
 CREATE POLICY "trade_proposals_delete_proposer_draft" ON trade_proposals
-  FOR DELETE USING (auth.uid() = proposer_id AND status IN ('DRAFT', 'PROPOSED'));
+  FOR DELETE USING (auth.uid() = proposer_id AND status IN ('DRAFT','PROPOSED'));
 
--- TRADE_PROPOSAL_ITEMS: owner write, participants read
 ALTER TABLE trade_proposal_items ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "trade_items_owner_all" ON trade_proposal_items;
-CREATE POLICY "trade_items_owner_all" ON trade_proposal_items FOR ALL USING (auth.uid() = user_id);
-DROP POLICY IF EXISTS "trade_items_participant_read" ON trade_proposal_items;
-CREATE POLICY "trade_items_participant_read" ON trade_proposal_items FOR SELECT USING (
-  EXISTS (
-    SELECT 1 FROM trade_proposals
-    WHERE trade_proposals.id = trade_proposal_items.proposal_id
-    AND (trade_proposals.proposer_id = auth.uid() OR trade_proposals.receiver_id = auth.uid())
-  )
+DROP POLICY IF EXISTS "trade_items_insert_own" ON trade_proposal_items;
+CREATE POLICY "trade_items_insert_own" ON trade_proposal_items FOR INSERT WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "trade_items_select_participant" ON trade_proposal_items;
+CREATE POLICY "trade_items_select_participant" ON trade_proposal_items FOR SELECT USING (
+  EXISTS (SELECT 1 FROM trade_proposals WHERE trade_proposals.id = trade_proposal_items.proposal_id
+    AND (trade_proposals.proposer_id = auth.uid() OR trade_proposals.receiver_id = auth.uid()))
 );
+DROP POLICY IF EXISTS "trade_items_update_own" ON trade_proposal_items;
+CREATE POLICY "trade_items_update_own" ON trade_proposal_items FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "trade_items_delete_own" ON trade_proposal_items;
+CREATE POLICY "trade_items_delete_own" ON trade_proposal_items FOR DELETE USING (auth.uid() = user_id);
 
--- TRADE_HISTORY: participants read, participant insert (validated by trigger)
 ALTER TABLE trade_history ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "trade_history_participant_read" ON trade_history;
 CREATE POLICY "trade_history_participant_read" ON trade_history FOR SELECT USING (
-  EXISTS (
-    SELECT 1 FROM trade_proposals
-    WHERE trade_proposals.id = trade_history.proposal_id
-    AND (trade_proposals.proposer_id = auth.uid() OR trade_proposals.receiver_id = auth.uid())
-  )
+  EXISTS (SELECT 1 FROM trade_proposals WHERE trade_proposals.id = trade_history.proposal_id
+    AND (trade_proposals.proposer_id = auth.uid() OR trade_proposals.receiver_id = auth.uid()))
 );
-DROP POLICY IF EXISTS "trade_history_insert" ON trade_history;
-DROP POLICY IF EXISTS "trade_history_insert_participant" ON trade_history;
-CREATE POLICY "trade_history_insert_participant" ON trade_history
-  FOR INSERT WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM trade_proposals
-      WHERE trade_proposals.id = trade_history.proposal_id
-        AND (trade_proposals.proposer_id = auth.uid() OR trade_proposals.receiver_id = auth.uid())
-    )
-  );
+-- No INSERT policy for users: trade_history is auto-generated by trigger only
 
--- MESSAGES: participants only
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "messages_select_participant" ON messages;
 CREATE POLICY "messages_select_participant" ON messages FOR SELECT USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
@@ -638,7 +561,6 @@ CREATE POLICY "messages_insert_sender" ON messages FOR INSERT WITH CHECK (auth.u
 DROP POLICY IF EXISTS "messages_update_receiver" ON messages;
 CREATE POLICY "messages_update_receiver" ON messages FOR UPDATE USING (auth.uid() = receiver_id);
 
--- OFFERS: participants only
 ALTER TABLE offers ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "offers_select_participant" ON offers;
 CREATE POLICY "offers_select_participant" ON offers FOR SELECT USING (auth.uid() = from_user_id OR auth.uid() = to_user_id);
@@ -647,16 +569,12 @@ CREATE POLICY "offers_insert_from" ON offers FOR INSERT WITH CHECK (auth.uid() =
 DROP POLICY IF EXISTS "offers_update_recipient" ON offers;
 CREATE POLICY "offers_update_recipient" ON offers FOR UPDATE USING (auth.uid() = to_user_id);
 
--- REVIEWS: public read, validated insert (use create_review RPC)
 ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "reviews_select_public" ON reviews;
 CREATE POLICY "reviews_select_public" ON reviews FOR SELECT USING (true);
-DROP POLICY IF EXISTS "reviews_insert_own" ON reviews;
 DROP POLICY IF EXISTS "reviews_insert_validated" ON reviews;
-CREATE POLICY "reviews_insert_validated" ON reviews
-  FOR INSERT WITH CHECK (auth.uid() = reviewer_id);
+CREATE POLICY "reviews_insert_validated" ON reviews FOR INSERT WITH CHECK (auth.uid() = reviewer_id);
 
--- FOLLOWS: public read, owner write
 ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "follows_select_public" ON follows;
 CREATE POLICY "follows_select_public" ON follows FOR SELECT USING (true);
@@ -665,12 +583,10 @@ CREATE POLICY "follows_insert_own" ON follows FOR INSERT WITH CHECK (auth.uid() 
 DROP POLICY IF EXISTS "follows_delete_own" ON follows;
 CREATE POLICY "follows_delete_own" ON follows FOR DELETE USING (auth.uid() = follower_id);
 
--- PRICE_HISTORY: public read
 ALTER TABLE price_history ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "price_history_select_public" ON price_history;
 CREATE POLICY "price_history_select_public" ON price_history FOR SELECT USING (true);
 
--- PUSH_SUBSCRIPTIONS: owner only
 ALTER TABLE push_subscriptions ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "push_select_own" ON push_subscriptions;
 CREATE POLICY "push_select_own" ON push_subscriptions FOR SELECT USING (auth.uid() = user_id);
@@ -679,51 +595,31 @@ CREATE POLICY "push_insert_own" ON push_subscriptions FOR INSERT WITH CHECK (aut
 DROP POLICY IF EXISTS "push_delete_own" ON push_subscriptions;
 CREATE POLICY "push_delete_own" ON push_subscriptions FOR DELETE USING (auth.uid() = user_id);
 
--- NOTIFICATIONS: owner only
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "notifications_owner_all" ON notifications;
 CREATE POLICY "notifications_owner_all" ON notifications FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
--- WALLET_TRANSACTIONS: owner read only (inserts via service_role only)
-ALTER TABLE wallet_transactions ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "wallet_tx_select_own" ON wallet_transactions;
-CREATE POLICY "wallet_tx_select_own" ON wallet_transactions FOR SELECT USING (auth.uid() = user_id);
+-- ============================================================================
+-- TRIGGERS & FUNCTIONS
+-- ============================================================================
 
--- ============================================================================
--- AUTO-CREATE PROFILE + PRIVATE + WALLET ON REGISTRATION
--- ============================================================================
+-- Auto-create profile + private + wallet on registration
 CREATE OR REPLACE FUNCTION handle_new_user()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER SET search_path = public
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
-DECLARE
-  meta_name TEXT;
-  meta_username TEXT;
 BEGIN
-  meta_username := coalesce(
-    (new.raw_user_meta_data ->> 'username'),
-    (new.raw_user_meta_data ->> 'user_name'),
-    'user' || substr(replace(new.id::text, '-', ''), 1, 8)
-  );
-  meta_name := coalesce(
-    (new.raw_user_meta_data ->> 'full_name'),
-    (new.raw_user_meta_data ->> 'name'),
-    coalesce(new.email, 'Usuario')
-  );
-
   INSERT INTO profiles (id, username, name, member_since)
-  VALUES (new.id, meta_username, meta_name, to_char(now(), 'YYYY'))
+  VALUES (new.id,
+    coalesce((new.raw_user_meta_data->>'username'), (new.raw_user_meta_data->>'user_name'), 'user'||substr(replace(new.id::text,'-',''),1,8)),
+    coalesce((new.raw_user_meta_data->>'full_name'), (new.raw_user_meta_data->>'name'), coalesce(new.email,'Usuario')),
+    to_char(now(),'YYYY'))
   ON CONFLICT (id) DO NOTHING;
 
   INSERT INTO user_private (user_id, email, phone)
-  VALUES (new.id, coalesce(new.email, ''), nullif(coalesce((new.raw_user_meta_data ->> 'phone'), ''), ''))
+  VALUES (new.id, coalesce(new.email,''), nullif(coalesce((new.raw_user_meta_data->>'phone'),''),''))
   ON CONFLICT (user_id) DO NOTHING;
 
-  INSERT INTO wallet (user_id, balance, available_balance, pending_balance)
-  VALUES (new.id, 0.00, 0.00, 0.00)
-  ON CONFLICT (user_id) DO NOTHING;
-
+  INSERT INTO wallet (user_id) VALUES (new.id) ON CONFLICT (user_id) DO NOTHING;
   RETURN NEW;
 END;
 $$;
@@ -733,213 +629,9 @@ CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION handle_new_user();
 
--- ============================================================================
--- STORAGE — card images bucket
--- ============================================================================
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES ('card-images', 'card-images', true, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
-ON CONFLICT (id) DO UPDATE SET
-  public = excluded.public,
-  file_size_limit = excluded.file_size_limit,
-  allowed_mime_types = excluded.allowed_mime_types;
-
-DROP POLICY IF EXISTS "card_images_public_read" ON storage.objects;
-CREATE POLICY "card_images_public_read" ON storage.objects
-  FOR SELECT USING (bucket_id = 'card-images');
-
-DROP POLICY IF EXISTS "card_images_insert_auth" ON storage.objects;
-CREATE POLICY "card_images_insert_auth" ON storage.objects
-  FOR INSERT TO authenticated
-  WITH CHECK (
-    bucket_id = 'card-images'
-    AND owner = auth.uid()
-    AND (storage.foldername(name))[1] = auth.uid()::text
-  );
-
-DROP POLICY IF EXISTS "card_images_update_auth" ON storage.objects;
-CREATE POLICY "card_images_update_auth" ON storage.objects
-  FOR UPDATE TO authenticated
-  USING (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text)
-  WITH CHECK (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text);
-
-DROP POLICY IF EXISTS "card_images_delete_auth" ON storage.objects;
-CREATE POLICY "card_images_delete_auth" ON storage.objects
-  FOR DELETE TO authenticated
-  USING (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text);
-
--- ============================================================================
--- SECURITY TRIGGERS — Data integrity validation
--- ============================================================================
-
--- Trade history: validate actor_id = auth.uid() and participant status
-CREATE OR REPLACE FUNCTION validate_trade_history_insert()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-BEGIN
-  IF NEW.actor_id IS NULL THEN
-    RAISE EXCEPTION 'actor_id is required';
-  END IF;
-  IF auth.uid() IS NOT NULL AND auth.uid() <> NEW.actor_id THEN
-    RAISE EXCEPTION 'Cannot insert history for another user';
-  END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM trade_proposals
-    WHERE id = NEW.proposal_id
-      AND (proposer_id = NEW.actor_id OR receiver_id = NEW.actor_id)
-  ) THEN
-    RAISE EXCEPTION 'Actor is not a participant of this proposal';
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS trg_validate_trade_history_insert ON trade_history;
-CREATE TRIGGER trg_validate_trade_history_insert
-  BEFORE INSERT ON trade_history
-  FOR EACH ROW EXECUTE FUNCTION validate_trade_history_insert();
-
--- Trade proposals: validate state transitions, set timestamps, block immutable fields
-CREATE OR REPLACE FUNCTION validate_trade_proposal_transition()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  allowed BOOLEAN := false;
-BEGIN
-  -- Block changes to immutable fields
-  IF OLD.proposer_id IS DISTINCT FROM NEW.proposer_id THEN
-    RAISE EXCEPTION 'Cannot change proposer_id after creation';
-  END IF;
-  IF OLD.receiver_id IS DISTINCT FROM NEW.receiver_id THEN
-    RAISE EXCEPTION 'Cannot change receiver_id after creation';
-  END IF;
-  IF OLD.compatibility_score IS DISTINCT FROM NEW.compatibility_score THEN
-    RAISE EXCEPTION 'Cannot change compatibility_score directly';
-  END IF;
-  IF OLD.created_at IS DISTINCT FROM NEW.created_at THEN
-    RAISE EXCEPTION 'Cannot change created_at';
-  END IF;
-
-  IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
-    allowed := CASE
-      WHEN OLD.status = 'DRAFT' AND NEW.status = 'PROPOSED'
-        AND auth.uid() = OLD.proposer_id THEN true
-      WHEN OLD.status = 'DRAFT' AND NEW.status = 'CANCELLED'
-        AND auth.uid() = OLD.proposer_id THEN true
-      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'ACCEPTED'
-        AND auth.uid() = OLD.receiver_id THEN true
-      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'COUNTERED'
-        AND auth.uid() = OLD.receiver_id THEN true
-      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'CANCELLED'
-        AND auth.uid() = OLD.proposer_id THEN true
-      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'ACCEPTED'
-        AND auth.uid() = OLD.proposer_id THEN true
-      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'CANCELLED'
-        AND auth.uid() = OLD.proposer_id THEN true
-      WHEN OLD.status = 'ACCEPTED' AND NEW.status = 'SHIPPING_PENDING'
-        AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
-      WHEN OLD.status = 'SHIPPING_PENDING' AND NEW.status = 'SHIPPED'
-        AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
-      WHEN OLD.status = 'SHIPPED' AND NEW.status = 'RECEIVED'
-        AND auth.uid() = OLD.receiver_id THEN true
-      WHEN OLD.status = 'RECEIVED' AND NEW.status = 'COMPLETED'
-        AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
-      WHEN OLD.status NOT IN ('COMPLETED', 'CANCELLED', 'DISPUTED')
-        AND NEW.status = 'DISPUTED'
-        AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
-      ELSE false
-    END;
-    IF NOT allowed THEN
-      RAISE EXCEPTION 'Invalid status transition: % -> % for user %',
-        OLD.status, NEW.status, auth.uid();
-    END IF;
-    IF NEW.status = 'ACCEPTED' AND OLD.status IS DISTINCT FROM 'ACCEPTED' THEN
-      NEW.accepted_at := now();
-    ELSIF NEW.status = 'SHIPPED' AND OLD.status IS DISTINCT FROM 'SHIPPED' THEN
-      NEW.shipped_at := now();
-    ELSIF NEW.status = 'RECEIVED' AND OLD.status IS DISTINCT FROM 'RECEIVED' THEN
-      NEW.received_at := now();
-    ELSIF NEW.status = 'COMPLETED' AND OLD.status IS DISTINCT FROM 'COMPLETED' THEN
-      NEW.completed_at := now();
-    END IF;
-  END IF;
-  NEW.updated_at := now();
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS trg_validate_trade_proposal_transition ON trade_proposals;
-CREATE TRIGGER trg_validate_trade_proposal_transition
-  BEFORE UPDATE ON trade_proposals
-  FOR EACH ROW EXECUTE FUNCTION validate_trade_proposal_transition();
-
--- Trade proposal items: validate quantity, ownership, and participant role
-CREATE OR REPLACE FUNCTION validate_trade_proposal_item_quantity()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_item RECORD;
-  v_proposal RECORD;
-BEGIN
-  -- Validate collection item exists and belongs to user
-  SELECT * INTO v_item FROM collection_items WHERE id = NEW.collection_item_id;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Collection item not found';
-  END IF;
-  IF v_item.user_id <> NEW.user_id THEN
-    RAISE EXCEPTION 'This card does not belong to you';
-  END IF;
-
-  -- Validate quantity
-  IF NEW.quantity <= 0 THEN
-    RAISE EXCEPTION 'Quantity must be at least 1';
-  END IF;
-  IF NEW.quantity > v_item.duplicate_quantity THEN
-    RAISE EXCEPTION 'Quantity (%) exceeds available duplicates (%)',
-      NEW.quantity, v_item.duplicate_quantity;
-  END IF;
-
-  -- Validate side matches actual participant role
-  SELECT * INTO v_proposal FROM trade_proposals WHERE id = NEW.proposal_id;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Trade proposal not found';
-  END IF;
-
-  IF NEW.side = 'proposer' AND v_proposal.proposer_id <> NEW.user_id THEN
-    RAISE EXCEPTION 'Side=proposer but user is not the proposer';
-  END IF;
-  IF NEW.side = 'receiver' AND v_proposal.receiver_id <> NEW.user_id THEN
-    RAISE EXCEPTION 'Side=receiver but user is not the receiver';
-  END IF;
-
-  -- User must be a participant of the proposal
-  IF v_proposal.proposer_id <> NEW.user_id AND v_proposal.receiver_id <> NEW.user_id THEN
-    RAISE EXCEPTION 'User is not a participant of this proposal';
-  END IF;
-
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS trg_validate_trade_proposal_item_quantity ON trade_proposal_items;
-CREATE TRIGGER trg_validate_trade_proposal_item_quantity
-  BEFORE INSERT OR UPDATE ON trade_proposal_items
-  FOR EACH ROW EXECUTE FUNCTION validate_trade_proposal_item_quantity();
-
--- Wallet: prevent direct balance updates from authenticated clients
+-- Wallet: prevent direct balance updates from clients
 CREATE OR REPLACE FUNCTION prevent_wallet_direct_update()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 BEGIN
   IF auth.uid() IS NOT NULL THEN
@@ -959,63 +651,192 @@ CREATE TRIGGER trg_prevent_wallet_direct_update
   BEFORE UPDATE ON wallet
   FOR EACH ROW EXECUTE FUNCTION prevent_wallet_direct_update();
 
--- Reviews: RPC function with full validation
-CREATE OR REPLACE FUNCTION create_review(
-  p_order_id UUID,
-  p_rating INTEGER,
-  p_comment TEXT DEFAULT NULL
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
+-- Trade proposals: validate state transitions + block immutable fields
+CREATE OR REPLACE FUNCTION validate_trade_proposal_transition()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE allowed BOOLEAN := false;
+BEGIN
+  IF OLD.proposer_id IS DISTINCT FROM NEW.proposer_id THEN RAISE EXCEPTION 'Cannot change proposer_id'; END IF;
+  IF OLD.receiver_id IS DISTINCT FROM NEW.receiver_id THEN RAISE EXCEPTION 'Cannot change receiver_id'; END IF;
+  IF OLD.compatibility_score IS DISTINCT FROM NEW.compatibility_score THEN RAISE EXCEPTION 'Cannot change compatibility_score'; END IF;
+  IF OLD.created_at IS DISTINCT FROM NEW.created_at THEN RAISE EXCEPTION 'Cannot change created_at'; END IF;
+
+  IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    allowed := CASE
+      WHEN OLD.status = 'DRAFT' AND NEW.status = 'PROPOSED' AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'DRAFT' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'ACCEPTED' AND auth.uid() = OLD.receiver_id THEN true
+      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'COUNTERED' AND auth.uid() = OLD.receiver_id THEN true
+      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'ACCEPTED' AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'ACCEPTED' AND NEW.status = 'SHIPPING_PENDING' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      WHEN OLD.status = 'SHIPPING_PENDING' AND NEW.status = 'SHIPPED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      WHEN OLD.status = 'SHIPPED' AND NEW.status = 'RECEIVED' AND auth.uid() = OLD.receiver_id THEN true
+      WHEN OLD.status = 'RECEIVED' AND NEW.status = 'COMPLETED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','DISPUTED') AND NEW.status = 'DISPUTED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      ELSE false
+    END;
+    IF NOT allowed THEN RAISE EXCEPTION 'Invalid transition: % -> %', OLD.status, NEW.status; END IF;
+
+    IF NEW.status = 'ACCEPTED' AND OLD.status IS DISTINCT FROM 'ACCEPTED' THEN NEW.accepted_at := now();
+    ELSIF NEW.status = 'SHIPPED' AND OLD.status IS DISTINCT FROM 'SHIPPED' THEN NEW.shipped_at := now();
+    ELSIF NEW.status = 'RECEIVED' AND OLD.status IS DISTINCT FROM 'RECEIVED' THEN NEW.received_at := now();
+    ELSIF NEW.status = 'COMPLETED' AND OLD.status IS DISTINCT FROM 'COMPLETED' THEN NEW.completed_at := now();
+    END IF;
+  END IF;
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validate_trade_proposal_transition ON trade_proposals;
+CREATE TRIGGER trg_validate_trade_proposal_transition
+  BEFORE UPDATE ON trade_proposals
+  FOR EACH ROW EXECUTE FUNCTION validate_trade_proposal_transition();
+
+-- Auto-generate trade_history when status changes
+CREATE OR REPLACE FUNCTION auto_log_trade_history()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO trade_history (proposal_id, actor_id, action, old_status, new_status, details)
+    VALUES (
+      NEW.id,
+      COALESCE(auth.uid(), NEW.proposer_id),
+      'STATUS_CHANGE',
+      OLD.status,
+      NEW.status,
+      jsonb_build_object('changed_by', auth.uid())
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_auto_log_trade_history ON trade_proposals;
+CREATE TRIGGER trg_auto_log_trade_history
+  AFTER UPDATE ON trade_proposals
+  FOR EACH ROW EXECUTE FUNCTION auto_log_trade_history();
+
+-- Trade proposal items: validate quantity, ownership, participant role, AND available_for_trade
+CREATE OR REPLACE FUNCTION validate_trade_proposal_item_quantity()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-  v_order RECORD;
-  v_reviewed_id UUID;
-  v_existing UUID;
-  v_review_id UUID;
-  v_avg NUMERIC;
+  v_item RECORD;
+  v_proposal RECORD;
+  v_committed INTEGER;
 BEGIN
-  IF auth.uid() IS NULL THEN
-    RAISE EXCEPTION 'Authentication required';
+  SELECT * INTO v_item FROM collection_items WHERE id = NEW.collection_item_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Collection item not found'; END IF;
+  IF v_item.user_id <> NEW.user_id THEN RAISE EXCEPTION 'This card does not belong to you'; END IF;
+  IF NEW.quantity <= 0 THEN RAISE EXCEPTION 'Quantity must be at least 1'; END IF;
+
+  -- Check quantity against duplicates
+  IF NEW.quantity > v_item.duplicate_quantity THEN
+    RAISE EXCEPTION 'Quantity (%) exceeds duplicates (%)', NEW.quantity, v_item.duplicate_quantity;
   END IF;
-  IF p_rating < 1 OR p_rating > 5 THEN
-    RAISE EXCEPTION 'Rating must be between 1 and 5';
+
+  -- Check against already-committed quantities in active proposals
+  SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
+  FROM trade_proposal_items tpi
+  JOIN trade_proposals tp ON tp.id = tpi.proposal_id
+  WHERE tpi.collection_item_id = NEW.collection_item_id
+    AND tpi.user_id = NEW.user_id
+    AND tp.status NOT IN ('COMPLETED','CANCELLED','DISPUTED')
+    AND (NEW.id IS NULL OR tpi.id != NEW.id);
+
+  IF (NEW.quantity + v_committed) > v_item.duplicate_quantity THEN
+    RAISE EXCEPTION 'Quantity (%) + already committed (%) exceeds available duplicates (%)',
+      NEW.quantity, v_committed, v_item.duplicate_quantity;
   END IF;
-  SELECT id, status, buyer_id, seller_id INTO v_order
-  FROM orders WHERE id = p_order_id;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Order not found';
+
+  -- Validate side matches participant role
+  SELECT * INTO v_proposal FROM trade_proposals WHERE id = NEW.proposal_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Trade proposal not found'; END IF;
+  IF NEW.side = 'proposer' AND v_proposal.proposer_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'Side=proposer but user is not the proposer';
   END IF;
-  IF v_order.status <> 'COMPLETED' THEN
-    RAISE EXCEPTION 'Can only review completed orders';
+  IF NEW.side = 'receiver' AND v_proposal.receiver_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'Side=receiver but user is not the receiver';
   END IF;
+  IF v_proposal.proposer_id <> NEW.user_id AND v_proposal.receiver_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'User is not a participant of this proposal';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validate_trade_proposal_item_quantity ON trade_proposal_items;
+CREATE TRIGGER trg_validate_trade_proposal_item_quantity
+  BEFORE INSERT OR UPDATE ON trade_proposal_items
+  FOR EACH ROW EXECUTE FUNCTION validate_trade_proposal_item_quantity();
+
+-- Reviews RPC: validates order COMPLETED, participant, no duplicate
+CREATE OR REPLACE FUNCTION create_review(
+  p_order_id UUID, p_rating INTEGER, p_comment TEXT DEFAULT NULL
+)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD; v_reviewed_id UUID; v_existing UUID; v_review_id UUID; v_avg NUMERIC;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF p_rating < 1 OR p_rating > 5 THEN RAISE EXCEPTION 'Rating must be 1-5'; END IF;
+
+  SELECT id, status, buyer_id, seller_id INTO v_order FROM orders WHERE id = p_order_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order not found'; END IF;
+  IF v_order.status <> 'COMPLETED' THEN RAISE EXCEPTION 'Can only review completed orders'; END IF;
   IF auth.uid() <> v_order.buyer_id AND auth.uid() <> v_order.seller_id THEN
     RAISE EXCEPTION 'You are not a participant in this order';
   END IF;
-  IF auth.uid() = v_order.buyer_id THEN
-    v_reviewed_id := v_order.seller_id;
-  ELSE
-    v_reviewed_id := v_order.buyer_id;
-  END IF;
-  SELECT id INTO v_existing FROM reviews
-  WHERE order_id = p_order_id AND reviewer_id = auth.uid();
-  IF FOUND THEN
-    RAISE EXCEPTION 'You have already reviewed this order';
-  END IF;
+
+  v_reviewed_id := CASE WHEN auth.uid() = v_order.buyer_id THEN v_order.seller_id ELSE v_order.buyer_id END;
+
+  SELECT id INTO v_existing FROM reviews WHERE order_id = p_order_id AND reviewer_id = auth.uid();
+  IF FOUND THEN RAISE EXCEPTION 'You have already reviewed this order'; END IF;
+
   INSERT INTO reviews (order_id, reviewer_id, target_user_id, rating, comment)
   VALUES (p_order_id, auth.uid(), v_reviewed_id, p_rating, p_comment)
   RETURNING id INTO v_review_id;
-  SELECT AVG(rating)::NUMERIC(3,2) INTO v_avg
-  FROM reviews WHERE target_user_id = v_reviewed_id;
+
+  SELECT AVG(rating)::NUMERIC(3,2) INTO v_avg FROM reviews WHERE target_user_id = v_reviewed_id;
   UPDATE profiles SET rating = COALESCE(v_avg, 0) WHERE id = v_reviewed_id;
+
   INSERT INTO notifications (user_id, type, title, message, data)
-  VALUES (
-    v_reviewed_id, 'review', 'Nueva reseña',
-    'Te dejaron una reseña de ' || p_rating || ' estrellas',
-    jsonb_build_object('review_id', v_review_id, 'order_id', p_order_id)
-  );
+  VALUES (v_reviewed_id, 'review', 'Nueva reseña',
+    'Te dejaron una reseña de '||p_rating||' estrellas',
+    jsonb_build_object('review_id', v_review_id, 'order_id', p_order_id));
+
   RETURN jsonb_build_object('success', true, 'review_id', v_review_id);
 END;
 $$;
+
+-- ============================================================================
+-- STORAGE — card images bucket
+-- ============================================================================
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES ('card-images', 'card-images', true, 5242880, array['image/jpeg','image/png','image/webp'])
+ON CONFLICT (id) DO UPDATE SET
+  public = excluded.public, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+DROP POLICY IF EXISTS "card_images_public_read" ON storage.objects;
+CREATE POLICY "card_images_public_read" ON storage.objects
+  FOR SELECT USING (bucket_id = 'card-images');
+DROP POLICY IF EXISTS "card_images_insert_auth" ON storage.objects;
+CREATE POLICY "card_images_insert_auth" ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text);
+DROP POLICY IF EXISTS "card_images_update_auth" ON storage.objects;
+CREATE POLICY "card_images_update_auth" ON storage.objects
+  FOR UPDATE TO authenticated
+  USING (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text)
+  WITH CHECK (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text);
+DROP POLICY IF EXISTS "card_images_delete_auth" ON storage.objects;
+CREATE POLICY "card_images_delete_auth" ON storage.objects
+  FOR DELETE TO authenticated
+  USING (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text);
