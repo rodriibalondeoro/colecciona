@@ -228,7 +228,7 @@ BEGIN
 END;
 $$;
 
--- Atomic checkout: validate prices server-side, create order
+-- Atomic checkout: validate prices server-side, create order + order_items
 CREATE OR REPLACE FUNCTION create_checkout_order(
   p_product_ids UUID[],
   p_shipping_method TEXT DEFAULT 'standard',
@@ -251,9 +251,14 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
   IF array_length(p_product_ids, 1) IS NULL THEN RAISE EXCEPTION 'No products provided'; END IF;
 
-  -- Validate all products exist, are RESERVED by this buyer, and prices match
+  -- Validate shipping method
+  IF p_shipping_method NOT IN ('standard', 'tracked') THEN
+    RAISE EXCEPTION 'Invalid shipping method: %. Must be standard or tracked', p_shipping_method;
+  END IF;
+
+  -- Validate all products exist, are RESERVED by this buyer, same seller
   FOR v_product IN
-    SELECT p.*, pr.price AS listed_price
+    SELECT p.id, p.price, p.seller, p.reserved_by, p.status
     FROM products p
     JOIN unnest(p_product_ids) AS ids(id) ON p.id = ids.id
   LOOP
@@ -267,7 +272,7 @@ BEGIN
       RAISE EXCEPTION 'Cannot buy your own product %', v_product.id;
     END IF;
 
-    -- Track seller (all must be same seller for single order)
+    -- All products must be from the same seller (single shipment)
     IF v_seller_id IS NULL THEN
       v_seller_id := v_product.seller;
     ELSIF v_seller_id <> v_product.seller THEN
@@ -277,35 +282,40 @@ BEGIN
     v_subtotal := v_subtotal + v_product.price;
   END LOOP;
 
-  -- Check if buyer is premium (reduced commission)
+  -- Check if buyer is premium (reduced commission for seller)
   SELECT EXISTS(
     SELECT 1 FROM subscriptions
-    WHERE user_id = auth.uid()
+    WHERE user_id = v_seller_id
       AND status IN ('active','trialing')
       AND current_period_end > now()
   ) INTO v_is_premium;
 
   IF v_is_premium THEN v_commission_rate := 0.05; END IF;
 
-  -- Calculate shipping and commission server-side
+  -- Calculate shipping and commission (server-side only)
   v_shipping := CASE WHEN p_shipping_method = 'tracked' THEN 4.00 ELSE 2.50 END;
   v_commission := round(v_subtotal * v_commission_rate, 2);
+  -- Buyer pays: subtotal + shipping (commission is deducted from seller earnings)
   v_total := v_subtotal + v_shipping;
 
-  -- Create order with server-calculated values
+  -- Create order (1 order per shipment)
   INSERT INTO orders(
-    product_id, seller_id, buyer_id, price, shipping, commission, total,
+    seller_id, buyer_id, subtotal, shipping, commission, total,
     shipping_method, shipping_address, status
-  )
-  SELECT
-    p.id, p.seller, auth.uid(), p.price, v_shipping, v_commission, v_total,
+  ) VALUES (
+    v_seller_id, auth.uid(), v_subtotal, v_shipping, v_commission, v_total,
     p_shipping_method, p_shipping_address, 'PENDING'
+  ) RETURNING id INTO v_order_id;
+
+  -- Create order items (1 per product)
+  INSERT INTO order_items(order_id, product_id, price)
+  SELECT v_order_id, p.id, p.price
   FROM products p
-  WHERE p.id = ANY(p_product_ids)
-  RETURNING id INTO v_order_id;
+  WHERE p.id = ANY(p_product_ids);
 
   RETURN jsonb_build_object(
     'order_id', v_order_id,
+    'item_count', array_length(p_product_ids, 1),
     'subtotal', v_subtotal,
     'shipping', v_shipping,
     'commission', v_commission,
@@ -319,16 +329,21 @@ $$;
 -- ============================================================================
 -- 5. ORDERS — purchase transactions (10 states)
 -- ============================================================================
+-- Commission model: commission is paid by SELLER (deducted from their earnings)
+-- Buyer pays: subtotal + shipping
+-- Seller receives: subtotal - commission
+-- Platform keeps: commission
+-- Example: 10€ card + 2.50€ shipping → buyer pays 12.50€, seller gets 9.20€ (8% commission)
+-- Premium sellers: 5% commission instead of 8%
 CREATE TABLE IF NOT EXISTS orders (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
   seller_id UUID NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
   buyer_id UUID NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
-  price NUMERIC(10,2) NOT NULL CHECK (price >= 0),
+  subtotal NUMERIC(10,2) NOT NULL CHECK (subtotal >= 0),
   shipping NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (shipping >= 0),
   commission NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (commission >= 0),
   total NUMERIC(10,2) NOT NULL CHECK (total > 0),
-  shipping_method TEXT NOT NULL,
+  shipping_method TEXT NOT NULL CHECK (shipping_method IN ('standard', 'tracked')),
   tracking_number TEXT,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
     status IN ('PENDING','PAYMENT_PROCESSING','PAID','PREPARING','SHIPPED','DELIVERED','COMPLETED','CANCELLED','REFUNDED','DISPUTED')
@@ -345,6 +360,17 @@ CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_seller ON orders(seller_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 
+-- Order items: individual products within an order
+CREATE TABLE IF NOT EXISTS order_items (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  price NUMERIC(10,2) NOT NULL CHECK (price >= 0),
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_order_items_product ON order_items(product_id);
+
 -- Order state machine: validate transitions + block immutable fields
 CREATE OR REPLACE FUNCTION validate_order_transition()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -352,10 +378,9 @@ AS $$
 DECLARE allowed BOOLEAN := false;
 BEGIN
   -- Block changes to immutable fields
-  IF OLD.product_id IS DISTINCT FROM NEW.product_id THEN RAISE EXCEPTION 'Cannot change product_id'; END IF;
   IF OLD.seller_id IS DISTINCT FROM NEW.seller_id THEN RAISE EXCEPTION 'Cannot change seller_id'; END IF;
   IF OLD.buyer_id IS DISTINCT FROM NEW.buyer_id THEN RAISE EXCEPTION 'Cannot change buyer_id'; END IF;
-  IF OLD.price IS DISTINCT FROM NEW.price THEN RAISE EXCEPTION 'Cannot change price'; END IF;
+  IF OLD.subtotal IS DISTINCT FROM NEW.subtotal THEN RAISE EXCEPTION 'Cannot change subtotal'; END IF;
   IF OLD.shipping IS DISTINCT FROM NEW.shipping THEN RAISE EXCEPTION 'Cannot change shipping'; END IF;
   IF OLD.commission IS DISTINCT FROM NEW.commission THEN RAISE EXCEPTION 'Cannot change commission'; END IF;
   IF OLD.total IS DISTINCT FROM NEW.total THEN RAISE EXCEPTION 'Cannot change total'; END IF;
@@ -730,6 +755,17 @@ CREATE POLICY "orders_select_participant" ON orders FOR SELECT USING (auth.uid()
 -- Server-side calculates price, shipping, commission — client never sends these
 DROP POLICY IF EXISTS "orders_update_participant" ON orders;
 CREATE POLICY "orders_update_participant" ON orders FOR UPDATE USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
+
+ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "order_items_select_participant" ON order_items;
+CREATE POLICY "order_items_select_participant" ON order_items FOR SELECT USING (
+  EXISTS (
+    SELECT 1 FROM orders o
+    WHERE o.id = order_items.order_id
+      AND (auth.uid() = o.buyer_id OR auth.uid() = o.seller_id)
+  )
+);
+-- NO INSERT/UPDATE/DELETE: order_items created via create_checkout_order() RPC only
 
 ALTER TABLE collections ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "collections_owner_all" ON collections;
