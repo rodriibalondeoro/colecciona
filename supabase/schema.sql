@@ -321,6 +321,64 @@ BEGIN
 END;
 $$;
 
+-- Cancel order: atomic ORDER → CANCELLED + PRODUCTS → ACTIVE
+-- Buyer can cancel before shipment; seller can cancel before payment
+CREATE OR REPLACE FUNCTION cancel_order(p_order_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+  v_product_ids UUID[];
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+
+  -- Lock order
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Only buyer or seller can cancel
+  IF auth.uid() <> v_order.buyer_id AND auth.uid() <> v_order.seller_id THEN
+    RAISE EXCEPTION 'You are not a participant in this order';
+  END IF;
+
+  -- Cancellable states depend on role
+  IF auth.uid() = v_order.buyer_id THEN
+    -- Buyer can cancel before shipped
+    IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING','PAID','PREPARING') THEN
+      RAISE EXCEPTION 'Buyer cannot cancel order in status %', v_order.status;
+    END IF;
+  ELSIF auth.uid() = v_order.seller_id THEN
+    -- Seller can only cancel before payment (PENDING or PAYMENT_PROCESSING)
+    IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING') THEN
+      RAISE EXCEPTION 'Seller cannot cancel order in status %', v_order.status;
+    END IF;
+  END IF;
+
+  -- Collect product IDs
+  SELECT array_agg(product_id) INTO v_product_ids
+  FROM order_items WHERE order_id = p_order_id;
+
+  -- Mark order as CANCELLED
+  UPDATE orders SET status = 'CANCELLED' WHERE id = p_order_id;
+
+  -- Release products back to ACTIVE
+  IF v_product_ids IS NOT NULL AND array_length(v_product_ids, 1) > 0 THEN
+    UPDATE products
+    SET status = 'ACTIVE',
+        reserved_by = NULL,
+        reserved_until = NULL
+    WHERE id = ANY(v_product_ids) AND status = 'RESERVED';
+  END IF;
+
+  RETURN jsonb_build_object(
+    'order_id', p_order_id,
+    'status', 'CANCELLED',
+    'products_released', COALESCE(array_length(v_product_ids, 1), 0)
+  );
+END;
+$$;
+
 -- Atomic checkout: validate prices server-side, create order + order_items
 CREATE OR REPLACE FUNCTION create_checkout_order(
   p_product_ids UUID[],
@@ -1251,3 +1309,7 @@ REVOKE ALL ON FUNCTION confirm_order_payment(UUID) FROM PUBLIC;
 -- cleanup_expired_reservations: service_role/cron only
 REVOKE ALL ON FUNCTION cleanup_expired_reservations() FROM PUBLIC;
 -- No GRANT to authenticated: only service_role or pg_cron can call this
+
+-- cancel_order: authenticated participant (buyer or seller)
+REVOKE ALL ON FUNCTION cancel_order(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cancel_order(UUID) TO authenticated;
