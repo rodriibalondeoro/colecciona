@@ -342,6 +342,8 @@ DECLARE
   v_order_id UUID;
   v_commission_rate NUMERIC := 0.08;
   v_is_premium BOOLEAN;
+  v_requested_count INTEGER;
+  v_found_count INTEGER := 0;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
   IF array_length(p_product_ids, 1) IS NULL THEN RAISE EXCEPTION 'No products provided'; END IF;
@@ -350,17 +352,22 @@ BEGIN
   SELECT array_agg(DISTINCT id) INTO p_product_ids
   FROM unnest(p_product_ids) AS ids(id);
 
+  v_requested_count := array_length(p_product_ids, 1);
+
   -- Validate shipping method
   IF p_shipping_method NOT IN ('standard', 'tracked') THEN
     RAISE EXCEPTION 'Invalid shipping method: %. Must be standard or tracked', p_shipping_method;
   END IF;
 
-  -- Validate all products exist, are RESERVED by this buyer, same seller
+  -- Lock and validate all products (FOR UPDATE prevents race conditions)
   FOR v_product IN
     SELECT p.id, p.price, p.seller, p.reserved_by, p.reserved_until, p.status
     FROM products p
     JOIN unnest(p_product_ids) AS ids(id) ON p.id = ids.id
+    FOR UPDATE OF p
   LOOP
+    v_found_count := v_found_count + 1;
+
     IF v_product.reserved_by <> auth.uid() THEN
       RAISE EXCEPTION 'Product % is not reserved by you', v_product.id;
     END IF;
@@ -384,6 +391,11 @@ BEGIN
 
     v_subtotal := v_subtotal + v_product.price;
   END LOOP;
+
+  -- Verify ALL requested products were found
+  IF v_found_count <> v_requested_count THEN
+    RAISE EXCEPTION 'Only % of % requested products exist or are available', v_found_count, v_requested_count;
+  END IF;
 
   -- Check if buyer is premium (reduced commission for seller)
   SELECT EXISTS(
