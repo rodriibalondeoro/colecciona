@@ -261,15 +261,26 @@ AS $$
 DECLARE
   v_order RECORD;
   v_product_ids UUID[];
+  v_expected_count INTEGER;
+  v_sold_count INTEGER;
 BEGIN
   -- Only service_role (Stripe webhook) can call this
   IF auth.uid() IS NOT NULL THEN
     RAISE EXCEPTION 'Only the system can confirm payment';
   END IF;
 
-  -- Load order
-  SELECT * INTO v_order FROM orders WHERE id = p_order_id;
+  -- Lock order row to prevent concurrent processing (e.g. duplicate Stripe events)
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Idempotency: if already PAID, return success without changes
+  IF v_order.status = 'PAID' THEN
+    RETURN jsonb_build_object(
+      'order_id', p_order_id,
+      'status', 'PAID',
+      'message', 'Already confirmed'
+    );
+  END IF;
 
   -- Must be in PAYMENT_PROCESSING (Stripe intent created, awaiting confirmation)
   IF v_order.status <> 'PAYMENT_PROCESSING' THEN
@@ -284,6 +295,8 @@ BEGIN
     RAISE EXCEPTION 'Order % has no items', p_order_id;
   END IF;
 
+  v_expected_count := array_length(v_product_ids, 1);
+
   -- Mark order as PAID
   UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = p_order_id;
 
@@ -295,10 +308,17 @@ BEGIN
       reserved_until = NULL
   WHERE id = ANY(v_product_ids) AND status = 'RESERVED';
 
+  GET DIAGNOSTICS v_sold_count = ROW_COUNT;
+
+  -- Verify ALL products were actually RESERVED and updated
+  IF v_sold_count <> v_expected_count THEN
+    RAISE EXCEPTION 'Order %: expected % products sold, but only % were RESERVED. Inconsistent state.', p_order_id, v_expected_count, v_sold_count;
+  END IF;
+
   RETURN jsonb_build_object(
     'order_id', p_order_id,
     'status', 'PAID',
-    'products_sold', array_length(v_product_ids, 1)
+    'products_sold', v_sold_count
   );
 END;
 $$;
