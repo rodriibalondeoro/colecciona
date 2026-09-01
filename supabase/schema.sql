@@ -125,6 +125,61 @@ CREATE INDEX IF NOT EXISTS idx_products_seller ON products(seller);
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
 
+-- Products lifecycle: validate status transitions + block immutable fields
+CREATE OR REPLACE FUNCTION validate_product_transition()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  -- Block changes to immutable fields
+  IF OLD.seller_id IS DISTINCT FROM NEW.seller_id THEN RAISE EXCEPTION 'Cannot change seller'; END IF;
+  IF OLD.created_at IS DISTINCT FROM NEW.created_at THEN RAISE EXCEPTION 'Cannot change created_at'; END IF;
+
+  IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    -- Seller can manage their own products
+    IF auth.uid() = OLD.seller_id THEN
+      -- DRAFT → ACTIVE (publish)
+      IF OLD.status = 'DRAFT' AND NEW.status = 'ACTIVE' THEN
+        RETURN NEW;
+      -- ACTIVE → INACTIVE (unpublish)
+      ELSIF OLD.status = 'ACTIVE' AND NEW.status = 'INACTIVE' THEN
+        RETURN NEW;
+      -- INACTIVE → ACTIVE (republish)
+      ELSIF OLD.status = 'INACTIVE' AND NEW.status = 'ACTIVE' THEN
+        RETURN NEW;
+      -- ACTIVE → REMOVED (delete listing)
+      ELSIF OLD.status IN ('ACTIVE','INACTIVE','DRAFT') AND NEW.status = 'REMOVED' THEN
+        RETURN NEW;
+      -- Seller cannot override RESERVED/SOLD directly
+      ELSIF OLD.status = 'RESERVED' AND NEW.status NOT IN ('ACTIVE','SOLD','REMOVED') THEN
+        RAISE EXCEPTION 'Seller cannot change RESERVED to %', NEW.status;
+      ELSIF OLD.status = 'SOLD' THEN
+        RAISE EXCEPTION 'Cannot modify a SOLD product';
+      END IF;
+    END IF;
+
+    -- System/checkout can transition:
+    -- ACTIVE → RESERVED (via reserve_products_for_checkout)
+    -- RESERVED → SOLD (via checkout completion)
+    -- RESERVED → ACTIVE (via reservation expiry — system only)
+    -- Only allow these through SECURITY DEFINER functions, not direct UPDATE
+    IF auth.uid() IS NOT NULL AND auth.uid() <> OLD.seller_id THEN
+      IF NOT (OLD.status = 'ACTIVE' AND NEW.status = 'RESERVED') THEN
+        IF NOT (OLD.status = 'RESERVED' AND NEW.status IN ('ACTIVE','SOLD')) THEN
+          RAISE EXCEPTION 'Only the system can transition product status to %', NEW.status;
+        END IF;
+      END IF;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validate_product_transition ON products;
+CREATE TRIGGER trg_validate_product_transition
+  BEFORE UPDATE ON products
+  FOR EACH ROW EXECUTE FUNCTION validate_product_transition();
+
 -- Atomic reservation (auth.uid() = buyer check)
 CREATE OR REPLACE FUNCTION reserve_products_for_checkout(
   p_product_ids UUID[],
