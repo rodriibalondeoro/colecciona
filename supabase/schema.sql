@@ -261,13 +261,18 @@ BEGIN
   IF OLD.seller_id IS DISTINCT FROM NEW.seller_id THEN RAISE EXCEPTION 'Cannot change seller_id'; END IF;
   IF OLD.buyer_id IS DISTINCT FROM NEW.buyer_id THEN RAISE EXCEPTION 'Cannot change buyer_id'; END IF;
   IF OLD.price IS DISTINCT FROM NEW.price THEN RAISE EXCEPTION 'Cannot change price'; END IF;
+  IF OLD.shipping IS DISTINCT FROM NEW.shipping THEN RAISE EXCEPTION 'Cannot change shipping'; END IF;
   IF OLD.commission IS DISTINCT FROM NEW.commission THEN RAISE EXCEPTION 'Cannot change commission'; END IF;
   IF OLD.total IS DISTINCT FROM NEW.total THEN RAISE EXCEPTION 'Cannot change total'; END IF;
+  IF OLD.shipping_method IS DISTINCT FROM NEW.shipping_method THEN RAISE EXCEPTION 'Cannot change shipping_method'; END IF;
+  IF OLD.shipping_address IS DISTINCT FROM NEW.shipping_address THEN RAISE EXCEPTION 'Cannot change shipping_address'; END IF;
+  IF OLD.payment_intent_id IS DISTINCT FROM NEW.payment_intent_id THEN RAISE EXCEPTION 'Cannot change payment_intent_id'; END IF;
 
   IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
     allowed := CASE
-      -- Payment flow (system/Stripe webhook)
-      WHEN OLD.status = 'PENDING' AND NEW.status = 'PAYMENT_PROCESSING' THEN true
+      -- Payment flow (buyer initiates, Stripe/webhook confirms)
+      WHEN OLD.status = 'PENDING' AND NEW.status = 'PAYMENT_PROCESSING'
+        AND auth.uid() = OLD.buyer_id THEN true
       WHEN OLD.status = 'PAYMENT_PROCESSING' AND NEW.status = 'PAID' THEN true
 
       -- Seller prepares
@@ -969,3 +974,13 @@ DROP POLICY IF EXISTS "card_images_delete_auth" ON storage.objects;
 CREATE POLICY "card_images_delete_auth" ON storage.objects
   FOR DELETE TO authenticated
   USING (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ============================================================================
+-- SECURITY: Restrict function access
+-- ============================================================================
+
+REVOKE ALL ON FUNCTION create_review(UUID, INTEGER, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION create_review(UUID, INTEGER, TEXT) TO authenticated;
+
+REVOKE ALL ON FUNCTION reserve_products_for_checkout(UUID[], UUID, TIMESTAMPTZ) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION reserve_products_for_checkout(UUID[], UUID, TIMESTAMPTZ) TO authenticated;
