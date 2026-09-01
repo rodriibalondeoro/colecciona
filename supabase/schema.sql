@@ -273,6 +273,10 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
   IF array_length(p_product_ids, 1) IS NULL THEN RAISE EXCEPTION 'No products provided'; END IF;
 
+  -- Deduplicate product IDs to prevent double-counting
+  SELECT array_agg(DISTINCT id) INTO p_product_ids
+  FROM unnest(p_product_ids) AS ids(id);
+
   -- Validate shipping method
   IF p_shipping_method NOT IN ('standard', 'tracked') THEN
     RAISE EXCEPTION 'Invalid shipping method: %. Must be standard or tracked', p_shipping_method;
