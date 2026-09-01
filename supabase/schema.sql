@@ -322,7 +322,7 @@ END;
 $$;
 
 -- Cancel order: atomic ORDER → CANCELLED + PRODUCTS → ACTIVE
--- Buyer can cancel before shipment; seller can cancel before payment
+-- Both buyer and seller can cancel only before payment (PENDING/PAYMENT_PROCESSING)
 CREATE OR REPLACE FUNCTION cancel_order(p_order_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -330,6 +330,8 @@ AS $$
 DECLARE
   v_order RECORD;
   v_product_ids UUID[];
+  v_expected_count INTEGER;
+  v_released_count INTEGER;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
 
@@ -344,36 +346,39 @@ BEGIN
 
   -- Cancellable states: only before payment (PENDING or PAYMENT_PROCESSING)
   -- PAID/PREPARING orders require refund via backend (service_role)
-  IF auth.uid() = v_order.buyer_id THEN
-    IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING') THEN
-      RAISE EXCEPTION 'Buyer cannot cancel order in status %. Use refund for paid orders.', v_order.status;
-    END IF;
-  ELSIF auth.uid() = v_order.seller_id THEN
-    IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING') THEN
-      RAISE EXCEPTION 'Seller cannot cancel order in status %. Use refund for paid orders.', v_order.status;
-    END IF;
+  IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING') THEN
+    RAISE EXCEPTION 'Cannot cancel order in status %. Use refund for paid orders.', v_order.status;
   END IF;
 
   -- Collect product IDs
   SELECT array_agg(product_id) INTO v_product_ids
   FROM order_items WHERE order_id = p_order_id;
 
+  v_expected_count := COALESCE(array_length(v_product_ids, 1), 0);
+
   -- Mark order as CANCELLED
   UPDATE orders SET status = 'CANCELLED' WHERE id = p_order_id;
 
   -- Release products back to ACTIVE
-  IF v_product_ids IS NOT NULL AND array_length(v_product_ids, 1) > 0 THEN
+  IF v_expected_count > 0 THEN
     UPDATE products
     SET status = 'ACTIVE',
         reserved_by = NULL,
         reserved_until = NULL
     WHERE id = ANY(v_product_ids) AND status = 'RESERVED';
+
+    GET DIAGNOSTICS v_released_count = ROW_COUNT;
+
+    -- Verify all products were released
+    IF v_released_count <> v_expected_count THEN
+      RAISE EXCEPTION 'Expected % products released, but only % were. Inconsistent state.', v_expected_count, v_released_count;
+    END IF;
   END IF;
 
   RETURN jsonb_build_object(
     'order_id', p_order_id,
     'status', 'CANCELLED',
-    'products_released', COALESCE(array_length(v_product_ids, 1), 0)
+    'products_released', v_expected_count
   );
 END;
 $$;
