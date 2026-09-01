@@ -732,3 +732,91 @@ CREATE POLICY "user_private_update_own" ON user_private
 DROP POLICY IF EXISTS "user_private_insert_own" ON user_private;
 CREATE POLICY "user_private_insert_own" ON user_private
   FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- ============================================================================
+-- 11. REVIEWS: Allow both buyer and seller to review
+-- ============================================================================
+
+-- Drop old UNIQUE(order_id) — only one review per order total
+ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_order_id_key;
+-- New: both parties can review, but each only once per order
+DO $$ BEGIN
+  ALTER TABLE reviews ADD CONSTRAINT reviews_order_reviewer_unique UNIQUE (order_id, reviewer_id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ============================================================================
+-- 12. TRADE_PROPOSAL_ITEMS: Validate side matches participant role
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION validate_trade_proposal_item_quantity()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_item RECORD;
+  v_proposal RECORD;
+BEGIN
+  SELECT * INTO v_item FROM collection_items WHERE id = NEW.collection_item_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Collection item not found';
+  END IF;
+  IF v_item.user_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'This card does not belong to you';
+  END IF;
+  IF NEW.quantity <= 0 THEN
+    RAISE EXCEPTION 'Quantity must be at least 1';
+  END IF;
+  IF NEW.quantity > v_item.duplicate_quantity THEN
+    RAISE EXCEPTION 'Quantity (%) exceeds available duplicates (%)',
+      NEW.quantity, v_item.duplicate_quantity;
+  END IF;
+
+  -- Validate side matches actual participant role
+  SELECT * INTO v_proposal FROM trade_proposals WHERE id = NEW.proposal_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Trade proposal not found';
+  END IF;
+  IF NEW.side = 'proposer' AND v_proposal.proposer_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'Side=proposer but user is not the proposer';
+  END IF;
+  IF NEW.side = 'receiver' AND v_proposal.receiver_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'Side=receiver but user is not the receiver';
+  END IF;
+  IF v_proposal.proposer_id <> NEW.user_id AND v_proposal.receiver_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'User is not a participant of this proposal';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- ============================================================================
+-- 13. WALLET: Remove INSERT policy, add wallet_transactions table
+-- ============================================================================
+
+-- Remove user INSERT on wallet (created by trigger only)
+DROP POLICY IF EXISTS "wallet_insert_own" ON wallet;
+
+-- Wallet transactions table
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('SALE', 'COMMISSION', 'REFUND', 'WITHDRAWAL', 'DEPOSIT', 'ADJUSTMENT')),
+  amount NUMERIC(10,2) NOT NULL,
+  balance_before NUMERIC(10,2) NOT NULL,
+  balance_after NUMERIC(10,2) NOT NULL,
+  reference_id UUID,
+  reference_type TEXT,
+  description TEXT,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user ON wallet_transactions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wallet_transactions_type ON wallet_transactions(type);
+
+ALTER TABLE wallet_transactions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "wallet_tx_select_own" ON wallet_transactions;
+CREATE POLICY "wallet_tx_select_own" ON wallet_transactions
+  FOR SELECT USING (auth.uid() = user_id);

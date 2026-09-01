@@ -421,7 +421,7 @@ CREATE TABLE IF NOT EXISTS reviews (
   rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
   comment TEXT,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
-  UNIQUE(order_id)
+  UNIQUE(order_id, reviewer_id)
 );
 
 -- ============================================================================
@@ -479,6 +479,25 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read);
 
 -- ============================================================================
+-- 16. WALLET_TRANSACTIONS — audit trail for wallet balance changes
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS wallet_transactions (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('SALE', 'COMMISSION', 'REFUND', 'WITHDRAWAL', 'DEPOSIT', 'ADJUSTMENT')),
+  amount NUMERIC(10,2) NOT NULL,
+  balance_before NUMERIC(10,2) NOT NULL,
+  balance_after NUMERIC(10,2) NOT NULL,
+  reference_id UUID,
+  reference_type TEXT,
+  description TEXT,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user ON wallet_transactions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wallet_transactions_type ON wallet_transactions(type);
+
+-- ============================================================================
 -- ROW LEVEL SECURITY
 -- ============================================================================
 
@@ -503,13 +522,11 @@ CREATE POLICY "user_private_update_own" ON user_private FOR UPDATE USING (auth.u
 DROP POLICY IF EXISTS "user_private_insert_own" ON user_private;
 CREATE POLICY "user_private_insert_own" ON user_private FOR INSERT WITH CHECK (auth.uid() = user_id);
 
--- WALLET: owner SELECT only, no direct UPDATE (service_role only)
+-- WALLET: owner SELECT only, no direct INSERT/UPDATE (created/managed by triggers + service_role)
 ALTER TABLE wallet ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "wallet_owner_all" ON wallet;
 DROP POLICY IF EXISTS "wallet_select_own" ON wallet;
 CREATE POLICY "wallet_select_own" ON wallet FOR SELECT USING (auth.uid() = user_id);
-DROP POLICY IF EXISTS "wallet_insert_own" ON wallet;
-CREATE POLICY "wallet_insert_own" ON wallet FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 -- PRODUCTS: public read, seller write
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
@@ -666,6 +683,11 @@ CREATE POLICY "push_delete_own" ON push_subscriptions FOR DELETE USING (auth.uid
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "notifications_owner_all" ON notifications;
 CREATE POLICY "notifications_owner_all" ON notifications FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+-- WALLET_TRANSACTIONS: owner read only (inserts via service_role only)
+ALTER TABLE wallet_transactions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "wallet_tx_select_own" ON wallet_transactions;
+CREATE POLICY "wallet_tx_select_own" ON wallet_transactions FOR SELECT USING (auth.uid() = user_id);
 
 -- ============================================================================
 -- AUTO-CREATE PROFILE + PRIVATE + WALLET ON REGISTRATION
@@ -856,7 +878,7 @@ CREATE TRIGGER trg_validate_trade_proposal_transition
   BEFORE UPDATE ON trade_proposals
   FOR EACH ROW EXECUTE FUNCTION validate_trade_proposal_transition();
 
--- Trade proposal items: validate quantity <= available
+-- Trade proposal items: validate quantity, ownership, and participant role
 CREATE OR REPLACE FUNCTION validate_trade_proposal_item_quantity()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -865,7 +887,9 @@ SET search_path = public
 AS $$
 DECLARE
   v_item RECORD;
+  v_proposal RECORD;
 BEGIN
+  -- Validate collection item exists and belongs to user
   SELECT * INTO v_item FROM collection_items WHERE id = NEW.collection_item_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Collection item not found';
@@ -873,23 +897,34 @@ BEGIN
   IF v_item.user_id <> NEW.user_id THEN
     RAISE EXCEPTION 'This card does not belong to you';
   END IF;
+
+  -- Validate quantity
   IF NEW.quantity <= 0 THEN
     RAISE EXCEPTION 'Quantity must be at least 1';
   END IF;
-  -- For proposer side: quantity must be available for trade/sale
-  IF NEW.side = 'proposer' THEN
-    IF NEW.quantity > v_item.duplicate_quantity THEN
-      RAISE EXCEPTION 'Quantity (%) exceeds available duplicates (%)',
-        NEW.quantity, v_item.duplicate_quantity;
-    END IF;
+  IF NEW.quantity > v_item.duplicate_quantity THEN
+    RAISE EXCEPTION 'Quantity (%) exceeds available duplicates (%)',
+      NEW.quantity, v_item.duplicate_quantity;
   END IF;
-  -- For receiver side: same check (they need duplicates to offer)
-  IF NEW.side = 'receiver' THEN
-    IF NEW.quantity > v_item.duplicate_quantity THEN
-      RAISE EXCEPTION 'Quantity (%) exceeds available duplicates (%)',
-        NEW.quantity, v_item.duplicate_quantity;
-    END IF;
+
+  -- Validate side matches actual participant role
+  SELECT * INTO v_proposal FROM trade_proposals WHERE id = NEW.proposal_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Trade proposal not found';
   END IF;
+
+  IF NEW.side = 'proposer' AND v_proposal.proposer_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'Side=proposer but user is not the proposer';
+  END IF;
+  IF NEW.side = 'receiver' AND v_proposal.receiver_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'Side=receiver but user is not the receiver';
+  END IF;
+
+  -- User must be a participant of the proposal
+  IF v_proposal.proposer_id <> NEW.user_id AND v_proposal.receiver_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'User is not a participant of this proposal';
+  END IF;
+
   RETURN NEW;
 END;
 $$;
