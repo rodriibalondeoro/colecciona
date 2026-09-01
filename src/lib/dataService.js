@@ -2,7 +2,7 @@
 // Si Supabase está configurado escribe a través de las API routes del servidor
 // (que sí pueden alcanzar Supabase). Si no, usa localStorage.
 
-import { supabase } from "./supabase";
+import { supabase, isConfigured } from "./supabase";
 
 async function getAuthToken() {
   if (!supabase) return null;
@@ -52,11 +52,9 @@ export function writeDB(db) {
 }
 
 /**
- * Registra un usuario. Usa API route (/api/register) para llegar a Supabase
- * desde el servidor.
- * - Si la API responde con un error de negocio (p.ej. teléfono duplicado),
- *   se lanza el error para que la UI lo muestre.
- * - Solo si la API no está disponible (red/offline) se persiste en localStorage.
+ * Registra un usuario. Usa API route (/api/register) para llegar a Supabase.
+ * En producción: falla si el servidor no responde (sin fallback local).
+ * En modo demo (Supabase no configurado): persiste en localStorage.
  */
 export async function registerUser(user) {
   let res;
@@ -80,15 +78,19 @@ export async function registerUser(user) {
     if (res.ok && json.user) return json.user;
     throw new Error(json.error || `HTTP ${res.status}`);
   } catch (err) {
-    // Si fue un fallo de red (no una respuesta de negocio), caemos a localStorage.
     if (res && res.status === 409) {
       throw new Error(err.message);
     }
-    if (!res || (err && err.name === "AbortError")) {
-      console.warn("[DataService] registerUser via API no disponible:", err?.message);
-    } else {
-      throw new Error(err.message);
+    // In production: fail hard — no local registration
+    if (isConfigured) {
+      throw new Error(
+        err.name === "AbortError"
+          ? "Servidor no disponible. Intenta de nuevo."
+          : err.message || "Error al registrar usuario"
+      );
     }
+    // Demo mode only: persist locally
+    console.warn("[DataService] Demo mode: registrando localmente");
   }
 
   const db = readDB();
@@ -187,11 +189,11 @@ export async function deleteProduct(productId) {
   }
 }
 
-/** Persiste un mensaje de chat (via API route o en el store local). */
+/** Persiste un mensaje de chat. En producción: falla si el servidor no responde. */
 export async function persistMessage(message) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
     const res = await fetch("/api/message", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await authHeaders()) },
@@ -200,12 +202,22 @@ export async function persistMessage(message) {
     });
     clearTimeout(timer);
     if (res.ok) return;
+    throw new Error(`HTTP ${res.status}`);
   } catch (err) {
-    console.warn("[DataService] persistMessage via API no disponible:", err?.message);
+    clearTimeout(timer);
+    if (isConfigured) {
+      throw new Error(
+        err.name === "AbortError"
+          ? "Servidor no disponible. Mensaje no enviado."
+          : err.message || "Error al enviar mensaje"
+      );
+    }
+    // Demo mode only
+    console.warn("[DataService] Demo mode: guardando mensaje localmente");
+    const db = readDB();
+    db.messages.push({ ...message, id: `m${Date.now()}` });
+    writeDB(db);
   }
-  const db = readDB();
-  db.messages.push({ ...message, id: `m${Date.now()}` });
-  writeDB(db);
 }
 
 /** Crea una notificación para el destinatario (no bloqueante). */
