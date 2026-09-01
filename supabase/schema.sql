@@ -1234,14 +1234,22 @@ CREATE POLICY "card_images_delete_auth" ON storage.objects
 -- SECURITY: Restrict function access
 -- ============================================================================
 
+-- create_review: any authenticated participant of a completed order
 REVOKE ALL ON FUNCTION create_review(UUID, INTEGER, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION create_review(UUID, INTEGER, TEXT) TO authenticated;
 
+-- reserve_products_for_checkout: authenticated buyer only
 REVOKE ALL ON FUNCTION reserve_products_for_checkout(UUID[], UUID, TIMESTAMPTZ) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION reserve_products_for_checkout(UUID[], UUID, TIMESTAMPTZ) TO authenticated;
 
+-- create_checkout_order: authenticated buyer only
 REVOKE ALL ON FUNCTION create_checkout_order(UUID[], TEXT, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION create_checkout_order(UUID[], TEXT, TEXT) TO authenticated;
 
+-- confirm_order_payment: service_role only (Stripe webhook)
 REVOKE ALL ON FUNCTION confirm_order_payment(UUID) FROM PUBLIC;
--- No GRANT to authenticated: only service_role (Stripe webhook) can call this
+-- No GRANT to authenticated: only service_role can call this
+
+-- cleanup_expired_reservations: service_role/cron only
+REVOKE ALL ON FUNCTION cleanup_expired_reservations() FROM PUBLIC;
+-- No GRANT to authenticated: only service_role or pg_cron can call this
