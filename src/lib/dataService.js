@@ -166,30 +166,25 @@ export function getPersistedProducts() {
   return readDB().products || [];
 }
 
-/** Elimina un producto de Supabase y del store local. */
+/** Elimina un producto de Supabase. En producción, falla si el servidor no responde. */
 export async function deleteProduct(productId) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
     const res = await fetch(`/api/publish/${productId}`, {
       method: "DELETE",
       headers: { ...(await authHeaders()) },
       signal: controller.signal,
     });
     clearTimeout(timer);
-    if (res.ok) {
-      const db = readDB();
-      db.products = db.products.filter((p) => p.id !== productId);
-      writeDB(db);
-      return true;
-    }
+    if (res.ok) return true;
+    throw new Error(`HTTP ${res.status}`);
   } catch (err) {
-    console.warn("[DataService] deleteProduct via API no disponible:", err?.message);
+    clearTimeout(timer);
+    throw new Error(err.name === "AbortError"
+      ? "Servidor no disponible. Intenta de nuevo."
+      : err.message || "Error al eliminar producto");
   }
-  const db = readDB();
-  db.products = db.products.filter((p) => p.id !== productId);
-  writeDB(db);
-  return true;
 }
 
 /** Persiste un mensaje de chat (via API route o en el store local). */
@@ -221,7 +216,7 @@ export async function notifyUser({ recipientId, type, title, body, link }) {
     const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
     await fetch("/api/notifications", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
       body: JSON.stringify({ recipientId, type, title, body, link }),
       signal: controller.signal,
     });
@@ -284,7 +279,7 @@ export async function sendPush({ recipientId, title, body, link }) {
     const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
     await fetch("/api/push/send", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
       body: JSON.stringify({ recipientId, title, body, link }),
       signal: controller.signal,
     });
@@ -356,21 +351,16 @@ export async function updateProfile(updates) {
   } catch { return null; }
 }
 
-export async function resetPassword(email, newPassword) {
-  const db = readDB();
-  for (const u of db.users) {
-    if (u.email && u.email.toLowerCase() === String(email).toLowerCase()) {
-      u.password = newPassword;
-    }
-  }
-  writeDB(db);
-
-  // Respaldo local para cuentas que no estén en la BD (usuarios demo)
-  try {
-    const map = JSON.parse(localStorage.getItem("colecciona_passwords") || "{}");
-    map[String(email).toLowerCase()] = newPassword;
-    localStorage.setItem("colecciona_passwords", JSON.stringify(map));
-  } catch {}
+/**
+ * Reset password via Supabase Auth.
+ * Passwords are NEVER stored locally — managed exclusively by Supabase.
+ */
+export async function resetPassword(email) {
+  if (!supabase) throw new Error("Supabase no configurado. No se puede restablecer contraseña.");
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/reset-password`,
+  });
+  if (error) throw new Error(error.message);
   return true;
 }
 

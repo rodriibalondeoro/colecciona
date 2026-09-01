@@ -34,7 +34,7 @@ export function requireSupabase() {
     if (process.env.NODE_ENV === "production") {
       throw new Error(
         "🚨 [Colecciona] Supabase no configurado. " +
-        "Configura NEXT_PUBLIC_SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY."
+        "Configura NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY."
       );
     }
     return null;
