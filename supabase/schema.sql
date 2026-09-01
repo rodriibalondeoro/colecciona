@@ -342,16 +342,15 @@ BEGIN
     RAISE EXCEPTION 'You are not a participant in this order';
   END IF;
 
-  -- Cancellable states depend on role
+  -- Cancellable states: only before payment (PENDING or PAYMENT_PROCESSING)
+  -- PAID/PREPARING orders require refund via backend (service_role)
   IF auth.uid() = v_order.buyer_id THEN
-    -- Buyer can cancel before shipped
-    IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING','PAID','PREPARING') THEN
-      RAISE EXCEPTION 'Buyer cannot cancel order in status %', v_order.status;
+    IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING') THEN
+      RAISE EXCEPTION 'Buyer cannot cancel order in status %. Use refund for paid orders.', v_order.status;
     END IF;
   ELSIF auth.uid() = v_order.seller_id THEN
-    -- Seller can only cancel before payment (PENDING or PAYMENT_PROCESSING)
     IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING') THEN
-      RAISE EXCEPTION 'Seller cannot cancel order in status %', v_order.status;
+      RAISE EXCEPTION 'Seller cannot cancel order in status %. Use refund for paid orders.', v_order.status;
     END IF;
   END IF;
 
