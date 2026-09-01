@@ -156,11 +156,13 @@ BEGIN
       -- ACTIVE → REMOVED (delete listing)
       ELSIF OLD.status IN ('ACTIVE','INACTIVE','DRAFT') AND NEW.status = 'REMOVED' THEN
         RETURN NEW;
-      -- Seller cannot override RESERVED/SOLD directly
-      ELSIF OLD.status = 'RESERVED' AND NEW.status NOT IN ('ACTIVE','SOLD','REMOVED') THEN
-        RAISE EXCEPTION 'Seller cannot change RESERVED to %', NEW.status;
-      ELSIF OLD.status = 'SOLD' THEN
-        RAISE EXCEPTION 'Cannot modify a SOLD product';
+      -- Seller can cancel reservation (RESERVED → ACTIVE)
+      ELSIF OLD.status = 'RESERVED' AND NEW.status = 'ACTIVE' THEN
+        RETURN NEW;
+      -- Seller CANNOT transition RESERVED → SOLD (only via confirm_order_payment)
+      -- Seller CANNOT modify SOLD products
+      ELSIF OLD.status IN ('RESERVED','SOLD') THEN
+        RAISE EXCEPTION 'Seller cannot change % to %. Use system functions.', OLD.status, NEW.status;
       END IF;
     END IF;
 
@@ -247,6 +249,57 @@ BEGIN
 
   GET DIAGNOSTICS released_count = ROW_COUNT;
   RETURN released_count;
+END;
+$$;
+
+-- Confirm order payment: atomic transition ORDER → PAID + PRODUCTS → SOLD
+-- Called by Stripe webhook (service_role only)
+CREATE OR REPLACE FUNCTION confirm_order_payment(p_order_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+  v_product_ids UUID[];
+BEGIN
+  -- Only service_role (Stripe webhook) can call this
+  IF auth.uid() IS NOT NULL THEN
+    RAISE EXCEPTION 'Only the system can confirm payment';
+  END IF;
+
+  -- Load order
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Must be in PAYMENT_PROCESSING (Stripe intent created, awaiting confirmation)
+  IF v_order.status <> 'PAYMENT_PROCESSING' THEN
+    RAISE EXCEPTION 'Order % is not in PAYMENT_PROCESSING status (current: %)', p_order_id, v_order.status;
+  END IF;
+
+  -- Collect product IDs from order_items
+  SELECT array_agg(product_id) INTO v_product_ids
+  FROM order_items WHERE order_id = p_order_id;
+
+  IF v_product_ids IS NULL OR array_length(v_product_ids, 1) = 0 THEN
+    RAISE EXCEPTION 'Order % has no items', p_order_id;
+  END IF;
+
+  -- Mark order as PAID
+  UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = p_order_id;
+
+  -- Mark all products as SOLD
+  UPDATE products
+  SET status = 'SOLD',
+      sold_at = now(),
+      reserved_by = NULL,
+      reserved_until = NULL
+  WHERE id = ANY(v_product_ids) AND status = 'RESERVED';
+
+  RETURN jsonb_build_object(
+    'order_id', p_order_id,
+    'status', 'PAID',
+    'products_sold', array_length(v_product_ids, 1)
+  );
 END;
 $$;
 
@@ -1157,3 +1210,6 @@ GRANT EXECUTE ON FUNCTION reserve_products_for_checkout(UUID[], UUID, TIMESTAMPT
 
 REVOKE ALL ON FUNCTION create_checkout_order(UUID[], TEXT, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION create_checkout_order(UUID[], TEXT, TEXT) TO authenticated;
+
+REVOKE ALL ON FUNCTION confirm_order_payment(UUID) FROM PUBLIC;
+-- No GRANT to authenticated: only service_role (Stripe webhook) can call this
