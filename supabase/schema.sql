@@ -156,9 +156,7 @@ BEGIN
       -- ACTIVE → REMOVED (delete listing)
       ELSIF OLD.status IN ('ACTIVE','INACTIVE','DRAFT') AND NEW.status = 'REMOVED' THEN
         RETURN NEW;
-      -- Seller can cancel reservation (RESERVED → ACTIVE)
-      ELSIF OLD.status = 'RESERVED' AND NEW.status = 'ACTIVE' THEN
-        RETURN NEW;
+      -- Seller CANNOT cancel RESERVED (only via expiry or buyer cancellation)
       -- Seller CANNOT transition RESERVED → SOLD (only via confirm_order_payment)
       -- Seller CANNOT modify SOLD products
       ELSIF OLD.status IN ('RESERVED','SOLD') THEN
