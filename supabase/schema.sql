@@ -206,10 +206,10 @@ BEGIN
   SELECT count(DISTINCT id) INTO expected_count FROM unnest(p_product_ids) AS ids(id);
   IF expected_count = 0 THEN RAISE EXCEPTION 'No products provided'; END IF;
 
-  -- Auto-release expired reservations before attempting new ones
+  -- Auto-release expired reservations for requested products only
   UPDATE products
   SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
-  WHERE status = 'RESERVED' AND reserved_until < now();
+  WHERE id = ANY(p_product_ids) AND status = 'RESERVED' AND reserved_until <= now();
 
   CREATE TEMPORARY TABLE reserved_rows ON COMMIT DROP AS
   WITH requested AS (
@@ -243,7 +243,7 @@ DECLARE
 BEGIN
   UPDATE products
   SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
-  WHERE status = 'RESERVED' AND reserved_until < now();
+  WHERE status = 'RESERVED' AND reserved_until <= now();
 
   GET DIAGNOSTICS released_count = ROW_COUNT;
   RETURN released_count;
