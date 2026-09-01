@@ -184,195 +184,80 @@ export function AppProvider({ children }) {
   }, [session]);
 
   // ─────────────────────────────────────────────────────────────
-  // Subscribe to realtime incoming messages
+  // Messages: load from server + realtime
   // ─────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!session?.id) return;
-
-    const unsub = subscribeToMessages(session.id, (msg) => {
-      setThreads((prev) => {
-        const thread = prev.find(
-          (t) =>
-            t.participants?.includes(msg.sender_id) &&
-            t.productId === msg.product_id
-        );
-        if (thread) {
-          return prev.map((t) =>
-            t.id === thread.id
-              ? {
-                  ...t,
-                  messages: [
-                    ...t.messages,
-                    { id: msg.id, from: msg.sender_id, text: msg.text, time: msg.created_at },
-                  ],
-                  lastMessage: msg.text,
-                  lastTime: new Date().toISOString(),
-                  unread: t.unread + 1,
-                }
-              : t
-          );
-        }
-        // Thread doesn't exist yet — create it
-        const newThread = {
-          id: `t${Date.now()}`,
-          productId: msg.product_id,
-          participants: [session.id, msg.sender_id],
-          partner: { id: msg.sender_id },
-          messages: [{ id: msg.id, from: msg.sender_id, text: msg.text, time: msg.created_at }],
-          lastMessage: msg.text,
-          lastTime: msg.created_at || new Date().toISOString(),
-          unread: 1,
-        };
-        return [...prev, newThread];
-      });
-    });
-
-    return () => unsub();
-  }, [session]);
-
-  // --- Hilos de mensajes persistentes y semillas para pruebas ---
+  // Load threads from server on mount
   useEffect(() => {
     if (!session?.id) {
       setThreads([]);
       return;
     }
-    const key = `colecciona_threads_${session.id}`;
-    let storedThreads = [];
-    try {
-      const stored = localStorage.getItem(key);
-      if (stored) {
-        storedThreads = JSON.parse(stored);
-      }
-    } catch (e) {
-      console.error("[AppContext] Error al leer hilos de localStorage:", e);
-    }
 
-    const username = (session.username || "").toLowerCase();
-    const email = (session.email || "").toLowerCase();
-    const isCuenta2 = username.includes("cuenta2") || email.includes("cuenta2");
-
-    if (storedThreads.length === 0 && (isCuenta2 || username === "cuenta2")) {
-      // Sembramos conversaciones de prueba detalladas
-      storedThreads = [
-        {
-          id: `th-u1-p1`,
-          partner: {
-            id: "u1",
-            name: "Carlos Ruiz Gómez",
-            username: "cruiz_tcg",
-            verified: true,
-          },
-          product: {
-            id: "p1",
-            title: "Charizard Holo 1ª Edición",
-            image: "/images/cards/fire-phoenix.png",
-            price: 150.00,
-          },
-          messages: [
-            { id: "m-init-1", from: "u1", text: "¡Hola! ¿Te interesa el Charizard? Sigue disponible.", time: "18:24" },
-            { id: "m-init-2", from: "me", text: "Hola, sí. ¿Haces envíos certificados?", time: "18:25" },
-            { id: "m-init-3", from: "u1", text: "Sí, claro, siempre envío protegido en toploader y con código de seguimiento.", time: "18:27" },
-          ],
-          lastMessage: "Sí, claro, siempre envío protegido en toploader y con código de seguimiento.",
-          lastTime: new Date(Date.now() - 3600000).toISOString(),
-          unread: 1,
-        },
-        {
-          id: `th-u6-p2`,
-          partner: {
-            id: "u6",
-            name: "Elena Costa Marín",
-            username: "elena_magic",
-            verified: true,
-          },
-          product: {
-            id: "p2",
-            title: "Aethelred The Celestial Dragon",
-            image: "/images/cards/dragon.png",
-            price: 95.50,
-          },
-          messages: [
-            { id: "m-init-4", from: "me", text: "Buenas, ¿el precio es negociable?", time: "17:10" },
-            { id: "m-init-5", from: "u6", text: "Hola. Podría dejarlo en 90€ si te quedas alguna otra carta de mi perfil.", time: "17:15" },
-          ],
-          lastMessage: "Hola. Podría dejarlo en 90€ si te quedas alguna otra carta de mi perfil.",
-          lastTime: new Date(Date.now() - 7200000).toISOString(),
-          unread: 0,
-        },
-        {
-          id: `th-u2-normal`,
-          partner: {
-            id: "u2",
-            name: "Lucía Fernández Ramos",
-            username: "lucia_cards",
-            verified: true,
-          },
-          product: null,
-          messages: [
-            { id: "m-init-6", from: "u2", text: "¡Hola! Vi que estabas buscando cromos de la colección de fútbol de 2024. Tengo bastantes repetidos.", time: "16:00" },
-            { id: "m-init-7", from: "me", text: "¡Hola! Sí, me faltan los de la última página. ¿Tienes la lista?", time: "16:05" },
-            { id: "m-init-8", from: "u2", text: "Sí, pásame tus faltas por aquí y te digo cuáles tengo.", time: "16:10" },
-          ],
-          lastMessage: "Sí, pásame tus faltas por aquí y te digo cuáles tengo.",
-          lastTime: new Date(Date.now() - 14400000).toISOString(),
-          unread: 1,
-        },
-        {
-          id: `th-u5-p6`,
-          partner: {
-            id: "u5",
-            name: "Alejandro Gómez Blanco",
-            username: "alex_tcg",
-            verified: true,
-          },
-          product: {
-            id: "p6",
-            title: "Ignis Blazing Phoenix Secret Rare",
-            image: "/images/cards/fire-phoenix.png",
-            price: 85.00,
-          },
-          messages: [
-            { id: "m-init-9", from: "u5", text: "Hola, ya he realizado el envío de la carta. Debería llegarte en 2 días.", time: "Ayer" },
-            { id: "m-init-10", from: "me", text: "Perfecto, muchas gracias. En cuanto llegue te aviso.", time: "Ayer" },
-          ],
-          lastMessage: "Perfecto, muchas gracias. En cuanto llegue te aviso.",
-          lastTime: new Date(Date.now() - 86400000).toISOString(),
-          unread: 0,
-        },
-        {
-          id: `th-u3-normal`,
-          partner: {
-            id: "u3",
-            name: "Miguel Ángel Torres",
-            username: "miguel_collector",
-            verified: false,
-          },
-          product: null,
-          messages: [
-            { id: "m-init-11", from: "me", text: "Hola Miguel, ¿sigues teniendo el álbum completo de Magic?", time: "Hace 2 días" },
-            { id: "m-init-12", from: "u3", text: "Hola! Sí, aún lo tengo guardado. Si te interesa te puedo pasar fotos detalladas.", time: "Hace 2 días" },
-          ],
-          lastMessage: "Hola! Sí, aún lo tengo guardado. Si te interesa te puedo pasar fotos detalladas.",
-          lastTime: new Date(Date.now() - 172800000).toISOString(),
-          unread: 0,
-        },
-      ];
+    const loadThreads = async () => {
       try {
-        localStorage.setItem(key, JSON.stringify(storedThreads));
-      } catch (e) {}
-    }
-
-    setThreads(storedThreads);
+        const token = session?.access_token;
+        if (!token) return;
+        const res = await fetch("/api/threads", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (data.threads) setThreads(data.threads);
+      } catch (err) {
+        console.warn("[AppContext] Error loading threads:", err);
+      }
+    };
+    loadThreads();
   }, [session]);
 
-  // Persistir hilos cuando cambian
+  // Subscribe to realtime incoming messages
   useEffect(() => {
     if (!session?.id) return;
-    const key = `colecciona_threads_${session.id}`;
-    try {
-      localStorage.setItem(key, JSON.stringify(threads));
-    } catch (e) {}
-  }, [threads, session]);
+
+    const unsub = subscribeToMessages(session.id, (msg) => {
+      // Ignore own messages (already added optimistically)
+      if (msg.sender_id === session.id) return;
+
+      setThreads((prev) => {
+        const partnerId = msg.sender_id;
+        const threadKey = `th-${partnerId}-${msg.product_id || "g"}`;
+
+        const thread = prev.find((t) => t.id === threadKey);
+
+        if (thread) {
+          // Deduplicate: skip if message already exists
+          if (thread.messages.some((m) => m.id === msg.id)) return prev;
+
+          return prev.map((t) =>
+            t.id === threadKey
+              ? {
+                  ...t,
+                  messages: [...t.messages, { id: msg.id, from: partnerId, text: msg.text, time: msg.created_at }],
+                  lastMessage: msg.text,
+                  lastTime: msg.created_at || new Date().toISOString(),
+                  unread: t.unread + 1,
+                }
+              : t
+          );
+        }
+
+        // Thread doesn't exist — create it
+        const newThread = {
+          id: threadKey,
+          partnerId,
+          productId: msg.product_id || null,
+          partner: { id: partnerId, name: "Usuario" },
+          product: null,
+          messages: [{ id: msg.id, from: partnerId, text: msg.text, time: msg.created_at }],
+          lastMessage: msg.text,
+          lastTime: msg.created_at || new Date().toISOString(),
+          unread: 1,
+        };
+        return [newThread, ...prev];
+      });
+    });
+
+    return () => unsub();
+  }, [session]);
 
   // ─────────────────────────────────────────────────────────────
   // Load favorites from server when session is available
@@ -657,7 +542,8 @@ export function AppProvider({ children }) {
   const startThread = useCallback((partner, product) => {
     const partnerId = partner?.id || partner?.userId;
     const productId = product?.id;
-    const threadId = `th-${partnerId}-${productId || 'g'}`;
+    if (!partnerId) return null;
+    const threadId = `th-${partnerId}-${productId || "g"}`;
 
     setThreads((prev) => {
       const exists = prev.find((t) => t.id === threadId);
@@ -665,21 +551,20 @@ export function AppProvider({ children }) {
       return [
         {
           id: threadId,
+          partnerId,
+          productId: productId || null,
           partner: {
             id: partnerId,
-            name: partner?.name || partner?.username || 'Vendedor',
+            name: partner?.name || partner?.username || "Vendedor",
             username: partner?.username,
             verified: partner?.verified,
           },
-          product: productId ? {
-            id: productId,
-            title: product?.title || 'Anuncio',
-            image: product?.image || '',
-            price: product?.price || 0,
-          } : null,
+          product: productId
+            ? { id: productId, title: product?.title || "Anuncio", image: product?.image || "", price: product?.price || 0 }
+            : null,
           messages: [],
-          lastMessage: '',
-          lastTime: '',
+          lastMessage: "",
+          lastTime: "",
           unread: 0,
         },
         ...prev,
@@ -693,8 +578,29 @@ export function AppProvider({ children }) {
   }, []);
 
   const sendMessage = useCallback((threadId, text) => {
-    const msgId = `m${Date.now()}`;
-    const timestamp = new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+    if (!text?.trim()) return;
+
+    // Find thread via functional state to avoid stale closure
+    let receiverId = null;
+    let productId = null;
+
+    setThreads((prev) => {
+      const thread = prev.find((t) => t.id === threadId);
+      if (!thread) return prev;
+      receiverId = thread.partnerId || thread.partner?.id;
+      productId = thread.productId || thread.product?.id || null;
+      return prev;
+    });
+
+    if (!receiverId) {
+      showToast("No se pudo enviar: receptor no encontrado", "error");
+      return;
+    }
+
+    const msgId = `m${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timestamp = new Date().toISOString();
+
+    // Optimistic add
     setThreads((prev) =>
       prev.map((t) =>
         t.id === threadId
@@ -702,43 +608,32 @@ export function AppProvider({ children }) {
               ...t,
               messages: [...t.messages, { id: msgId, from: "me", text, time: timestamp, status: "sending" }],
               lastMessage: text,
-              lastTime: new Date().toISOString(),
+              lastTime: timestamp,
               unread: 0,
             }
           : t
       )
     );
-    const thread = threads.find((t) => t.id === threadId);
-    const receiverId = thread?.partner?.id || thread?.participants?.find((p) => p !== "me") || "u1";
-    const productId = thread?.productId;
+
+    // Send to server
     persistMessage({
-      senderId: session?.id || "me",
+      senderId: session?.id,
       receiverId,
       productId,
       text,
-    }).then(() => {
-      if (session?.id && receiverId && receiverId !== "me") {
-        notifyUser({
-          recipientId: receiverId,
-          type: "message",
-          title: "Nuevo mensaje",
-          body: text,
-          link: `/messages?thread=${threadId}`,
-        });
-        sendPush({
-          recipientId: receiverId,
-          title: "Nuevo mensaje",
-          body: text,
-          link: `/messages?thread=${threadId}`,
-        });
-      }
+    }).then((result) => {
+      // Reconcile: replace optimistic message with server message
+      const serverId = result?.messageId;
+      const serverTime = result?.createdAt || timestamp;
       setThreads((prev) =>
         prev.map((t) =>
           t.id === threadId
             ? {
                 ...t,
                 messages: t.messages.map((m) =>
-                  m.id === msgId ? { ...m, status: "sent" } : m
+                  m.id === msgId
+                    ? { ...m, id: serverId || msgId, time: serverTime, status: "sent" }
+                    : m
                 ),
               }
             : t
@@ -759,7 +654,7 @@ export function AppProvider({ children }) {
       );
       showToast("Error al enviar mensaje", "error");
     });
-  }, [session, threads, showToast]);
+  }, [session, showToast]);
 
   // ─────────────────────────────────────────────────────────────
   // Orders helpers

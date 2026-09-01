@@ -11,7 +11,7 @@ export async function POST(req) {
     const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
     const rl = rateLimit(`message:${ip}`, { limit: 30, windowMs: 60000 });
     if (!rl.allowed) {
-      return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
 
     const { user, error: authError } = await verifyAuth(req);
@@ -25,19 +25,37 @@ export async function POST(req) {
     const supabase = createClient(url, key);
     const body = await req.json();
 
-    const { error } = await supabase.from("messages").insert({
-      sender_id: user.id,
-      receiver_id: body.receiverId,
-      product_id: body.productId || null,
-      text: body.text,
-    });
+    if (!body.receiverId || !body.text) {
+      return NextResponse.json({ error: "Faltan campos requeridos" }, { status: 400 });
+    }
+
+    // Insert message
+    const { data: message, error } = await supabase
+      .from("messages")
+      .insert({
+        sender_id: user.id,
+        receiver_id: body.receiverId,
+        product_id: body.productId || null,
+        text: body.text,
+      })
+      .select("id, created_at")
+      .single();
 
     if (error) {
-      console.error("[API /message] Error de Supabase:", error);
+      console.error("[API /message] Error:", error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true });
+    // Create notification for recipient (server-side, reliable)
+    await supabase.from("notifications").insert({
+      user_id: body.receiverId,
+      type: "message",
+      title: "Nuevo mensaje",
+      body: body.text.length > 100 ? body.text.substring(0, 100) + "…" : body.text,
+      link: `/messages`,
+    });
+
+    return NextResponse.json({ success: true, messageId: message.id, createdAt: message.created_at });
   } catch (err) {
     console.error("[API /message] Error interno:", err);
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });

@@ -192,7 +192,7 @@ export async function deleteProduct(productId) {
   }
 }
 
-/** Persiste un mensaje de chat. En producción: falla si el servidor no responde. */
+/** Persiste un mensaje de chat. Returns { messageId, createdAt } on success. */
 export async function persistMessage(message) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
@@ -204,8 +204,9 @@ export async function persistMessage(message) {
       signal: controller.signal,
     });
     clearTimeout(timer);
-    if (res.ok) return;
-    throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (res.ok) return { messageId: data.messageId, createdAt: data.createdAt };
+    throw new Error(data.error || `HTTP ${res.status}`);
   } catch (err) {
     clearTimeout(timer);
     if (isConfigured) {
@@ -218,8 +219,10 @@ export async function persistMessage(message) {
     // Demo mode only
     console.warn("[DataService] Demo mode: guardando mensaje localmente");
     const db = readDB();
-    db.messages.push({ ...message, id: `m${Date.now()}` });
+    const localId = `m${Date.now()}`;
+    db.messages.push({ ...message, id: localId });
     writeDB(db);
+    return { messageId: localId, createdAt: new Date().toISOString() };
   }
 }
 
