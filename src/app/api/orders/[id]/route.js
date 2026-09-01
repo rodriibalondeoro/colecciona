@@ -51,14 +51,14 @@ export async function PATCH(req, { params }) {
     if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
 
     if (nextStatus === ORDER_STATES.COMPLETED) {
-      const { data: sellerRow } = await supabase.from("users").select("sales").eq("id", existing.seller_id).single();
+      const { data: sellerRow } = await supabase.from("profiles").select("sales").eq("id", existing.seller_id).single();
       if (sellerRow) {
-        await supabase.from("users").update({ sales: (sellerRow.sales || 0) + 1 }).eq("id", existing.seller_id);
+        await supabase.from("profiles").update({ sales: (sellerRow.sales || 0) + 1 }).eq("id", existing.seller_id);
       }
 
-      const { data: buyerRow } = await supabase.from("users").select("purchases").eq("id", existing.buyer_id).single();
+      const { data: buyerRow } = await supabase.from("profiles").select("purchases").eq("id", existing.buyer_id).single();
       if (buyerRow) {
-        await supabase.from("users").update({ purchases: (buyerRow.purchases || 0) + 1 }).eq("id", existing.buyer_id);
+        await supabase.from("profiles").update({ purchases: (buyerRow.purchases || 0) + 1 }).eq("id", existing.buyer_id);
       }
     }
 

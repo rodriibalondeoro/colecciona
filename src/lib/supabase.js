@@ -1,4 +1,5 @@
-// Supabase Client with Fail-Safe Mock Fallback
+// Supabase Client
+// Error in production runtime if not configured; warning in dev/build
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -11,16 +12,35 @@ if (supabaseUrl && supabaseAnonKey) {
   try {
     supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
     isRealSupabase = true;
-    console.log("🌲 [Colecciona] Supabase conectado con éxito.");
+    console.log("🌲 [Colecciona] Supabase conectado.");
   } catch (error) {
-    console.warn("⚠️ [Colecciona] Error inicializando Supabase. Usando fallback de datos locales.", error);
+    console.error("❌ [Colecciona] Error inicializando Supabase:", error);
   }
 } else {
-  console.log("ℹ️ [Colecciona] Variables de entorno de Supabase no configuradas. Iniciado en modo local / demo.");
+  console.warn(
+    "⚠️ [Colecciona] Supabase no configurado. Modo demo/local."
+  );
 }
 
 export const supabase = supabaseClient;
 export const isConfigured = isRealSupabase;
+
+/**
+ * Throws in production if Supabase is not configured.
+ * Call this at the start of API routes that require a real database.
+ */
+export function requireSupabase() {
+  if (!supabaseClient) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "🚨 [Colecciona] Supabase no configurado. " +
+        "Configura NEXT_PUBLIC_SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY."
+      );
+    }
+    return null;
+  }
+  return supabaseClient;
+}
 
 // Realtime subscription helpers
 export function subscribeToMessages(userId, callback) {

@@ -22,8 +22,8 @@ export async function GET(req) {
       .from("trade_proposals")
       .select(`
         *,
-        proposer:users!trade_proposals_proposer_id_fkey(id, name, username, avatar_url, rating),
-        receiver:users!trade_proposals_receiver_id_fkey(id, name, username, avatar_url, rating),
+        proposer:profiles!trade_proposals_proposer_id_fkey(id, name, username, avatar, rating),
+        receiver:profiles!trade_proposals_receiver_id_fkey(id, name, username, avatar, rating),
         items:trade_proposal_items(*)
       `, { count: "exact" })
       .or(`proposer_id.eq.${user.id},receiver_id.eq.${user.id}`)

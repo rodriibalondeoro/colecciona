@@ -31,8 +31,8 @@ export async function GET(req) {
 
     const userIds = [...new Set(items.map(i => i.user_id))];
     const { data: users } = await supabase
-      .from("users")
-      .select("id, name, username, avatar_url, rating, location")
+      .from("profiles")
+      .select("id, name, username, avatar, rating, location")
       .in("id", userIds);
 
     const userMap = {};

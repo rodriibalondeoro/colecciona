@@ -73,7 +73,7 @@ export async function POST(req) {
     if (allReviews && allReviews.length > 0) {
       const avg = allReviews.reduce((acc, r) => acc + r.rating, 0) / allReviews.length;
       const rounded = Math.round(avg * 100) / 100;
-      await supabase.from("users").update({ rating: rounded }).eq("id", reviewedId);
+      await supabase.from("profiles").update({ rating: rounded }).eq("id", reviewedId);
     }
 
     await supabase.from("notifications").insert({
@@ -106,7 +106,7 @@ export async function GET(req) {
     const { data } = await supabase
       .from("reviews")
       .select(
-        "*, reviewer:users!reviews_reviewer_id_fkey(name, username)"
+        "*, reviewer:profiles!reviews_reviewer_id_fkey(name, username)"
       )
       .eq("target_user_id", userId)
       .order("created_at", { ascending: false });

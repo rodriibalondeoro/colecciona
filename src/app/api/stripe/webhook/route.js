@@ -94,11 +94,6 @@ export async function POST(req) {
           current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
           current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
         }, { onConflict: "stripe_subscription_id" });
-        await supabase.from("users").update({
-          is_premium: true,
-          premium_since: new Date().toISOString(),
-          stripe_subscription_id: sub.id,
-        }).eq("id", userId);
       }
       break;
     }
@@ -113,9 +108,6 @@ export async function POST(req) {
           current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
           cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
         }).eq("stripe_subscription_id", sub.id);
-        await supabase.from("users").update({
-          is_premium: isActive,
-        }).eq("id", userId);
       }
       break;
     }
@@ -127,10 +119,6 @@ export async function POST(req) {
         await supabase.from("subscriptions").update({
           status: "canceled",
         }).eq("stripe_subscription_id", sub.id);
-        await supabase.from("users").update({
-          is_premium: false,
-          stripe_subscription_id: null,
-        }).eq("id", userId);
       }
       break;
     }

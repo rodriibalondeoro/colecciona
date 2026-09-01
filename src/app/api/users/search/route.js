@@ -21,8 +21,8 @@ export async function GET(req) {
     if (url && key) {
       const supabase = createClient(url, key);
       const { data, error } = await supabase
-        .from("users")
-        .select("id, username, name, avatar, level, level_name, sales, purchases, rating, location, followers, following")
+        .from("profiles")
+        .select("id, username, name, avatar, sales, purchases, rating, location, followers, following")
         .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
         .order("sales", { ascending: false })
         .limit(limit);

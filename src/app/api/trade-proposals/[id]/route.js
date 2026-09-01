@@ -17,8 +17,8 @@ export async function GET(req, { params }) {
       .from("trade_proposals")
       .select(`
         *,
-        proposer:users!trade_proposals_proposer_id_fkey(id, name, username, avatar_url, rating, location),
-        receiver:users!trade_proposals_receiver_id_fkey(id, name, username, avatar_url, rating, location),
+        proposer:profiles!trade_proposals_proposer_id_fkey(id, name, username, avatar, rating, location),
+        receiver:profiles!trade_proposals_receiver_id_fkey(id, name, username, avatar, rating, location),
         items:trade_proposal_items(
           *,
           collection_item:collection_items(card_name, card_number, image_url, set_name)

@@ -18,7 +18,7 @@ export async function POST(req) {
       // Login por email: intentamos resolver el teléfono de la cuenta
       if (url && key) {
         const supabase = createClient(url, key);
-        const { data } = await supabase.from("users").select("phone, email").eq("email", email).maybeSingle();
+        const { data } = await supabase.from("user_private").select("phone, email").eq("email", email).maybeSingle();
         if (data?.phone) {
           otpKey = data.phone;
           targetPhone = data.phone;

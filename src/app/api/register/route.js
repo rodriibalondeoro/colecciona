@@ -27,8 +27,8 @@ export async function POST(req) {
     if (phone) {
       const digits = phone.replace(/\D/g, "");
       const { data: all } = await supabase
-        .from("users")
-        .select("email, name, username, phone")
+        .from("user_private")
+        .select("user_id, phone")
         .not("phone", "eq", "");
       const dup = (all || []).find((u) => u.phone && u.phone.replace(/\D/g, "") === digits);
       if (dup) {
@@ -61,15 +61,21 @@ export async function POST(req) {
 
     if (!error && data?.user?.id) {
       userId = data.user.id;
-      // Ajustamos la fila creada por el trigger (lleva email como nombre por defecto)
+      // Update profile created by trigger
       const { error: updateError } = await supabase
-        .from("users")
-        .update({ name, username, phone, member_since: new Date().toISOString(), seller_shipping_methods: ["sm1"] })
+        .from("profiles")
+        .update({ name, username })
         .eq("id", userId);
-      if (updateError) console.error("[API /register] update fila:", updateError.message);
+      if (updateError) console.error("[API /register] update profile:", updateError.message);
+
+      // Update private data created by trigger
+      await supabase
+        .from("user_private")
+        .update({ phone })
+        .eq("user_id", userId);
     } else {
-      // Fallback: usuario puede que ya existiera (login). Intentamos resolverlo.
-      const { data: existing } = await supabase.from("users").select("*").eq("email", email).maybeSingle();
+      // Fallback: usuario puede que ya existiera
+      const { data: existing } = await supabase.from("profiles").select("id").eq("username", username).maybeSingle();
       if (existing) {
         userId = existing.id;
       } else if (error) {
@@ -81,12 +87,12 @@ export async function POST(req) {
       return NextResponse.json({ error: "No se pudo registrar el usuario" }, { status: 500 });
     }
 
-    const { data: finalUser, error: fetchError } = await supabase.from("users").select("*").eq("id", userId).single();
+    const { data: finalProfile, error: fetchError } = await supabase.from("profiles").select("*").eq("id", userId).single();
     if (fetchError) {
       return NextResponse.json({ error: "No se pudo cargar el usuario" }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true, user: finalUser });
+    return NextResponse.json({ success: true, user: finalProfile });
   } catch (err) {
     console.error("[API /register] Error interno:", err);
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });

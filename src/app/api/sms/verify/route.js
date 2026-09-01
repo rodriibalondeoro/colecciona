@@ -13,7 +13,8 @@ async function migrateMockUser(supabase, oldUser, tempPassword) {
   const suffix = `_old_${Date.now()}`;
 
   // 1. Liberar constraints únicos en la fila vieja
-  await supabase.from("users").update({ email: `${authEmail}${suffix}`, username: `${oldUser.username || "user"}${suffix}` }).eq("id", oldId);
+  await supabase.from("profiles").update({ username: `${oldUser.username || "user"}${suffix}` }).eq("id", oldId);
+  await supabase.from("user_private").update({ email: `${authEmail}${suffix}` }).eq("user_id", oldId);
 
   // 2. Crear en Supabase Auth (el trigger crea la fila users nueva)
   const { data: authUser, error: createErr } = await supabase.auth.admin.createUser({
@@ -40,26 +41,32 @@ async function migrateMockUser(supabase, oldUser, tempPassword) {
   await supabase.from("push_subscriptions").update({ user_id: newId }).eq("user_id", oldId);
 
   // 4. Copiar datos a la fila nueva (el trigger creó una fila con defaults)
-  await supabase.from("users").update({
+  await supabase.from("profiles").update({
     name: oldUser.name,
-    phone: oldUser.phone,
     avatar: oldUser.avatar,
     bio: oldUser.bio,
-    level: oldUser.level || 1,
-    level_name: oldUser.level_name || "Nuevo Vendedor",
     sales: oldUser.sales || 0,
     purchases: oldUser.purchases || 0,
     followers: oldUser.followers || 0,
     following: oldUser.following || 0,
     rating: oldUser.rating || 5.0,
-    balance: oldUser.balance || 0,
     location: oldUser.location,
     response_time: oldUser.response_time || "< 1 hora",
     member_since: oldUser.member_since || String(new Date().getFullYear()),
   }).eq("id", newId);
 
+  await supabase.from("user_private").update({
+    phone: oldUser.phone,
+  }).eq("user_id", newId);
+
+  await supabase.from("wallet").update({
+    balance: oldUser.balance || 0,
+  }).eq("user_id", newId);
+
   // 5. Borrar la fila vieja (ya no tiene FKs apuntando a ella)
-  await supabase.from("users").delete().eq("id", oldId);
+  await supabase.from("profiles").delete().eq("id", oldId);
+  await supabase.from("user_private").delete().eq("user_id", oldId);
+  await supabase.from("wallet").delete().eq("user_id", oldId);
 
   return { newId, email: authEmail };
 }
@@ -95,17 +102,23 @@ export async function POST(req) {
     if (url && key) {
       const supabase = createClient(url, key);
       if (isEmail) {
-        const { data } = await supabase.from("users").select("*").eq("email", rawKey).maybeSingle();
-        user = data || null;
-        userPhone = data?.phone || userPhone;
+        const { data: priv } = await supabase.from("user_private").select("user_id").eq("email", rawKey).maybeSingle();
+        if (priv?.user_id) {
+          const { data: prof } = await supabase.from("profiles").select("*").eq("id", priv.user_id).single();
+          user = prof ? { ...prof, email: rawKey } : null;
+        }
+        userPhone = user?.phone || userPhone;
       } else {
         const digits = normalizePhone(rawKey).replace(/\D/g, "");
-        let { data } = await supabase.from("users").select("*").eq("phone", normalizedKey).maybeSingle();
-        if (!data && digits.length >= 9) {
-          const { data: all } = await supabase.from("users").select("*").not("phone", "eq", "");
-          data = (all || []).find((u) => u.phone && u.phone.replace(/\D/g, "") === digits) || null;
+        let { data: priv } = await supabase.from("user_private").select("user_id, phone").eq("phone", normalizedKey).maybeSingle();
+        if (!priv && digits.length >= 9) {
+          const { data: allPriv } = await supabase.from("user_private").select("user_id, phone").not("phone", "eq", "");
+          priv = (allPriv || []).find((u) => u.phone && u.phone.replace(/\D/g, "") === digits) || null;
         }
-        user = data || null;
+        if (priv?.user_id) {
+          const { data: prof } = await supabase.from("profiles").select("*").eq("id", priv.user_id).single();
+          user = prof ? { ...prof, phone: priv.phone } : null;
+        }
         userPhone = user?.phone || userPhone;
       }
 

@@ -18,16 +18,18 @@ export async function GET(req) {
     }
 
     const { data: profile } = await supabase
-      .from("users")
-      .select("is_premium, premium_since")
-      .eq("id", user.id)
-      .single();
+      .from("subscriptions")
+      .select("status, current_period_end")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    const isPremium = profile?.is_premium || false;
+    const isPremium = profile?.status === "active";
 
     return NextResponse.json({
       isPremium,
-      premiumSince: profile?.premium_since || null,
+      premiumSince: profile?.current_period_start || null,
       commissionRate: isPremium ? 0.05 : 0.08,
     });
   } catch (err) {

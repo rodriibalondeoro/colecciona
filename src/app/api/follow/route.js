@@ -47,13 +47,13 @@ export async function POST(req) {
 
     // Actualizar contadores (best-effort, no deben fallar la operación)
     try {
-      const { data: targetUser } = await supabase.from("users").select("followers").eq("id", targetUserId).single();
+      const { data: targetUser } = await supabase.from("profiles").select("followers").eq("id", targetUserId).single();
       if (targetUser) {
-        await supabase.from("users").update({ followers: (targetUser.followers || 0) + 1 }).eq("id", targetUserId);
+        await supabase.from("profiles").update({ followers: (targetUser.followers || 0) + 1 }).eq("id", targetUserId);
       }
-      const { data: currentUser } = await supabase.from("users").select("following").eq("id", user.id).single();
+      const { data: currentUser } = await supabase.from("profiles").select("following").eq("id", user.id).single();
       if (currentUser) {
-        await supabase.from("users").update({ following: (currentUser.following || 0) + 1 }).eq("id", user.id);
+        await supabase.from("profiles").update({ following: (currentUser.following || 0) + 1 }).eq("id", user.id);
       }
       await supabase.from("notifications").insert({
         user_id: targetUserId,
@@ -97,13 +97,13 @@ export async function DELETE(req) {
 
     await supabase.from("follows").delete().eq("id", existing.id);
 
-    const { data: targetUser } = await supabase.from("users").select("followers").eq("id", targetUserId).single();
+    const { data: targetUser } = await supabase.from("profiles").select("followers").eq("id", targetUserId).single();
     if (targetUser && (targetUser.followers || 0) > 0) {
-      await supabase.from("users").update({ followers: targetUser.followers - 1 }).eq("id", targetUserId);
+      await supabase.from("profiles").update({ followers: targetUser.followers - 1 }).eq("id", targetUserId);
     }
-    const { data: currentUser } = await supabase.from("users").select("following").eq("id", user.id).single();
+    const { data: currentUser } = await supabase.from("profiles").select("following").eq("id", user.id).single();
     if (currentUser && (currentUser.following || 0) > 0) {
-      await supabase.from("users").update({ following: currentUser.following - 1 }).eq("id", user.id);
+      await supabase.from("profiles").update({ following: currentUser.following - 1 }).eq("id", user.id);
     }
 
     return NextResponse.json({ success: true, following: false });

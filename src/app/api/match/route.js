@@ -73,8 +73,8 @@ export async function GET(req) {
     }
 
     const { data: users } = await supabase
-      .from("users")
-      .select("id, name, username, avatar_url, rating, location")
+      .from("profiles")
+      .select("id, name, username, avatar, rating, location")
       .in("id", userIds);
 
     const userMap = {};
@@ -96,7 +96,7 @@ export async function GET(req) {
 
     // Get current user's location for proximity scoring
     const { data: me } = await supabase
-      .from("users")
+      .from("profiles")
       .select("location")
       .eq("id", user.id)
       .single();

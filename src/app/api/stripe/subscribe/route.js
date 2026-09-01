@@ -27,18 +27,26 @@ export async function POST(req) {
     }
 
     // Verificar si ya es premium
-    const { data: profile } = await supabase
-      .from("users")
-      .select("is_premium, stripe_customer_id")
-      .eq("id", user.id)
-      .single();
+    const { data: sub } = await supabase
+      .from("subscriptions")
+      .select("status")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    if (profile?.is_premium) {
+    if (sub?.status === "active") {
       return NextResponse.json({ error: "Ya eres premium" }, { status: 400 });
     }
 
     // Crear o recuperar Stripe Customer
-    let customerId = profile?.stripe_customer_id;
+    const { data: priv } = await supabase
+      .from("user_private")
+      .select("stripe_customer_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    let customerId = priv?.stripe_customer_id;
 
     if (!customerId) {
       const customer = await getStripe().customers.create({
@@ -48,9 +56,9 @@ export async function POST(req) {
       customerId = customer.id;
 
       await supabase
-        .from("users")
+        .from("user_private")
         .update({ stripe_customer_id: customerId })
-        .eq("id", user.id);
+        .eq("user_id", user.id);
     }
 
     // Crear Checkout Session para suscripción

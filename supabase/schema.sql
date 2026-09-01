@@ -1,321 +1,592 @@
--- Colecciona Production Database Schema
--- Re-ejecutable: los objetos se crean con IF NOT EXISTS y las políticas
--- se recargan con DROP POLICY IF EXISTS antes de cada CREATE POLICY.
+-- ============================================================================
+-- COLECCIONA — Production Database Schema (Consolidated)
+-- ============================================================================
+-- This is the single source of truth for the database.
+-- Run this on a fresh Supabase project. For existing projects, use migrations.
+-- ============================================================================
 
 -- Enable required extensions
-create extension if not exists "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================================================
--- 1. USERS — perfil público ligado a Supabase Auth
+-- ENUMS
 -- ============================================================================
-create table if not exists public.users (
-  id uuid primary key references auth.users(id) on delete cascade,
-  email text unique not null,
-  phone text unique,
-  name text not null,
-  username text unique not null,
-  avatar text,
-  bio text,
-  level integer default 1 check (level >= 1),
-  level_name text default 'Nuevo Vendedor',
-  sales integer default 0 check (sales >= 0),
-  purchases integer default 0 check (purchases >= 0),
-  followers integer default 0 check (followers >= 0),
-  following integer default 0 check (following >= 0),
-  rating numeric(3,2) default 0.00 check (rating >= 0 and rating <= 5),
-  member_since text not null,
-  location text,
-  response_time text default '< 1 hora',
-  balance numeric(10,2) default 0.00 check (balance >= 0),
-  address_street text,
-  address_city text,
-  address_zip text,
-  address_country text default 'España',
-  address_complete boolean default false,
-  seller_shipping_methods text[] not null default array['sm1']::text[],
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+
+DO $$ BEGIN
+  CREATE TYPE collection_item_status AS ENUM (
+    'OWNED', 'MISSING', 'DUPLICATE', 'FOR_TRADE', 'FOR_SALE'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  CREATE TYPE collection_visibility AS ENUM ('private', 'public', 'followers');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  CREATE TYPE trade_status AS ENUM (
+    'DRAFT', 'PROPOSED', 'COUNTERED', 'ACCEPTED',
+    'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED',
+    'COMPLETED', 'CANCELLED', 'DISPUTED'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- ============================================================================
+-- 1. PROFILES — public user profile (safe to expose)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  username TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  avatar TEXT,
+  bio TEXT,
+  location TEXT,
+  rating NUMERIC(3,2) DEFAULT 0.00 CHECK (rating >= 0 AND rating <= 5),
+  sales INTEGER DEFAULT 0 CHECK (sales >= 0),
+  purchases INTEGER DEFAULT 0 CHECK (purchases >= 0),
+  followers INTEGER DEFAULT 0 CHECK (followers >= 0),
+  following INTEGER DEFAULT 0 CHECK (following >= 0),
+  response_time TEXT DEFAULT '< 1 hora',
+  member_since TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_profiles_username ON profiles(username);
+
+-- ============================================================================
+-- 2. USER_PRIVATE — private user data (only owner can read)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS user_private (
+  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email TEXT UNIQUE NOT NULL,
+  phone TEXT,
+  address_street TEXT,
+  address_city TEXT,
+  address_zip TEXT,
+  address_country TEXT DEFAULT 'España',
+  address_complete BOOLEAN DEFAULT false,
+  seller_shipping_methods TEXT[] NOT NULL DEFAULT array['sm1']::text[],
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 
 -- ============================================================================
--- 2. PRODUCTS
+-- 3. WALLET — user balance (only owner can read)
 -- ============================================================================
-create table if not exists public.products (
-  id uuid default uuid_generate_v4() primary key,
-  title text not null,
-  price numeric(10,2) not null check (price > 0),
-  market_price numeric(10,2) check (market_price > 0),
-  price_change text,
-  image text not null,
-  category text not null,
-  condition text not null check (
-    condition in ('PSA10', 'NM', 'LP', 'MP', 'HP', 'DMG')
+CREATE TABLE IF NOT EXISTS wallet (
+  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  balance NUMERIC(10,2) DEFAULT 0.00 CHECK (balance >= 0),
+  available_balance NUMERIC(10,2) DEFAULT 0.00 CHECK (available_balance >= 0),
+  pending_balance NUMERIC(10,2) DEFAULT 0.00 CHECK (pending_balance >= 0),
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+-- ============================================================================
+-- 4. PRODUCTS — marketplace listings
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS products (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  title TEXT NOT NULL,
+  price NUMERIC(10,2) NOT NULL CHECK (price > 0),
+  market_price NUMERIC(10,2) CHECK (market_price > 0),
+  price_change TEXT,
+  image TEXT NOT NULL,
+  category TEXT NOT NULL,
+  condition TEXT NOT NULL CHECK (condition IN ('PSA10', 'NM', 'LP', 'MP', 'HP', 'DMG')),
+  seller UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  code TEXT,
+  rarity TEXT,
+  description TEXT,
+  set_name TEXT NOT NULL,
+  language TEXT NOT NULL,
+  year INTEGER NOT NULL CHECK (year >= 1900 AND year <= 2100),
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('DRAFT', 'ACTIVE', 'RESERVED', 'SOLD', 'INACTIVE', 'REMOVED')),
+  reserved_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  reserved_until TIMESTAMPTZ,
+  sold_at TIMESTAMPTZ,
+  views INTEGER DEFAULT 0 CHECK (views >= 0),
+  favorites INTEGER DEFAULT 0 CHECK (favorites >= 0),
+  featured BOOLEAN DEFAULT false,
+  psa_cert TEXT,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_products_seller ON products(seller);
+CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
+
+-- Atomic reservation function
+CREATE OR REPLACE FUNCTION reserve_products_for_checkout(
+  p_product_ids UUID[],
+  p_buyer_id UUID,
+  p_reserved_until TIMESTAMPTZ DEFAULT now() + interval '15 minutes'
+)
+RETURNS SETOF products
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  expected_count INTEGER;
+  updated_count INTEGER;
+BEGIN
+  SELECT count(DISTINCT id) INTO expected_count
+  FROM unnest(p_product_ids) AS ids(id);
+
+  IF expected_count = 0 THEN
+    RAISE EXCEPTION 'No products provided';
+  END IF;
+
+  CREATE TEMPORARY TABLE reserved_rows ON COMMIT DROP AS
+  WITH requested AS (
+    SELECT DISTINCT id FROM unnest(p_product_ids) AS ids(id)
   ),
-  seller uuid not null references public.users(id) on delete cascade,
-  code text,
-  rarity text,
-  description text,
-  set text not null,
-  language text not null,
-  year integer not null check (year >= 1900 and year <= 2100),
-  views integer default 0 check (views >= 0),
-  favorites integer default 0 check (favorites >= 0),
-  featured boolean default false,
-  psa_cert text,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
-);
+  updated AS (
+    UPDATE products p
+    SET status = 'RESERVED', reserved_by = p_buyer_id, reserved_until = p_reserved_until
+    FROM requested r
+    WHERE p.id = r.id AND p.status = 'ACTIVE' AND p.seller <> p_buyer_id
+    RETURNING p.*
+  )
+  SELECT * FROM updated;
 
-create index if not exists products_seller_idx on public.products(seller);
-create index if not exists products_category_idx on public.products(category);
+  SELECT count(*) INTO updated_count FROM reserved_rows;
+
+  IF updated_count <> expected_count THEN
+    RAISE EXCEPTION 'One or more products are not available';
+  END IF;
+
+  RETURN QUERY SELECT * FROM reserved_rows;
+END;
+$$;
 
 -- ============================================================================
--- 3. ORDERS
+-- 5. ORDERS — purchase transactions
 -- ============================================================================
-create table if not exists public.orders (
-  id uuid default uuid_generate_v4() primary key,
-  product_id uuid not null references public.products(id) on delete restrict,
-  seller_id uuid not null references public.users(id) on delete restrict,
-  buyer_id uuid not null references public.users(id) on delete restrict,
-  price numeric(10,2) not null check (price >= 0),
-  shipping numeric(10,2) not null default 0 check (shipping >= 0),
-  commission numeric(10,2) not null default 0 check (commission >= 0),
-  total numeric(10,2) not null check (total > 0),
-  shipping_method text not null,
-  tracking_code text,
-  status text not null default 'paid' check (
-    status in ('paid', 'shipped', 'review', 'completed', 'cancelled')
+CREATE TABLE IF NOT EXISTS orders (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  seller_id UUID NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
+  buyer_id UUID NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
+  price NUMERIC(10,2) NOT NULL CHECK (price >= 0),
+  shipping NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (shipping >= 0),
+  commission NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (commission >= 0),
+  total NUMERIC(10,2) NOT NULL CHECK (total > 0),
+  shipping_method TEXT NOT NULL,
+  tracking_number TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
+    status IN (
+      'PENDING', 'PAYMENT_PROCESSING', 'PAID', 'PREPARING',
+      'SHIPPED', 'DELIVERED', 'COMPLETED',
+      'CANCELLED', 'REFUNDED', 'DISPUTED'
+    )
   ),
-  shipping_address text not null,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  confirmed_at timestamp with time zone,
-  reviewed boolean default false
+  shipping_address TEXT NOT NULL,
+  payment_intent_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  confirmed_at TIMESTAMPTZ,
+  shipped_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ
 );
 
-create index if not exists orders_buyer_idx on public.orders(buyer_id);
-create index if not exists orders_seller_idx on public.orders(seller_id);
+CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_seller ON orders(seller_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 
 -- ============================================================================
--- 4. OFFERS
+-- 6. COLLECTIONS — user card collections
 -- ============================================================================
-create table if not exists public.offers (
-  id uuid default uuid_generate_v4() primary key,
-  product_id uuid not null references public.products(id) on delete cascade,
-  from_user_id uuid not null references public.users(id) on delete cascade,
-  to_user_id uuid not null references public.users(id) on delete cascade,
-  amount numeric(10,2) not null check (amount > 0),
-  original_price numeric(10,2) not null check (original_price > 0),
-  status text not null default 'pending' check (
-    status in ('pending', 'accepted', 'rejected', 'countered')
-  ),
-  message text,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE TABLE IF NOT EXISTS collections (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  category TEXT,
+  subcategory TEXT,
+  cover_image TEXT,
+  year INTEGER,
+  publisher TEXT,
+  total_items INTEGER DEFAULT 0,
+  visibility collection_visibility DEFAULT 'private',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
-create index if not exists offers_to_user_idx on public.offers(to_user_id);
+CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id);
+CREATE INDEX IF NOT EXISTS idx_collections_visibility ON collections(visibility);
 
 -- ============================================================================
--- 5. MESSAGES
+-- 7. COLLECTION_ITEMS — cards in collections
 -- ============================================================================
-create table if not exists public.messages (
-  id uuid default uuid_generate_v4() primary key,
-  sender_id uuid not null references public.users(id) on delete cascade,
-  receiver_id uuid not null references public.users(id) on delete cascade,
-  product_id uuid references public.products(id) on delete cascade,
-  text text not null,
-  read boolean default false not null,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE TABLE IF NOT EXISTS collection_items (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  collection_id UUID NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  card_name TEXT NOT NULL,
+  card_number TEXT,
+  card_code TEXT,
+  set_name TEXT,
+  category TEXT,
+  image_url TEXT,
+  status collection_item_status DEFAULT 'OWNED',
+  priority TEXT DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+  total_quantity INTEGER DEFAULT 1,
+  owned_quantity INTEGER DEFAULT 1,
+  duplicate_quantity INTEGER DEFAULT 0,
+  trade_quantity INTEGER DEFAULT 0,
+  sale_quantity INTEGER DEFAULT 0,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
-create index if not exists messages_conv_idx on public.messages(sender_id, receiver_id, created_at desc);
+CREATE INDEX IF NOT EXISTS idx_collection_items_collection ON collection_items(collection_id);
+CREATE INDEX IF NOT EXISTS idx_collection_items_user ON collection_items(user_id);
+CREATE INDEX IF NOT EXISTS idx_collection_items_status ON collection_items(status);
+CREATE INDEX IF NOT EXISTS idx_collection_items_card_name ON collection_items(card_name);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_items_unique_card
+  ON collection_items(collection_id, card_name, card_number);
+
+-- Auto-update collection totals
+CREATE OR REPLACE FUNCTION update_collection_totals()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE collections
+  SET total_items = (
+    SELECT COUNT(*) FROM collection_items
+    WHERE collection_id = COALESCE(NEW.collection_id, OLD.collection_id)
+  ), updated_at = now()
+  WHERE id = COALESCE(NEW.collection_id, OLD.collection_id);
+  RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_update_collection_totals ON collection_items;
+CREATE TRIGGER trg_update_collection_totals
+  AFTER INSERT OR UPDATE OR DELETE ON collection_items
+  FOR EACH ROW EXECUTE FUNCTION update_collection_totals();
 
 -- ============================================================================
--- 6. REVIEWS
+-- 8. TRADE_PROPOSALS — card-for-card exchanges
 -- ============================================================================
-create table if not exists public.reviews (
-  id uuid default uuid_generate_v4() primary key,
-  order_id uuid not null references public.orders(id) on delete cascade,
-  reviewer_id uuid not null references public.users(id) on delete cascade,
-  target_user_id uuid not null references public.users(id) on delete cascade,
-  rating integer not null check (rating >= 1 and rating <= 5),
-  comment text,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  unique(order_id)
+CREATE TABLE IF NOT EXISTS trade_proposals (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  proposer_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  receiver_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  status trade_status DEFAULT 'DRAFT',
+  message TEXT,
+  compatibility_score INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  accepted_at TIMESTAMPTZ,
+  shipped_at TIMESTAMPTZ,
+  received_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  CONSTRAINT no_self_trade CHECK (proposer_id != receiver_id)
+);
+
+CREATE TABLE IF NOT EXISTS trade_proposal_items (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  proposal_id UUID NOT NULL REFERENCES trade_proposals(id) ON DELETE CASCADE,
+  collection_item_id UUID NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  quantity INTEGER DEFAULT 1,
+  side TEXT NOT NULL CHECK (side IN ('proposer', 'receiver')),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS trade_history (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  proposal_id UUID NOT NULL REFERENCES trade_proposals(id) ON DELETE CASCADE,
+  actor_id UUID NOT NULL REFERENCES profiles(id),
+  action TEXT NOT NULL,
+  old_status trade_status,
+  new_status trade_status,
+  details JSONB,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_proposals_proposer ON trade_proposals(proposer_id);
+CREATE INDEX IF NOT EXISTS idx_trade_proposals_receiver ON trade_proposals(receiver_id);
+CREATE INDEX IF NOT EXISTS idx_trade_proposals_status ON trade_proposals(status);
+CREATE INDEX IF NOT EXISTS idx_trade_proposal_items_proposal ON trade_proposal_items(proposal_id);
+CREATE INDEX IF NOT EXISTS idx_trade_history_proposal ON trade_history(proposal_id);
+
+-- ============================================================================
+-- 9. MESSAGES — chat between users
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS messages (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  sender_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  receiver_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  read BOOLEAN DEFAULT false NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(sender_id, receiver_id, created_at DESC);
+
+-- ============================================================================
+-- 10. OFFERS — price negotiation
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS offers (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  from_user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  to_user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  amount NUMERIC(10,2) NOT NULL CHECK (amount > 0),
+  original_price NUMERIC(10,2) NOT NULL CHECK (original_price > 0),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'countered')),
+  message TEXT,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_offers_to_user ON offers(to_user_id);
+
+-- ============================================================================
+-- 11. REVIEWS — seller ratings
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS reviews (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  reviewer_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  target_user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+  comment TEXT,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  UNIQUE(order_id)
 );
 
 -- ============================================================================
--- 7. FOLLOWS
+-- 12. FOLLOWS — social graph
 -- ============================================================================
-create table if not exists public.follows (
-  id uuid default uuid_generate_v4() primary key,
-  follower_id uuid not null references public.users(id) on delete cascade,
-  following_id uuid not null references public.users(id) on delete cascade,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  unique(follower_id, following_id)
+CREATE TABLE IF NOT EXISTS follows (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  follower_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  following_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  UNIQUE(follower_id, following_id)
 );
 
-create index if not exists follows_follower_idx on public.follows(follower_id);
-create index if not exists follows_following_idx on public.follows(following_id);
+CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
+CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
 
 -- ============================================================================
--- 8. PRICE HISTORY
+-- 13. PRICE_HISTORY — market data
 -- ============================================================================
-create table if not exists public.price_history (
-  id uuid default uuid_generate_v4() primary key,
-  product_id uuid not null references public.products(id) on delete cascade,
-  price numeric(10,2) not null check (price > 0),
-  recorded_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE TABLE IF NOT EXISTS price_history (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  price NUMERIC(10,2) NOT NULL CHECK (price > 0),
+  recorded_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 
-create index if not exists price_history_product_idx on public.price_history(product_id, recorded_at desc);
+CREATE INDEX IF NOT EXISTS idx_price_history_product ON price_history(product_id, recorded_at DESC);
 
 -- ============================================================================
--- 8. PUSH SUBSCRIPTIONS
+-- 14. PUSH_SUBSCRIPTIONS — web push
 -- ============================================================================
-create table if not exists public.push_subscriptions (
-  id uuid default uuid_generate_v4() primary key,
-  user_id uuid not null references public.users(id) on delete cascade,
-  endpoint text not null unique,
-  p256dh text not null,
-  auth text not null,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
+
+-- ============================================================================
+-- 15. NOTIFICATIONS — in-app notifications
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  message TEXT,
+  data JSONB,
+  read BOOLEAN DEFAULT false NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read);
 
 -- ============================================================================
 -- ROW LEVEL SECURITY
 -- ============================================================================
 
--- ── USERS ────────────────────────────────────────────────────────────────────
-alter table public.users enable row level security;
-drop policy if exists "users_select" on public.users;
-create policy "users_select" on public.users
-  for select using (true); -- perfiles públicos (feed, vendedores)
+-- PROFILES: public read, owner write
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "profiles_select_public" ON profiles;
+CREATE POLICY "profiles_select_public" ON profiles FOR SELECT USING (true);
+DROP POLICY IF EXISTS "profiles_insert_own" ON profiles;
+CREATE POLICY "profiles_insert_own" ON profiles FOR INSERT WITH CHECK (auth.uid() = id);
+DROP POLICY IF EXISTS "profiles_update_own" ON profiles;
+CREATE POLICY "profiles_update_own" ON profiles FOR UPDATE USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+DROP POLICY IF EXISTS "profiles_delete_own" ON profiles;
+CREATE POLICY "profiles_delete_own" ON profiles FOR DELETE USING (auth.uid() = id);
 
-drop policy if exists "users_insert_own" on public.users;
-create policy "users_insert_own" on public.users
-  for insert with check (auth.uid() = id);
+-- USER_PRIVATE: owner only
+ALTER TABLE user_private ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "user_private_owner_all" ON user_private;
+CREATE POLICY "user_private_owner_all" ON user_private FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
-drop policy if exists "users_update_own" on public.users;
-create policy "users_update_own" on public.users
-  for update using (auth.uid() = id);
+-- WALLET: owner only
+ALTER TABLE wallet ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "wallet_owner_all" ON wallet;
+CREATE POLICY "wallet_owner_all" ON wallet FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
--- ── PRODUCTS ────────────────────────────────────────────────────────────────
-alter table public.products enable row level security;
-drop policy if exists "products_select" on public.products;
-create policy "products_select" on public.products
-  for select using (true); -- marketplace público
+-- PRODUCTS: public read, seller write
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "products_select_public" ON products;
+CREATE POLICY "products_select_public" ON products FOR SELECT USING (true);
+DROP POLICY IF EXISTS "products_insert_seller" ON products;
+CREATE POLICY "products_insert_seller" ON products FOR INSERT WITH CHECK (auth.uid() = seller);
+DROP POLICY IF EXISTS "products_update_seller" ON products;
+CREATE POLICY "products_update_seller" ON products FOR UPDATE USING (auth.uid() = seller);
+DROP POLICY IF EXISTS "products_delete_seller" ON products;
+CREATE POLICY "products_delete_seller" ON products FOR DELETE USING (auth.uid() = seller);
 
-drop policy if exists "products_insert_own" on public.products;
-create policy "products_insert_own" on public.products
-  for insert with check (auth.uid() = seller);
+-- ORDERS: participants only
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "orders_select_participant" ON orders;
+CREATE POLICY "orders_select_participant" ON orders FOR SELECT USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
+DROP POLICY IF EXISTS "orders_insert_buyer" ON orders;
+CREATE POLICY "orders_insert_buyer" ON orders FOR INSERT WITH CHECK (auth.uid() = buyer_id);
+DROP POLICY IF EXISTS "orders_update_participant" ON orders;
+CREATE POLICY "orders_update_participant" ON orders FOR UPDATE USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
 
-drop policy if exists "products_update_own" on public.products;
-create policy "products_update_own" on public.products
-  for update using (auth.uid() = seller);
+-- COLLECTIONS: owner all, public read based on visibility
+ALTER TABLE collections ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "collections_owner_all" ON collections;
+CREATE POLICY "collections_owner_all" ON collections FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "collections_public_read" ON collections;
+CREATE POLICY "collections_public_read" ON collections FOR SELECT USING (
+  visibility = 'public'
+  OR (visibility = 'followers' AND EXISTS (
+    SELECT 1 FROM follows WHERE follower_id = auth.uid() AND following_id = collections.user_id
+  ))
+);
 
-drop policy if exists "products_delete_own" on public.products;
-create policy "products_delete_own" on public.products
-  for delete using (auth.uid() = seller);
+-- COLLECTION_ITEMS: owner all, public read if collection is public
+ALTER TABLE collection_items ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "collection_items_owner_all" ON collection_items;
+CREATE POLICY "collection_items_owner_all" ON collection_items FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "collection_items_public_read" ON collection_items;
+CREATE POLICY "collection_items_public_read" ON collection_items FOR SELECT USING (
+  EXISTS (
+    SELECT 1 FROM collections
+    WHERE collections.id = collection_items.collection_id
+    AND (
+      collections.visibility = 'public'
+      OR (collections.visibility = 'followers' AND EXISTS (
+        SELECT 1 FROM follows WHERE follower_id = auth.uid() AND following_id = collections.user_id
+      ))
+    )
+  )
+);
 
--- ── ORDERS ──────────────────────────────────────────────────────────────────
-alter table public.orders enable row level security;
-drop policy if exists "orders_select_participant" on public.orders;
-create policy "orders_select_participant" on public.orders
-  for select using (auth.uid() = buyer_id or auth.uid() = seller_id);
+-- TRADE_PROPOSALS: participants only
+ALTER TABLE trade_proposals ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "trade_proposals_participant_all" ON trade_proposals;
+CREATE POLICY "trade_proposals_participant_all" ON trade_proposals
+  FOR ALL USING (auth.uid() = proposer_id OR auth.uid() = receiver_id);
 
-drop policy if exists "orders_insert_buyer" on public.orders;
-create policy "orders_insert_buyer" on public.orders
-  for insert with check (auth.uid() = buyer_id);
+-- TRADE_PROPOSAL_ITEMS: owner write, participants read
+ALTER TABLE trade_proposal_items ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "trade_items_owner_all" ON trade_proposal_items;
+CREATE POLICY "trade_items_owner_all" ON trade_proposal_items FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "trade_items_participant_read" ON trade_proposal_items;
+CREATE POLICY "trade_items_participant_read" ON trade_proposal_items FOR SELECT USING (
+  EXISTS (
+    SELECT 1 FROM trade_proposals
+    WHERE trade_proposals.id = trade_proposal_items.proposal_id
+    AND (trade_proposals.proposer_id = auth.uid() OR trade_proposals.receiver_id = auth.uid())
+  )
+);
 
-drop policy if exists "orders_update_participant" on public.orders;
-create policy "orders_update_participant" on public.orders
-  for update using (auth.uid() = buyer_id or auth.uid() = seller_id);
+-- TRADE_HISTORY: participants read, system insert
+ALTER TABLE trade_history ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "trade_history_participant_read" ON trade_history;
+CREATE POLICY "trade_history_participant_read" ON trade_history FOR SELECT USING (
+  EXISTS (
+    SELECT 1 FROM trade_proposals
+    WHERE trade_proposals.id = trade_history.proposal_id
+    AND (trade_proposals.proposer_id = auth.uid() OR trade_proposals.receiver_id = auth.uid())
+  )
+);
+DROP POLICY IF EXISTS "trade_history_insert" ON trade_history;
+CREATE POLICY "trade_history_insert" ON trade_history FOR INSERT WITH CHECK (true);
 
--- ── OFFERS ──────────────────────────────────────────────────────────────────
-alter table public.offers enable row level security;
-drop policy if exists "offers_select_participant" on public.offers;
-create policy "offers_select_participant" on public.offers
-  for select using (auth.uid() = from_user_id or auth.uid() = to_user_id);
+-- MESSAGES: participants only
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "messages_select_participant" ON messages;
+CREATE POLICY "messages_select_participant" ON messages FOR SELECT USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
+DROP POLICY IF EXISTS "messages_insert_sender" ON messages;
+CREATE POLICY "messages_insert_sender" ON messages FOR INSERT WITH CHECK (auth.uid() = sender_id);
+DROP POLICY IF EXISTS "messages_update_receiver" ON messages;
+CREATE POLICY "messages_update_receiver" ON messages FOR UPDATE USING (auth.uid() = receiver_id);
 
-drop policy if exists "offers_insert_from" on public.offers;
-create policy "offers_insert_from" on public.offers
-  for insert with check (auth.uid() = from_user_id);
+-- OFFERS: participants only
+ALTER TABLE offers ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "offers_select_participant" ON offers;
+CREATE POLICY "offers_select_participant" ON offers FOR SELECT USING (auth.uid() = from_user_id OR auth.uid() = to_user_id);
+DROP POLICY IF EXISTS "offers_insert_from" ON offers;
+CREATE POLICY "offers_insert_from" ON offers FOR INSERT WITH CHECK (auth.uid() = from_user_id);
+DROP POLICY IF EXISTS "offers_update_recipient" ON offers;
+CREATE POLICY "offers_update_recipient" ON offers FOR UPDATE USING (auth.uid() = to_user_id);
 
-drop policy if exists "offers_update_recipient" on public.offers;
-create policy "offers_update_recipient" on public.offers
-  for update using (auth.uid() = to_user_id);
+-- REVIEWS: public read, reviewer insert
+ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "reviews_select_public" ON reviews;
+CREATE POLICY "reviews_select_public" ON reviews FOR SELECT USING (true);
+DROP POLICY IF EXISTS "reviews_insert_own" ON reviews;
+CREATE POLICY "reviews_insert_own" ON reviews FOR INSERT WITH CHECK (auth.uid() = reviewer_id);
 
--- ── MESSAGES ────────────────────────────────────────────────────────────────
-alter table public.messages enable row level security;
-drop policy if exists "messages_select_participant" on public.messages;
-create policy "messages_select_participant" on public.messages
-  for select using (auth.uid() = sender_id or auth.uid() = receiver_id);
+-- FOLLOWS: public read, owner write
+ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "follows_select_public" ON follows;
+CREATE POLICY "follows_select_public" ON follows FOR SELECT USING (true);
+DROP POLICY IF EXISTS "follows_insert_own" ON follows;
+CREATE POLICY "follows_insert_own" ON follows FOR INSERT WITH CHECK (auth.uid() = follower_id);
+DROP POLICY IF EXISTS "follows_delete_own" ON follows;
+CREATE POLICY "follows_delete_own" ON follows FOR DELETE USING (auth.uid() = follower_id);
 
-drop policy if exists "messages_insert_sender" on public.messages;
-create policy "messages_insert_sender" on public.messages
-  for insert with check (auth.uid() = sender_id);
+-- PRICE_HISTORY: public read
+ALTER TABLE price_history ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "price_history_select_public" ON price_history;
+CREATE POLICY "price_history_select_public" ON price_history FOR SELECT USING (true);
 
-drop policy if exists "messages_update_receiver" on public.messages;
-create policy "messages_update_receiver" on public.messages
-  for update using (auth.uid() = receiver_id);
+-- PUSH_SUBSCRIPTIONS: owner only
+ALTER TABLE push_subscriptions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "push_select_own" ON push_subscriptions;
+CREATE POLICY "push_select_own" ON push_subscriptions FOR SELECT USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "push_insert_own" ON push_subscriptions;
+CREATE POLICY "push_insert_own" ON push_subscriptions FOR INSERT WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "push_delete_own" ON push_subscriptions;
+CREATE POLICY "push_delete_own" ON push_subscriptions FOR DELETE USING (auth.uid() = user_id);
 
--- ── FOLLOWS ─────────────────────────────────────────────────────────────────
-alter table public.follows enable row level security;
-drop policy if exists "follows_select" on public.follows;
-create policy "follows_select" on public.follows
-  for select using (true);
-
-drop policy if exists "follows_insert_own" on public.follows;
-create policy "follows_insert_own" on public.follows
-  for insert with check (auth.uid() = follower_id);
-
-drop policy if exists "follows_delete_own" on public.follows;
-create policy "follows_delete_own" on public.follows
-  for delete using (auth.uid() = follower_id);
-
--- ── REVIEWS ─────────────────────────────────────────────────────────────────
-alter table public.reviews enable row level security;
-drop policy if exists "reviews_select" on public.reviews;
-create policy "reviews_select" on public.reviews
-  for select using (true); -- valoraciones públicas de vendedores
-
-drop policy if exists "reviews_insert_own" on public.reviews;
-create policy "reviews_insert_own" on public.reviews
-  for insert with check (auth.uid() = reviewer_id);
-
--- ── PRICE HISTORY ───────────────────────────────────────────────────────────
-alter table public.price_history enable row level security;
-drop policy if exists "price_history_select" on public.price_history;
-create policy "price_history_select" on public.price_history
-  for select using (true); -- gráficas públicas
--- Las inserciones se hacen por el servidor (service_role), sin policy de auth.
-
--- ── PUSH SUBSCRIPTIONS ──────────────────────────────────────────────────────
-alter table public.push_subscriptions enable row level security;
-drop policy if exists "push_select_own" on public.push_subscriptions;
-create policy "push_select_own" on public.push_subscriptions
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "push_insert_own" on public.push_subscriptions;
-create policy "push_insert_own" on public.push_subscriptions
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "push_delete_own" on public.push_subscriptions;
-create policy "push_delete_own" on public.push_subscriptions
-  for delete using (auth.uid() = user_id);
+-- NOTIFICATIONS: owner only
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "notifications_owner_all" ON notifications;
+CREATE POLICY "notifications_owner_all" ON notifications FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
 -- ============================================================================
--- AUTO-PERFIL AL REGISTRARSE EN AUTH
--- Crea automáticamente la fila en public.users cuando un usuario se registra
--- en Supabase Auth. El perfil se rellena con los metadatos del registro.
+-- AUTO-CREATE PROFILE + PRIVATE + WALLET ON REGISTRATION
 -- ============================================================================
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer set search_path = public
-as $$
-declare
-  meta_name text;
-  meta_username text;
-begin
+CREATE OR REPLACE FUNCTION handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  meta_name TEXT;
+  meta_username TEXT;
+BEGIN
   meta_username := coalesce(
     (new.raw_user_meta_data ->> 'username'),
     (new.raw_user_meta_data ->> 'user_name'),
@@ -327,45 +598,57 @@ begin
     coalesce(new.email, 'Usuario')
   );
 
-  insert into public.users (
-    id, email, phone, name, username,
-    member_since, level, level_name, sales, rating, response_time, balance
-  )
-  values (
-    new.id,
-    coalesce(new.email, ''),
-    nullif(coalesce((new.raw_user_meta_data ->> 'phone'), ''), ''),
-    meta_name,
-    meta_username,
-    to_char(now(), 'YYYY'),
-    1,
-    'Nuevo Vendedor',
-    0,
-    5.00,
-    '< 1 hora',
-    0.00
-  )
-  on conflict (id) do nothing;
-  return new;
-end;
+  INSERT INTO profiles (id, username, name, member_since)
+  VALUES (new.id, meta_username, meta_name, to_char(now(), 'YYYY'))
+  ON CONFLICT (id) DO NOTHING;
+
+  INSERT INTO user_private (user_id, email, phone)
+  VALUES (new.id, coalesce(new.email, ''), nullif(coalesce((new.raw_user_meta_data ->> 'phone'), ''), ''))
+  ON CONFLICT (user_id) DO NOTHING;
+
+  INSERT INTO wallet (user_id, balance, available_balance, pending_balance)
+  VALUES (new.id, 0.00, 0.00, 0.00)
+  ON CONFLICT (user_id) DO NOTHING;
+
+  RETURN NEW;
+END;
 $$;
 
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION handle_new_user();
 
 -- ============================================================================
--- STORAGE — bucket público para imágenes de cartas
+-- STORAGE — card images bucket
 -- ============================================================================
-insert into storage.buckets (id, name, public)
-values ('card-images', 'card-images', true)
-on conflict (id) do nothing;
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES ('card-images', 'card-images', true, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
+ON CONFLICT (id) DO UPDATE SET
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
 
-drop policy if exists "card_images_public_read" on storage.objects;
-create policy "card_images_public_read" on storage.objects
-  for select using (bucket_id = 'card-images');
+DROP POLICY IF EXISTS "card_images_public_read" ON storage.objects;
+CREATE POLICY "card_images_public_read" ON storage.objects
+  FOR SELECT USING (bucket_id = 'card-images');
 
-drop policy if exists "card_images_anon_insert" on storage.objects;
-create policy "card_images_anon_insert" on storage.objects
-  for insert with check (bucket_id = 'card-images');
+DROP POLICY IF EXISTS "card_images_insert_auth" ON storage.objects;
+CREATE POLICY "card_images_insert_auth" ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    bucket_id = 'card-images'
+    AND owner = auth.uid()
+    AND (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+DROP POLICY IF EXISTS "card_images_update_auth" ON storage.objects;
+CREATE POLICY "card_images_update_auth" ON storage.objects
+  FOR UPDATE TO authenticated
+  USING (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text)
+  WITH CHECK (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text);
+
+DROP POLICY IF EXISTS "card_images_delete_auth" ON storage.objects;
+CREATE POLICY "card_images_delete_auth" ON storage.objects
+  FOR DELETE TO authenticated
+  USING (bucket_id = 'card-images' AND owner = auth.uid() AND (storage.foldername(name))[1] = auth.uid()::text);

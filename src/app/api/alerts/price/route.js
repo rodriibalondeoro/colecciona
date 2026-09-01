@@ -41,10 +41,10 @@ export async function POST(req) {
     }
 
     // Verificar premium
-    const { data: profile } = await supabase
-      .from("users").select("is_premium").eq("id", user.id).single();
+    const { data: sub } = await supabase
+      .from("subscriptions").select("status").eq("user_id", user.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
 
-    if (!profile?.is_premium) {
+    if (sub?.status !== "active") {
       return NextResponse.json({ error: "Función exclusiva de Premium" }, { status: 403 });
     }
 
