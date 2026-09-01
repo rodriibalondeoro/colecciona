@@ -270,10 +270,14 @@ BEGIN
 
   IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
     allowed := CASE
-      -- Payment flow (buyer initiates, Stripe/webhook confirms)
+      -- Payment flow: buyer initiates PENDING→PAYMENT_PROCESSING
       WHEN OLD.status = 'PENDING' AND NEW.status = 'PAYMENT_PROCESSING'
         AND auth.uid() = OLD.buyer_id THEN true
-      WHEN OLD.status = 'PAYMENT_PROCESSING' AND NEW.status = 'PAID' THEN true
+
+      -- Payment confirmation: ONLY via service_role (Stripe webhook)
+      -- auth.uid() IS NULL when called from service_role
+      WHEN OLD.status = 'PAYMENT_PROCESSING' AND NEW.status = 'PAID'
+        AND auth.uid() IS NULL THEN true
 
       -- Seller prepares
       WHEN OLD.status = 'PAID' AND NEW.status = 'PREPARING'
