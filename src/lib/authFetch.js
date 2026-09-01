@@ -7,16 +7,14 @@ import { supabase } from "./supabase";
 export async function authFetch(url, options = {}) {
   let token = null;
 
-  // Try Supabase Auth first
   if (supabase) {
+    // Supabase configured → ONLY Supabase Auth
     try {
       const { data } = await supabase.auth.getSession();
       if (data?.session?.access_token) token = data.session.access_token;
     } catch {}
-  }
-
-  // Fallback to localStorage (demo mode)
-  if (!token) {
+  } else {
+    // Demo mode ONLY (Supabase not configured)
     try {
       const raw = localStorage.getItem("colecciona_session");
       if (raw) {

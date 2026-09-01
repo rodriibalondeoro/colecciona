@@ -5,11 +5,15 @@
 import { supabase, isConfigured } from "./supabase";
 
 async function getAuthToken() {
-  if (!supabase) return null;
-  try {
-    const { data } = await supabase.auth.getSession();
-    if (data?.session?.access_token) return data.session.access_token;
-  } catch {}
+  if (supabase) {
+    // Supabase configured → ONLY Supabase Auth
+    try {
+      const { data } = await supabase.auth.getSession();
+      if (data?.session?.access_token) return data.session.access_token;
+    } catch {}
+    return null;
+  }
+  // Demo mode ONLY (Supabase not configured)
   try {
     const raw = localStorage.getItem("colecciona_session");
     if (raw) {
@@ -17,7 +21,6 @@ async function getAuthToken() {
       if (s.access_token) return s.access_token;
     }
   } catch {}
-  console.warn("[DataService] No se encontró auth token. El usuario debe reloguearse.");
   return null;
 }
 

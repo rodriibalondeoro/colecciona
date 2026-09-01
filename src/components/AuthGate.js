@@ -28,16 +28,14 @@ export default function AuthGate({ children }) {
 
       let session = null;
 
-      // Try Supabase Auth first
+      // Supabase configured → ONLY Supabase Auth
       if (supabase) {
         try {
           const { data } = await supabase.auth.getSession();
           session = data?.session;
         } catch {}
-      }
-
-      // Fallback to localStorage (demo mode)
-      if (!session) {
+      } else {
+        // Demo mode ONLY (Supabase not configured)
         try {
           const raw = localStorage.getItem("colecciona_session");
           if (raw) session = JSON.parse(raw);
