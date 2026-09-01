@@ -27,6 +27,29 @@ export function AppProvider({ children }) {
     }
   }); // [{product, qty, shippingMethod}]
 
+  // Migrate cart to per-user storage
+  const migrateCartRef = useRef(false);
+  useEffect(() => {
+    if (!session?.id || migrateCartRef.current) return;
+    migrateCartRef.current = true;
+    try {
+      const globalKey = "colecciona_cart";
+      const userKey = `colecciona_cart_${session.id}`;
+      const userStored = localStorage.getItem(userKey);
+      const globalStored = localStorage.getItem(globalKey);
+      if (userStored) {
+        setCart(JSON.parse(userStored));
+      } else if (globalStored) {
+        const globalCart = JSON.parse(globalStored);
+        if (globalCart.length > 0) {
+          localStorage.setItem(userKey, globalStored);
+          setCart(globalCart);
+        }
+        localStorage.removeItem(globalKey);
+      }
+    } catch {}
+  }, [session]);
+
   // ── Favorites / Wishlist ──
   const [favorites, setFavorites] = useState(() => {
     try {
@@ -172,7 +195,18 @@ export function AppProvider({ children }) {
               : t
           );
         }
-        return prev;
+        // Thread doesn't exist yet — create it
+        const newThread = {
+          id: `t${Date.now()}`,
+          productId: msg.product_id,
+          participants: [session.id, msg.sender_id],
+          partner: { id: msg.sender_id },
+          messages: [{ id: msg.id, from: msg.sender_id, text: msg.text, time: msg.created_at }],
+          lastMessage: msg.text,
+          lastTime: msg.created_at || new Date().toISOString(),
+          unread: 1,
+        };
+        return [...prev, newThread];
       });
     });
 
@@ -363,13 +397,14 @@ export function AppProvider({ children }) {
   }, [session]);
 
   // ─────────────────────────────────────────────────────────────
-  // Persist cart in localStorage (always)
+  // Persist cart in localStorage (per-user)
   // ─────────────────────────────────────────────────────────────
   useEffect(() => {
     try {
-      localStorage.setItem("colecciona_cart", JSON.stringify(cart));
+      const key = session?.id ? `colecciona_cart_${session.id}` : "colecciona_cart";
+      localStorage.setItem(key, JSON.stringify(cart));
     } catch {}
-  }, [cart]);
+  }, [cart, session]);
 
   // ─────────────────────────────────────────────────────────────
   // Persist favorites locally per user
@@ -713,65 +748,112 @@ export function AppProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   // Orders helpers
   // ─────────────────────────────────────────────────────────────
-  const confirmReceived = useCallback((orderId) => {
-    setOrders((prev) =>
-      prev.map((o) => o.id === orderId ? { ...o, status: ORDER_STATES.COMPLETED, confirmedAt: new Date().toISOString() } : o)
-    );
-    showToast("¡Recepción confirmada! Valoración disponible.", "success");
-  }, [showToast]);
+  const confirmReceived = useCallback(async (orderId) => {
+    try {
+      const token = session?.access_token;
+      if (!token) throw new Error("No autenticado");
+      const res = await fetch(`/api/orders/${orderId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status: "COMPLETED" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setOrders((prev) =>
+        prev.map((o) => o.id === orderId ? { ...o, status: "COMPLETED", confirmedAt: new Date().toISOString() } : o)
+      );
+      showToast("¡Recepción confirmada! Valoración disponible.", "success");
+    } catch (err) {
+      showToast(err.message || "Error al confirmar recepción", "error");
+    }
+  }, [session, showToast]);
 
-  const markSaleShipped = useCallback((saleId, trackingCode) => {
-    setSales((prev) =>
-      prev.map((s) => s.id === saleId ? { ...s, status: ORDER_STATES.SHIPPED, trackingCode } : s)
-    );
-    showToast("Envío marcado como enviado", "success");
-  }, [showToast]);
+  const markSaleShipped = useCallback(async (saleId, trackingCode) => {
+    try {
+      const token = session?.access_token;
+      if (!token) throw new Error("No autenticado");
+      const res = await fetch(`/api/orders/${saleId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status: "SHIPPED", tracking_code: trackingCode }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setSales((prev) =>
+        prev.map((s) => s.id === saleId ? { ...s, status: "SHIPPED", trackingCode } : s)
+      );
+      showToast("Envío marcado como enviado", "success");
+    } catch (err) {
+      showToast(err.message || "Error al marcar envío", "error");
+    }
+  }, [session, showToast]);
 
-  const checkout = useCallback((address, paymentMethod) => {
-    const newOrders = cart.map((item) => ({
-      id: `CV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      product: item.product,
-      seller: users.find((u) => u.id === item.product.seller) || users[0],
-      buyer: "me",
-      price: item.product.price,
-      shipping: item.shippingMethod?.price || 1.8,
-      commission: item.product.price * 0.08,
-      total: item.product.price + (item.shippingMethod?.price || 1.8) + item.product.price * 0.08,
-      shippingMethod: item.shippingMethod?.name || "Sobre acolchado Correos",
-      trackingCode: null,
-      status: ORDER_STATES.PAID,
-      purchasedAt: new Date().toISOString(),
-      confirmedAt: null,
-      address,
-    }));
-    setOrders((prev) => [...newOrders, ...prev]);
-    clearCart();
-    showToast("¡Pedido realizado! Dinero en custodia segura.", "success");
-    return newOrders[0]?.id;
-  }, [cart, clearCart, showToast]);
+  const checkout = useCallback(async (address, paymentMethod) => {
+    try {
+      const token = session?.access_token;
+      if (!token) throw new Error("No autenticado");
+
+      const productIds = cart.map((item) => item.product.id).filter(Boolean);
+      if (productIds.length === 0) throw new Error("Carrito vacío");
+
+      // 1. Create order + reserve products via API
+      const orderRes = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          productIds,
+          shippingMethod: cart[0]?.shippingMethod?.id || "standard",
+          shippingAddress: address,
+        }),
+      });
+      const orderData = await orderRes.json();
+      if (!orderRes.ok) throw new Error(orderData.error);
+
+      // 2. Create Stripe PaymentIntent
+      const stripeRes = await fetch("/api/stripe/create-payment-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          productIds,
+          shippingMethod: cart[0]?.shippingMethod?.id || "standard",
+          shippingAddress: address,
+        }),
+      });
+      const stripeData = await stripeRes.json();
+      if (!stripeRes.ok) throw new Error(stripeData.error);
+
+      clearCart();
+      showToast("¡Pedido realizado! Procesando pago...", "success");
+      return { orderId: orderData.order?.order_id || stripeData.orderId, clientSecret: stripeData.clientSecret };
+    } catch (err) {
+      showToast(err.message || "Error al procesar el pedido", "error");
+      return null;
+    }
+  }, [session, cart, clearCart, showToast]);
 
   // ─────────────────────────────────────────────────────────────
   // Reviews
   // ─────────────────────────────────────────────────────────────
   const [reviews, setReviews] = useState([]);
 
-  const addReview = useCallback((orderId, targetUserId, rating, comment) => {
-    setReviews((prev) => [
-      ...prev,
-      {
-        id: `r${Date.now()}`,
-        orderId,
-        reviewer: session || users[2],
-        targetUserId,
-        rating,
-        comment,
-        date: new Date().toISOString(),
-      },
-    ]);
-    setOrders((prev) =>
-      prev.map((o) => o.id === orderId ? { ...o, reviewed: true } : o)
-    );
-    showToast("¡Valoración enviada! Gracias.", "success");
+  const addReview = useCallback(async (orderId, targetUserId, rating, comment) => {
+    try {
+      const token = session?.access_token;
+      if (!token) throw new Error("No autenticado");
+      const res = await fetch("/api/reviews", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ orderId, rating, comment }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setOrders((prev) =>
+        prev.map((o) => o.id === orderId ? { ...o, reviewed: true } : o)
+      );
+      showToast("¡Valoración enviada! Gracias.", "success");
+    } catch (err) {
+      showToast(err.message || "Error al enviar valoración", "error");
+    }
   }, [session, showToast]);
 
   const getReviewsForUser = useCallback((userId) => {

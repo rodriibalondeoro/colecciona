@@ -1,13 +1,7 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { getServerSupabase } from "@/lib/serverSupabase";
 import { verifyAuth } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
-import { ORDER_STATES } from "@/lib/orderStates";
-
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-const COMMISSION_RATE = 0.08;
 
 export async function POST(req) {
   try {
@@ -18,89 +12,32 @@ export async function POST(req) {
     const rl = rateLimit(`order:${ip}`, { limit: 5, windowMs: 60000 });
     if (!rl.allowed) return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
 
-    const body = await req.json();
-    const supabase = createClient(url, key);
+    const { productIds, shippingMethod, shippingAddress } = await req.json();
+    const supabase = getServerSupabase();
+    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 
-    const { data: product, error: productError } = await supabase
-      .from("products")
-      .select("price, seller, title, image, status")
-      .eq("id", body.productId)
-      .single();
-
-    if (productError || !product) {
-      return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
-    }
-    if (product.status !== "ACTIVE") {
-      return NextResponse.json({ error: "Producto no disponible" }, { status: 409 });
-    }
-
-    const { data: reservedProduct, error: reserveError } = await supabase
-      .from("products")
-      .update({
-        status: "SOLD",
-        reserved_by: user.id,
-        reserved_until: null,
-        sold_at: new Date().toISOString(),
-      })
-      .eq("id", body.productId)
-      .eq("status", "ACTIVE")
-      .select("id")
-      .single();
-
-    if (reserveError || !reservedProduct) {
-      return NextResponse.json({ error: "Producto no disponible" }, { status: 409 });
+    // 1. Reserve products
+    const reservedUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const { error: reserveError } = await supabase.rpc("reserve_products_for_checkout", {
+      p_product_ids: productIds,
+      p_buyer_id: user.id,
+      p_reserved_until: reservedUntil,
+    });
+    if (reserveError) {
+      return NextResponse.json({ error: "Uno o más productos no están disponibles" }, { status: 409 });
     }
 
-    const price = product.price;
-    const shipping = body.shipping || 0;
-    const commission = price * COMMISSION_RATE;
-    const total = price + shipping;
-
-    const { data, error: insertError } = await supabase
-      .from("orders")
-      .insert({
-        product_id: body.productId,
-        seller_id: product.seller,
-        buyer_id: user.id,
-        price,
-        shipping,
-        commission,
-        total,
-        shipping_method: body.shippingMethod || "Sobre acolchado Correos",
-        shipping_address: body.shippingAddress || "",
-        status: ORDER_STATES.PAID,
-      })
-      .select()
-      .single();
-
-    if (insertError) {
-      await supabase
-        .from("products")
-        .update({ status: "ACTIVE", reserved_by: null, reserved_until: null, sold_at: null })
-        .eq("id", body.productId)
-        .eq("reserved_by", user.id)
-        .eq("status", "SOLD");
-      return NextResponse.json({ error: insertError.message }, { status: 500 });
+    // 2. Create order via RPC (server-calculates all prices)
+    const { data: orderResult, error: orderError } = await supabase.rpc("create_checkout_order", {
+      p_product_ids: productIds,
+      p_shipping_method: shippingMethod || "standard",
+      p_shipping_address: shippingAddress || "",
+    });
+    if (orderError || !orderResult) {
+      return NextResponse.json({ error: "Error creando el pedido" }, { status: 500 });
     }
 
-    await supabase.from("notifications").insert([
-      {
-        user_id: product.seller,
-        type: "sale",
-        title: "¡Nueva venta!",
-        body: `Tu carta "${product.title}" se vendió por ${price.toFixed(2)} €`,
-        link: "/orders",
-      },
-      {
-        user_id: user.id,
-        type: "purchase",
-        title: "Compra confirmada",
-        body: `Compraste "${product.title}" por ${price.toFixed(2)} €`,
-        link: "/orders",
-      },
-    ]);
-
-    return NextResponse.json({ success: true, order: data });
+    return NextResponse.json({ success: true, order: orderResult });
   } catch (err) {
     console.error("Error creating order:", err);
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
@@ -112,10 +49,17 @@ export async function GET(req) {
     const { user, error } = await verifyAuth(req);
     if (error) return NextResponse.json({ orders: [] });
 
-    const supabase = createClient(url, key);
+    const supabase = getServerSupabase();
+    if (!supabase) return NextResponse.json({ orders: [] });
+
     const { data } = await supabase
       .from("orders")
-      .select("*, product:products(id, title, image, price), seller:users!orders_seller_id_fkey(name, username), buyer:users!orders_buyer_id_fkey(name, username)")
+      .select(`
+        *,
+        items:order_items(id, product_id, price, product:products(id, title, image)),
+        seller:profiles!orders_seller_id_fkey(name, username),
+        buyer:profiles!orders_buyer_id_fkey(name, username)
+      `)
       .or(`buyer_id.eq.${user.id},seller_id.eq.${user.id}`)
       .order("created_at", { ascending: false });
 
