@@ -390,24 +390,45 @@ RETURNS VOID
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
+  v_order RECORD;
   v_product_ids UUID[];
+  v_expected_count INTEGER;
+  v_released_count INTEGER;
 BEGIN
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can rollback checkout'; END IF;
+
+  -- Lock order
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Must be in a rollbackable state
+  IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING') THEN
+    RAISE EXCEPTION 'Cannot rollback order in status %', v_order.status;
+  END IF;
 
   -- Collect product IDs from order items
   SELECT array_agg(product_id) INTO v_product_ids
   FROM order_items WHERE order_id = p_order_id;
 
-  -- Release reserved products
-  IF v_product_ids IS NOT NULL AND array_length(v_product_ids, 1) > 0 THEN
+  v_expected_count := COALESCE(array_length(v_product_ids, 1), 0);
+
+  -- Release ONLY products reserved by this buyer
+  IF v_expected_count > 0 THEN
     UPDATE products
     SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
-    WHERE id = ANY(v_product_ids) AND status = 'RESERVED';
+    WHERE id = ANY(v_product_ids)
+      AND status = 'RESERVED'
+      AND reserved_by = v_order.buyer_id;
+
+    GET DIAGNOSTICS v_released_count = ROW_COUNT;
+
+    IF v_released_count <> v_expected_count THEN
+      RAISE EXCEPTION 'Rollback: expected % products released, but only % were', v_expected_count, v_released_count;
+    END IF;
   END IF;
 
   -- Cancel the order
-  UPDATE orders SET status = 'CANCELLED'
-  WHERE id = p_order_id AND status IN ('PENDING','PAYMENT_PROCESSING');
+  UPDATE orders SET status = 'CANCELLED' WHERE id = p_order_id;
 END;
 $$;
 
