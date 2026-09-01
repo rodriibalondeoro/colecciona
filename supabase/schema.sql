@@ -131,12 +131,12 @@ RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 BEGIN
   -- Block changes to immutable fields
-  IF OLD.seller_id IS DISTINCT FROM NEW.seller_id THEN RAISE EXCEPTION 'Cannot change seller'; END IF;
+  IF OLD.seller IS DISTINCT FROM NEW.seller THEN RAISE EXCEPTION 'Cannot change seller'; END IF;
   IF OLD.created_at IS DISTINCT FROM NEW.created_at THEN RAISE EXCEPTION 'Cannot change created_at'; END IF;
 
   IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
     -- Seller can manage their own products
-    IF auth.uid() = OLD.seller_id THEN
+    IF auth.uid() = OLD.seller THEN
       -- DRAFT → ACTIVE (publish)
       IF OLD.status = 'DRAFT' AND NEW.status = 'ACTIVE' THEN
         RETURN NEW;
@@ -162,7 +162,7 @@ BEGIN
     -- RESERVED → SOLD (via checkout completion)
     -- RESERVED → ACTIVE (via reservation expiry — system only)
     -- Only allow these through SECURITY DEFINER functions, not direct UPDATE
-    IF auth.uid() IS NOT NULL AND auth.uid() <> OLD.seller_id THEN
+    IF auth.uid() IS NOT NULL AND auth.uid() <> OLD.seller THEN
       IF NOT (OLD.status = 'ACTIVE' AND NEW.status = 'RESERVED') THEN
         IF NOT (OLD.status = 'RESERVED' AND NEW.status IN ('ACTIVE','SOLD')) THEN
           RAISE EXCEPTION 'Only the system can transition product status to %', NEW.status;
