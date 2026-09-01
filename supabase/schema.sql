@@ -134,6 +134,13 @@ BEGIN
   IF OLD.seller IS DISTINCT FROM NEW.seller THEN RAISE EXCEPTION 'Cannot change seller'; END IF;
   IF OLD.created_at IS DISTINCT FROM NEW.created_at THEN RAISE EXCEPTION 'Cannot change created_at'; END IF;
 
+  -- Block seller from modifying system/reservation fields
+  IF auth.uid() = OLD.seller THEN
+    IF OLD.reserved_by IS DISTINCT FROM NEW.reserved_by THEN RAISE EXCEPTION 'Cannot change reserved_by'; END IF;
+    IF OLD.reserved_until IS DISTINCT FROM NEW.reserved_until THEN RAISE EXCEPTION 'Cannot change reserved_until'; END IF;
+    IF OLD.sold_at IS DISTINCT FROM NEW.sold_at THEN RAISE EXCEPTION 'Cannot change sold_at'; END IF;
+  END IF;
+
   IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
     -- Seller can manage their own products
     IF auth.uid() = OLD.seller THEN
@@ -221,6 +228,94 @@ BEGIN
 END;
 $$;
 
+-- Atomic checkout: validate prices server-side, create order
+CREATE OR REPLACE FUNCTION create_checkout_order(
+  p_product_ids UUID[],
+  p_shipping_method TEXT DEFAULT 'standard',
+  p_shipping_address TEXT DEFAULT ''
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_product RECORD;
+  v_subtotal NUMERIC := 0;
+  v_shipping NUMERIC := 0;
+  v_commission NUMERIC := 0;
+  v_total NUMERIC := 0;
+  v_seller_id UUID;
+  v_order_id UUID;
+  v_commission_rate NUMERIC := 0.08;
+  v_is_premium BOOLEAN;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF array_length(p_product_ids, 1) IS NULL THEN RAISE EXCEPTION 'No products provided'; END IF;
+
+  -- Validate all products exist, are RESERVED by this buyer, and prices match
+  FOR v_product IN
+    SELECT p.*, pr.price AS listed_price
+    FROM products p
+    JOIN unnest(p_product_ids) AS ids(id) ON p.id = ids.id
+  LOOP
+    IF v_product.reserved_by <> auth.uid() THEN
+      RAISE EXCEPTION 'Product % is not reserved by you', v_product.id;
+    END IF;
+    IF v_product.status <> 'RESERVED' THEN
+      RAISE EXCEPTION 'Product % is not in RESERVED status', v_product.id;
+    END IF;
+    IF v_product.seller = auth.uid() THEN
+      RAISE EXCEPTION 'Cannot buy your own product %', v_product.id;
+    END IF;
+
+    -- Track seller (all must be same seller for single order)
+    IF v_seller_id IS NULL THEN
+      v_seller_id := v_product.seller;
+    ELSIF v_seller_id <> v_product.seller THEN
+      RAISE EXCEPTION 'All products must be from the same seller for a single order';
+    END IF;
+
+    v_subtotal := v_subtotal + v_product.price;
+  END LOOP;
+
+  -- Check if buyer is premium (reduced commission)
+  SELECT EXISTS(
+    SELECT 1 FROM subscriptions
+    WHERE user_id = auth.uid()
+      AND status IN ('active','trialing')
+      AND current_period_end > now()
+  ) INTO v_is_premium;
+
+  IF v_is_premium THEN v_commission_rate := 0.05; END IF;
+
+  -- Calculate shipping and commission server-side
+  v_shipping := CASE WHEN p_shipping_method = 'tracked' THEN 4.00 ELSE 2.50 END;
+  v_commission := round(v_subtotal * v_commission_rate, 2);
+  v_total := v_subtotal + v_shipping;
+
+  -- Create order with server-calculated values
+  INSERT INTO orders(
+    product_id, seller_id, buyer_id, price, shipping, commission, total,
+    shipping_method, shipping_address, status
+  )
+  SELECT
+    p.id, p.seller, auth.uid(), p.price, v_shipping, v_commission, v_total,
+    p_shipping_method, p_shipping_address, 'PENDING'
+  FROM products p
+  WHERE p.id = ANY(p_product_ids)
+  RETURNING id INTO v_order_id;
+
+  RETURN jsonb_build_object(
+    'order_id', v_order_id,
+    'subtotal', v_subtotal,
+    'shipping', v_shipping,
+    'commission', v_commission,
+    'total', v_total,
+    'seller_id', v_seller_id,
+    'premium_discount', v_is_premium
+  );
+END;
+$$;
+
 -- ============================================================================
 -- 5. ORDERS — purchase transactions (10 states)
 -- ============================================================================
@@ -295,15 +390,20 @@ BEGIN
       WHEN OLD.status = 'DELIVERED' AND NEW.status = 'COMPLETED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
 
-      -- Cancellation (before shipped)
-      WHEN OLD.status IN ('PENDING','PAYMENT_PROCESSING','PAID','PREPARING')
+      -- Cancellation (before shipped, before payment)
+      WHEN OLD.status IN ('PENDING','PAYMENT_PROCESSING')
         AND NEW.status = 'CANCELLED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
 
-      -- Refund (after payment, before completion)
+      -- Cancellation after payment: ONLY via service_role (admin/refund flow)
+      WHEN OLD.status IN ('PAID','PREPARING')
+        AND NEW.status = 'CANCELLED'
+        AND auth.uid() IS NULL THEN true
+
+      -- Refund: ONLY via service_role (Stripe refund / admin)
       WHEN OLD.status IN ('PAID','PREPARING','SHIPPED','DELIVERED')
         AND NEW.status = 'REFUNDED'
-        AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
+        AND auth.uid() IS NULL THEN true
 
       -- Dispute (any time before completed/cancelled)
       WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','REFUNDED','DISPUTED')
@@ -626,8 +726,8 @@ CREATE POLICY "products_delete_seller" ON products FOR DELETE USING (auth.uid() 
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "orders_select_participant" ON orders;
 CREATE POLICY "orders_select_participant" ON orders FOR SELECT USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
-DROP POLICY IF EXISTS "orders_insert_buyer" ON orders;
-CREATE POLICY "orders_insert_buyer" ON orders FOR INSERT WITH CHECK (auth.uid() = buyer_id);
+-- NO INSERT POLICY: orders created via create_checkout_order() RPC only
+-- Server-side calculates price, shipping, commission — client never sends these
 DROP POLICY IF EXISTS "orders_update_participant" ON orders;
 CREATE POLICY "orders_update_participant" ON orders FOR UPDATE USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
 
@@ -988,3 +1088,6 @@ GRANT EXECUTE ON FUNCTION create_review(UUID, INTEGER, TEXT) TO authenticated;
 
 REVOKE ALL ON FUNCTION reserve_products_for_checkout(UUID[], UUID, TIMESTAMPTZ) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION reserve_products_for_checkout(UUID[], UUID, TIMESTAMPTZ) TO authenticated;
+
+REVOKE ALL ON FUNCTION create_checkout_order(UUID[], TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION create_checkout_order(UUID[], TEXT, TEXT) TO authenticated;
