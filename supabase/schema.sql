@@ -383,6 +383,34 @@ BEGIN
 END;
 $$;
 
+-- Rollback checkout: release reserved products + cancel order (service_role only)
+-- Used when Stripe fails after order creation
+CREATE OR REPLACE FUNCTION rollback_checkout(p_order_id UUID)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_product_ids UUID[];
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can rollback checkout'; END IF;
+
+  -- Collect product IDs from order items
+  SELECT array_agg(product_id) INTO v_product_ids
+  FROM order_items WHERE order_id = p_order_id;
+
+  -- Release reserved products
+  IF v_product_ids IS NOT NULL AND array_length(v_product_ids, 1) > 0 THEN
+    UPDATE products
+    SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
+    WHERE id = ANY(v_product_ids) AND status = 'RESERVED';
+  END IF;
+
+  -- Cancel the order
+  UPDATE orders SET status = 'CANCELLED'
+  WHERE id = p_order_id AND status IN ('PENDING','PAYMENT_PROCESSING');
+END;
+$$;
+
 -- Atomic checkout: validate prices server-side, create order + order_items
 CREATE OR REPLACE FUNCTION create_checkout_order(
   p_product_ids UUID[],
@@ -1317,3 +1345,7 @@ REVOKE ALL ON FUNCTION cleanup_expired_reservations() FROM PUBLIC;
 -- cancel_order: authenticated participant (buyer or seller)
 REVOKE ALL ON FUNCTION cancel_order(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cancel_order(UUID) TO authenticated;
+
+-- rollback_checkout: service_role only (checkout failure recovery)
+REVOKE ALL ON FUNCTION rollback_checkout(UUID) FROM PUBLIC;
+-- No GRANT to authenticated: only service_role can call this
