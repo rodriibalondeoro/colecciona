@@ -240,6 +240,12 @@ CREATE TABLE IF NOT EXISTS collection_items (
   image_url TEXT,
   status collection_item_status DEFAULT 'OWNED',
   priority TEXT DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+  -- Quantity model (cumulative):
+  -- owned_quantity = total cards you have
+  -- duplicate_quantity = extras (owned - 1 for your collection)
+  -- trade_quantity = available for trade (subset of duplicates)
+  -- sale_quantity = available for sale (subset of duplicates)
+  -- trade_quantity + sale_quantity <= duplicate_quantity
   total_quantity INTEGER DEFAULT 1 CHECK (total_quantity >= 0),
   owned_quantity INTEGER DEFAULT 1 CHECK (owned_quantity >= 0),
   duplicate_quantity INTEGER DEFAULT 0 CHECK (duplicate_quantity >= 0),
@@ -249,8 +255,9 @@ CREATE TABLE IF NOT EXISTS collection_items (
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now(),
   CONSTRAINT chk_duplicate_not_exceed_owned CHECK (duplicate_quantity <= owned_quantity),
-  CONSTRAINT chk_trade_not_exceed_available CHECK (trade_quantity <= owned_quantity - duplicate_quantity),
-  CONSTRAINT chk_sale_not_exceed_available CHECK (sale_quantity <= owned_quantity - duplicate_quantity)
+  CONSTRAINT chk_trade_not_exceed_duplicates CHECK (trade_quantity <= duplicate_quantity),
+  CONSTRAINT chk_sale_not_exceed_duplicates CHECK (sale_quantity <= duplicate_quantity),
+  CONSTRAINT chk_trade_sale_not_exceed_duplicates CHECK (trade_quantity + sale_quantity <= duplicate_quantity)
 );
 
 CREATE INDEX IF NOT EXISTS idx_collection_items_collection ON collection_items(collection_id);
@@ -301,16 +308,20 @@ BEGIN
   IF NEW.trade_quantity < 0 THEN
     RAISE EXCEPTION 'trade_quantity cannot be negative';
   END IF;
-  IF NEW.trade_quantity > (NEW.owned_quantity - NEW.duplicate_quantity) THEN
-    RAISE EXCEPTION 'trade_quantity (%) exceeds available cards (%)',
-      NEW.trade_quantity, NEW.owned_quantity - NEW.duplicate_quantity;
+  IF NEW.trade_quantity > NEW.duplicate_quantity THEN
+    RAISE EXCEPTION 'trade_quantity (%) cannot exceed duplicate_quantity (%)',
+      NEW.trade_quantity, NEW.duplicate_quantity;
   END IF;
   IF NEW.sale_quantity < 0 THEN
     RAISE EXCEPTION 'sale_quantity cannot be negative';
   END IF;
-  IF NEW.sale_quantity > (NEW.owned_quantity - NEW.duplicate_quantity) THEN
-    RAISE EXCEPTION 'sale_quantity (%) exceeds available cards (%)',
-      NEW.sale_quantity, NEW.owned_quantity - NEW.duplicate_quantity;
+  IF NEW.sale_quantity > NEW.duplicate_quantity THEN
+    RAISE EXCEPTION 'sale_quantity (%) cannot exceed duplicate_quantity (%)',
+      NEW.sale_quantity, NEW.duplicate_quantity;
+  END IF;
+  IF (NEW.trade_quantity + NEW.sale_quantity) > NEW.duplicate_quantity THEN
+    RAISE EXCEPTION 'trade + sale (%) cannot exceed duplicate_quantity (%)',
+      NEW.trade_quantity + NEW.sale_quantity, NEW.duplicate_quantity;
   END IF;
   RETURN NEW;
 END;
@@ -482,10 +493,15 @@ CREATE POLICY "profiles_update_own" ON profiles FOR UPDATE USING (auth.uid() = i
 DROP POLICY IF EXISTS "profiles_delete_own" ON profiles;
 CREATE POLICY "profiles_delete_own" ON profiles FOR DELETE USING (auth.uid() = id);
 
--- USER_PRIVATE: owner only
+-- USER_PRIVATE: owner read, controlled write
 ALTER TABLE user_private ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "user_private_owner_all" ON user_private;
-CREATE POLICY "user_private_owner_all" ON user_private FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "user_private_select_own" ON user_private;
+CREATE POLICY "user_private_select_own" ON user_private FOR SELECT USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "user_private_update_own" ON user_private;
+CREATE POLICY "user_private_update_own" ON user_private FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "user_private_insert_own" ON user_private;
+CREATE POLICY "user_private_insert_own" ON user_private FOR INSERT WITH CHECK (auth.uid() = user_id);
 
 -- WALLET: owner SELECT only, no direct UPDATE (service_role only)
 ALTER TABLE wallet ENABLE ROW LEVEL SECURITY;
@@ -763,7 +779,7 @@ CREATE TRIGGER trg_validate_trade_history_insert
   BEFORE INSERT ON trade_history
   FOR EACH ROW EXECUTE FUNCTION validate_trade_history_insert();
 
--- Trade proposals: validate state transitions and set timestamps
+-- Trade proposals: validate state transitions, set timestamps, block immutable fields
 CREATE OR REPLACE FUNCTION validate_trade_proposal_transition()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -773,6 +789,20 @@ AS $$
 DECLARE
   allowed BOOLEAN := false;
 BEGIN
+  -- Block changes to immutable fields
+  IF OLD.proposer_id IS DISTINCT FROM NEW.proposer_id THEN
+    RAISE EXCEPTION 'Cannot change proposer_id after creation';
+  END IF;
+  IF OLD.receiver_id IS DISTINCT FROM NEW.receiver_id THEN
+    RAISE EXCEPTION 'Cannot change receiver_id after creation';
+  END IF;
+  IF OLD.compatibility_score IS DISTINCT FROM NEW.compatibility_score THEN
+    RAISE EXCEPTION 'Cannot change compatibility_score directly';
+  END IF;
+  IF OLD.created_at IS DISTINCT FROM NEW.created_at THEN
+    RAISE EXCEPTION 'Cannot change created_at';
+  END IF;
+
   IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
     allowed := CASE
       WHEN OLD.status = 'DRAFT' AND NEW.status = 'PROPOSED'
@@ -846,9 +876,19 @@ BEGIN
   IF NEW.quantity <= 0 THEN
     RAISE EXCEPTION 'Quantity must be at least 1';
   END IF;
-  IF NEW.quantity > (v_item.owned_quantity - v_item.duplicate_quantity) THEN
-    RAISE EXCEPTION 'Quantity (%) exceeds available cards (%)',
-      NEW.quantity, v_item.owned_quantity - v_item.duplicate_quantity;
+  -- For proposer side: quantity must be available for trade/sale
+  IF NEW.side = 'proposer' THEN
+    IF NEW.quantity > v_item.duplicate_quantity THEN
+      RAISE EXCEPTION 'Quantity (%) exceeds available duplicates (%)',
+        NEW.quantity, v_item.duplicate_quantity;
+    END IF;
+  END IF;
+  -- For receiver side: same check (they need duplicates to offer)
+  IF NEW.side = 'receiver' THEN
+    IF NEW.quantity > v_item.duplicate_quantity THEN
+      RAISE EXCEPTION 'Quantity (%) exceeds available duplicates (%)',
+        NEW.quantity, v_item.duplicate_quantity;
+    END IF;
   END IF;
   RETURN NEW;
 END;

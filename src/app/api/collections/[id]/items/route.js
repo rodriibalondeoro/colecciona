@@ -73,12 +73,13 @@ export async function POST(req, { params }) {
     let tradeQty = 0;
     let saleQty = 0;
 
+    // Cumulative model: owned = total, duplicates = extras, trade/sale = subsets of duplicates
     switch (status) {
       case "OWNED": ownedQty = qty; break;
       case "MISSING": ownedQty = 0; break;
-      case "DUPLICATE": dupQty = qty; break;
-      case "FOR_TRADE": tradeQty = qty; break;
-      case "FOR_SALE": saleQty = qty; break;
+      case "DUPLICATE": ownedQty = qty; dupQty = qty; break;
+      case "FOR_TRADE": ownedQty = qty; dupQty = qty; tradeQty = qty; break;
+      case "FOR_SALE": ownedQty = qty; dupQty = qty; saleQty = qty; break;
       default: ownedQty = qty;
     }
 
@@ -151,12 +152,13 @@ export async function PATCH(req, { params }) {
       updates.status = status;
       const qty = parseInt(total_quantity) || 1;
       updates.total_quantity = qty;
+      // Cumulative model: owned = total, duplicates = extras, trade/sale = subsets
       switch (status) {
         case "OWNED": updates.owned_quantity = qty; updates.duplicate_quantity = 0; updates.trade_quantity = 0; updates.sale_quantity = 0; break;
         case "MISSING": updates.owned_quantity = 0; updates.duplicate_quantity = 0; updates.trade_quantity = 0; updates.sale_quantity = 0; break;
-        case "DUPLICATE": updates.owned_quantity = 0; updates.duplicate_quantity = qty; updates.trade_quantity = 0; updates.sale_quantity = 0; break;
-        case "FOR_TRADE": updates.owned_quantity = 0; updates.duplicate_quantity = 0; updates.trade_quantity = qty; updates.sale_quantity = 0; break;
-        case "FOR_SALE": updates.owned_quantity = 0; updates.duplicate_quantity = 0; updates.trade_quantity = 0; updates.sale_quantity = qty; break;
+        case "DUPLICATE": updates.owned_quantity = qty; updates.duplicate_quantity = qty; updates.trade_quantity = 0; updates.sale_quantity = 0; break;
+        case "FOR_TRADE": updates.owned_quantity = qty; updates.duplicate_quantity = qty; updates.trade_quantity = qty; updates.sale_quantity = 0; break;
+        case "FOR_SALE": updates.owned_quantity = qty; updates.duplicate_quantity = qty; updates.trade_quantity = 0; updates.sale_quantity = qty; break;
       }
     }
     if (total_quantity !== undefined && status === undefined) {

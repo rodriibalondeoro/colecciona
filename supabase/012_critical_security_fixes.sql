@@ -554,3 +554,181 @@ CREATE POLICY "reviews_insert_validated" ON reviews
     -- auth.uid() check: if a client somehow reaches this, reviewer must be them
     auth.uid() = reviewer_id
   );
+
+-- ============================================================================
+-- 8. COLLECTION_ITEMS: Fix quantity model to cumulative
+-- ============================================================================
+
+-- Drop old constraints that assumed exclusive model
+ALTER TABLE collection_items DROP CONSTRAINT IF EXISTS chk_duplicate_not_exceed_owned;
+ALTER TABLE collection_items DROP CONSTRAINT IF EXISTS chk_trade_not_exceed_available;
+ALTER TABLE collection_items DROP CONSTRAINT IF EXISTS chk_sale_not_exceed_available;
+
+-- New cumulative constraints
+ALTER TABLE collection_items ADD CONSTRAINT chk_duplicate_not_exceed_owned
+  CHECK (duplicate_quantity <= owned_quantity);
+ALTER TABLE collection_items ADD CONSTRAINT chk_trade_not_exceed_duplicates
+  CHECK (trade_quantity <= duplicate_quantity);
+ALTER TABLE collection_items ADD CONSTRAINT chk_sale_not_exceed_duplicates
+  CHECK (sale_quantity <= duplicate_quantity);
+ALTER TABLE collection_items ADD CONSTRAINT chk_trade_sale_not_exceed_duplicates
+  CHECK (trade_quantity + sale_quantity <= duplicate_quantity);
+
+-- Update validation trigger
+CREATE OR REPLACE FUNCTION validate_collection_item_quantities()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.owned_quantity < 0 THEN
+    RAISE EXCEPTION 'owned_quantity cannot be negative';
+  END IF;
+  IF NEW.duplicate_quantity < 0 THEN
+    RAISE EXCEPTION 'duplicate_quantity cannot be negative';
+  END IF;
+  IF NEW.duplicate_quantity > NEW.owned_quantity THEN
+    RAISE EXCEPTION 'duplicate_quantity (%) cannot exceed owned_quantity (%)',
+      NEW.duplicate_quantity, NEW.owned_quantity;
+  END IF;
+  IF NEW.trade_quantity < 0 THEN
+    RAISE EXCEPTION 'trade_quantity cannot be negative';
+  END IF;
+  IF NEW.trade_quantity > NEW.duplicate_quantity THEN
+    RAISE EXCEPTION 'trade_quantity (%) cannot exceed duplicate_quantity (%)',
+      NEW.trade_quantity, NEW.duplicate_quantity;
+  END IF;
+  IF NEW.sale_quantity < 0 THEN
+    RAISE EXCEPTION 'sale_quantity cannot be negative';
+  END IF;
+  IF NEW.sale_quantity > NEW.duplicate_quantity THEN
+    RAISE EXCEPTION 'sale_quantity (%) cannot exceed duplicate_quantity (%)',
+      NEW.sale_quantity, NEW.duplicate_quantity;
+  END IF;
+  IF (NEW.trade_quantity + NEW.sale_quantity) > NEW.duplicate_quantity THEN
+    RAISE EXCEPTION 'trade + sale (%) cannot exceed duplicate_quantity (%)',
+      NEW.trade_quantity + NEW.sale_quantity, NEW.duplicate_quantity;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- Update trade proposal item validation to use cumulative model
+CREATE OR REPLACE FUNCTION validate_trade_proposal_item_quantity()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_item RECORD;
+BEGIN
+  SELECT * INTO v_item FROM collection_items WHERE id = NEW.collection_item_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Collection item not found';
+  END IF;
+  IF v_item.user_id <> NEW.user_id THEN
+    RAISE EXCEPTION 'This card does not belong to you';
+  END IF;
+  IF NEW.quantity <= 0 THEN
+    RAISE EXCEPTION 'Quantity must be at least 1';
+  END IF;
+  IF NEW.quantity > v_item.duplicate_quantity THEN
+    RAISE EXCEPTION 'Quantity (%) exceeds available duplicates (%)',
+      NEW.quantity, v_item.duplicate_quantity;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- ============================================================================
+-- 9. TRADE_PROPOSALS: Block immutable field changes
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION validate_trade_proposal_transition()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  allowed BOOLEAN := false;
+BEGIN
+  -- Block changes to immutable fields
+  IF OLD.proposer_id IS DISTINCT FROM NEW.proposer_id THEN
+    RAISE EXCEPTION 'Cannot change proposer_id after creation';
+  END IF;
+  IF OLD.receiver_id IS DISTINCT FROM NEW.receiver_id THEN
+    RAISE EXCEPTION 'Cannot change receiver_id after creation';
+  END IF;
+  IF OLD.compatibility_score IS DISTINCT FROM NEW.compatibility_score THEN
+    RAISE EXCEPTION 'Cannot change compatibility_score directly';
+  END IF;
+  IF OLD.created_at IS DISTINCT FROM NEW.created_at THEN
+    RAISE EXCEPTION 'Cannot change created_at';
+  END IF;
+
+  IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    allowed := CASE
+      WHEN OLD.status = 'DRAFT' AND NEW.status = 'PROPOSED'
+        AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'DRAFT' AND NEW.status = 'CANCELLED'
+        AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'ACCEPTED'
+        AND auth.uid() = OLD.receiver_id THEN true
+      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'COUNTERED'
+        AND auth.uid() = OLD.receiver_id THEN true
+      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'CANCELLED'
+        AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'ACCEPTED'
+        AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'CANCELLED'
+        AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'ACCEPTED' AND NEW.status = 'SHIPPING_PENDING'
+        AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      WHEN OLD.status = 'SHIPPING_PENDING' AND NEW.status = 'SHIPPED'
+        AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      WHEN OLD.status = 'SHIPPED' AND NEW.status = 'RECEIVED'
+        AND auth.uid() = OLD.receiver_id THEN true
+      WHEN OLD.status = 'RECEIVED' AND NEW.status = 'COMPLETED'
+        AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      WHEN OLD.status NOT IN ('COMPLETED', 'CANCELLED', 'DISPUTED')
+        AND NEW.status = 'DISPUTED'
+        AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      ELSE false
+    END;
+    IF NOT allowed THEN
+      RAISE EXCEPTION 'Invalid status transition: % -> % for user %',
+        OLD.status, NEW.status, auth.uid();
+    END IF;
+    IF NEW.status = 'ACCEPTED' AND OLD.status IS DISTINCT FROM 'ACCEPTED' THEN
+      NEW.accepted_at := now();
+    ELSIF NEW.status = 'SHIPPED' AND OLD.status IS DISTINCT FROM 'SHIPPED' THEN
+      NEW.shipped_at := now();
+    ELSIF NEW.status = 'RECEIVED' AND OLD.status IS DISTINCT FROM 'RECEIVED' THEN
+      NEW.received_at := now();
+    ELSIF NEW.status = 'COMPLETED' AND OLD.status IS DISTINCT FROM 'COMPLETED' THEN
+      NEW.completed_at := now();
+    END IF;
+  END IF;
+
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
+
+-- ============================================================================
+-- 10. USER_PRIVATE: Split FOR ALL into granular policies
+-- ============================================================================
+
+DROP POLICY IF EXISTS "user_private_owner_all" ON user_private;
+DROP POLICY IF EXISTS "user_private_select_own" ON user_private;
+CREATE POLICY "user_private_select_own" ON user_private
+  FOR SELECT USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "user_private_update_own" ON user_private;
+CREATE POLICY "user_private_update_own" ON user_private
+  FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "user_private_insert_own" ON user_private;
+CREATE POLICY "user_private_insert_own" ON user_private
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
