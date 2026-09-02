@@ -7,12 +7,19 @@ const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 function mapRpcError(message) {
   if (!message) return { status: 500, code: "INTERNAL" };
-  const m = message.toLowerCase();
-  if (m.includes("not found")) return { status: 404, code: "NOT_FOUND" };
-  if (m.includes("not authenticated") || m.includes("authentication required")) return { status: 401, code: "UNAUTHENTICATED" };
-  if (m.includes("not authorized") || m.includes("only the seller") || m.includes("only the buyer") || m.includes("you are not")) return { status: 403, code: "FORBIDDEN" };
-  if (m.includes("not pending") || m.includes("no longer available") || m.includes("cannot") || m.includes("amount must be")) return { status: 409, code: "CONFLICT" };
-  return { status: 500, code: "INTERNAL" };
+  const codeMatch = message.match(/^\[([A-Z_]+)\]/);
+  const code = codeMatch ? codeMatch[1] : null;
+  switch (code) {
+    case "OFFER_NOT_FOUND": return { status: 404, code };
+    case "PRODUCT_NOT_FOUND": return { status: 404, code };
+    case "AUTH_REQUIRED": return { status: 401, code };
+    case "NOT_SELLER": return { status: 403, code };
+    case "NOT_BUYER": return { status: 403, code };
+    case "OFFER_NOT_PENDING": return { status: 409, code };
+    case "PRODUCT_UNAVAILABLE": return { status: 409, code };
+    case "INVALID_AMOUNT": return { status: 400, code };
+    default: return { status: 500, code: "INTERNAL" };
+  }
 }
 
 export async function PATCH(req, { params }) {

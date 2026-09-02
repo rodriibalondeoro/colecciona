@@ -492,12 +492,13 @@ export function AppProvider({ children }) {
       if (!res.ok) throw new Error(data.error || "Error al enviar contraoferta");
 
       const result = data.result;
+      const orig = result.original_offer;
       const newOffer = result.new_offer;
 
-      // Mark original as countered and add new offer from server
+      // Use statuses from server, not assumptions
       setOffers((prev) => {
         const updated = prev.map((o) =>
-          o.id === offerId ? { ...o, status: "countered" } : o
+          o.id === offerId ? { ...o, status: orig.status } : o
         );
         const mapped = {
           id: newOffer.id,

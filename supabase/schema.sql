@@ -1367,16 +1367,16 @@ DECLARE
   v_product RECORD;
   v_offer_id UUID;
 BEGIN
-  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
-  IF p_amount <= 0 THEN RAISE EXCEPTION 'Offer amount must be positive'; END IF;
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  IF p_amount <= 0 THEN RAISE EXCEPTION '[INVALID_AMOUNT] Offer amount must be positive'; END IF;
 
   -- Get product (locked for consistency)
   SELECT id, seller, title, price, status INTO v_product
   FROM products WHERE id = p_product_id FOR UPDATE;
 
-  IF NOT FOUND THEN RAISE EXCEPTION 'Product not found'; END IF;
-  IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION 'Product is not available for offers'; END IF;
-  IF v_product.seller = auth.uid() THEN RAISE EXCEPTION 'Cannot offer on your own product'; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION '[PRODUCT_NOT_FOUND] Product not found'; END IF;
+  IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION '[PRODUCT_UNAVAILABLE] Product is not available for offers'; END IF;
+  IF v_product.seller = auth.uid() THEN RAISE EXCEPTION '[SELF_OFFER] Cannot offer on your own product'; END IF;
 
   INSERT INTO offers (product_id, from_user_id, to_user_id, amount, original_price, status, message)
   VALUES (p_product_id, auth.uid(), v_product.seller, p_amount, v_product.price, 'pending', p_message)
@@ -1410,19 +1410,19 @@ DECLARE
   v_offer RECORD;
   v_product RECORD;
 BEGIN
-  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
 
   -- Lock offer
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Offer not found'; END IF;
-  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION 'Only the seller can accept this offer'; END IF;
-  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION 'Offer is not pending'; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_SELLER] Only the seller can accept this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
 
   -- Lock product
   SELECT * INTO v_product FROM products WHERE id = v_offer.product_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Product not found'; END IF;
-  IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION 'Product is no longer available'; END IF;
-  IF v_product.seller <> auth.uid() THEN RAISE EXCEPTION 'You are not the seller'; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION '[PRODUCT_NOT_FOUND] Product not found'; END IF;
+  IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION '[PRODUCT_UNAVAILABLE] Product is no longer available'; END IF;
+  IF v_product.seller <> auth.uid() THEN RAISE EXCEPTION '[NOT_SELLER] You are not the seller'; END IF;
 
   -- Accept the offer
   UPDATE offers SET status = 'accepted' WHERE id = p_offer_id;
@@ -1468,12 +1468,12 @@ AS $$
 DECLARE
   v_offer RECORD;
 BEGIN
-  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
 
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Offer not found'; END IF;
-  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION 'Only the seller can reject this offer'; END IF;
-  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION 'Offer is not pending'; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_SELLER] Only the seller can reject this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
 
   UPDATE offers SET status = 'rejected' WHERE id = p_offer_id;
 
@@ -1500,12 +1500,12 @@ AS $$
 DECLARE
   v_offer RECORD;
 BEGIN
-  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
 
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Offer not found'; END IF;
-  IF v_offer.from_user_id <> auth.uid() THEN RAISE EXCEPTION 'Only the buyer can cancel this offer'; END IF;
-  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION 'Only pending offers can be cancelled'; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
+  IF v_offer.from_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_BUYER] Only the buyer can cancel this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Only pending offers can be cancelled'; END IF;
 
   UPDATE offers SET status = 'cancelled' WHERE id = p_offer_id;
 
@@ -1527,19 +1527,19 @@ DECLARE
   v_product RECORD;
   v_new_offer_id UUID;
 BEGIN
-  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
-  IF p_amount <= 0 THEN RAISE EXCEPTION 'Counter-offer amount must be positive'; END IF;
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  IF p_amount <= 0 THEN RAISE EXCEPTION '[INVALID_AMOUNT] Counter-offer amount must be positive'; END IF;
 
   -- Lock original offer
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Offer not found'; END IF;
-  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION 'Only the seller can counter this offer'; END IF;
-  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION 'Offer is not pending'; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_SELLER] Only the seller can counter this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
 
   -- Lock product
   SELECT * INTO v_product FROM products WHERE id = v_offer.product_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Product not found'; END IF;
-  IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION 'Product is no longer available'; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION '[PRODUCT_NOT_FOUND] Product not found'; END IF;
+  IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION '[PRODUCT_UNAVAILABLE] Product is no longer available'; END IF;
 
   -- Mark original as countered
   UPDATE offers SET status = 'countered' WHERE id = p_offer_id;
@@ -1562,7 +1562,12 @@ BEGIN
   );
 
   RETURN (SELECT jsonb_build_object(
-    'original_offer_id', p_offer_id,
+    'original_offer', row_to_json(orig.*
+  ) FROM (
+    SELECT id, product_id, from_user_id, to_user_id, amount, original_price, status, message, created_at
+    FROM offers WHERE id = p_offer_id
+  ) orig)
+  || (SELECT jsonb_build_object(
     'new_offer', row_to_json(n.*
   ) FROM (
     SELECT id, product_id, from_user_id, to_user_id, amount, original_price, status, message, created_at

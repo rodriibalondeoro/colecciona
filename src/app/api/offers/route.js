@@ -7,12 +7,20 @@ const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 function mapRpcError(message) {
   if (!message) return { status: 500 };
-  const m = message.toLowerCase();
-  if (m.includes("not found")) return { status: 404 };
-  if (m.includes("not authenticated") || m.includes("authentication required")) return { status: 401 };
-  if (m.includes("not authorized") || m.includes("only the seller") || m.includes("you are not")) return { status: 403 };
-  if (m.includes("not available") || m.includes("cannot offer") || m.includes("amount must")) return { status: 409 };
-  return { status: 500 };
+  const codeMatch = message.match(/^\[([A-Z_]+)\]/);
+  const code = codeMatch ? codeMatch[1] : null;
+  switch (code) {
+    case "PRODUCT_NOT_FOUND": return { status: 404 };
+    case "OFFER_NOT_FOUND": return { status: 404 };
+    case "AUTH_REQUIRED": return { status: 401 };
+    case "NOT_SELLER": return { status: 403 };
+    case "NOT_BUYER": return { status: 403 };
+    case "SELF_OFFER": return { status: 409 };
+    case "PRODUCT_UNAVAILABLE": return { status: 409 };
+    case "OFFER_NOT_PENDING": return { status: 409 };
+    case "INVALID_AMOUNT": return { status: 400 };
+    default: return { status: 500 };
+  }
 }
 
 export async function GET(req) {
