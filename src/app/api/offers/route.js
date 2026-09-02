@@ -11,75 +11,64 @@ export async function GET(req) {
 
   const supabase = createClient(url, serviceKey);
   const { searchParams } = new URL(req.url);
-  const type = searchParams.get("type") || "received";
+  const type = searchParams.get("type") || "all";
 
   let dbQuery = supabase
     .from("offers")
     .select(`
       *,
-      product:products(*, seller:users(id, username, name, avatar, rating, sales)),
-      from_user:users!offers_from_user_id_fkey(id, username, name, avatar, rating, sales),
-      to_user:users!offers_to_user_id_fkey(id, username, name, avatar, rating, sales)
+      product:products!offers_product_id_fkey(id, title, image, price, status, seller),
+      from_user:profiles!offers_from_user_id_fkey(id, username, name, avatar, rating, sales),
+      to_user:profiles!offers_to_user_id_fkey(id, username, name, avatar, rating, sales)
     `);
 
   if (type === "received") {
     dbQuery = dbQuery.eq("to_user_id", user.id);
   } else if (type === "sent") {
     dbQuery = dbQuery.eq("from_user_id", user.id);
+  } else {
+    dbQuery = dbQuery.or(`from_user_id.eq.${user.id},to_user_id.eq.${user.id}`);
   }
 
-  const { data } = await dbQuery.order("created_at", { ascending: false }).limit(100);
+  const { data, error: dbError } = await dbQuery.order("created_at", { ascending: false }).limit(100);
 
-  return NextResponse.json({ offers: data || [] });
+  if (dbError) {
+    console.warn("[Offers API] GET error:", dbError.message);
+    return NextResponse.json({ offers: [] }, { status: 500 });
+  }
+
+  const offers = (data || []).map((o) => ({
+    ...o,
+    direction: o.from_user_id === user.id ? "sent" : "received",
+  }));
+
+  return NextResponse.json({ offers });
 }
 
 export async function POST(req) {
   const { user, error } = await verifyAuth(req);
-  if (error) return NextResponse.json({ error: "No auth" }, { status: 401 });
+  if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-  const { productId, amount, message } = await req.json();
+  const body = await req.json();
+  const { productId, amount, message } = body;
+
   if (!productId || !amount) {
     return NextResponse.json({ error: "productId y amount son obligatorios" }, { status: 400 });
   }
 
   const supabase = createClient(url, serviceKey);
-  const { data: product, error: productError } = await supabase
-    .from("products")
-    .select("id, seller, title, price")
-    .eq("id", productId)
-    .single();
 
-  if (productError || !product) {
-    return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
-  }
-
-  const { data: offer, error: insertError } = await supabase
-    .from("offers")
-    .insert([{
-      product_id: productId,
-      from_user_id: user.id,
-      to_user_id: product.seller,
-      amount,
-      original_price: product.price,
-      status: "pending",
-      message: message || "",
-    }])
-    .select()
-    .single();
-
-  if (insertError) {
-    console.warn("[Offers API] Error al insertar:", insertError.message);
-    return NextResponse.json({ error: insertError.message }, { status: 500 });
-  }
-
-  await supabase.from("notifications").insert({
-    user_id: product.seller,
-    type: "offer",
-    title: "Nueva oferta",
-    body: `Han ofertado ${Number(amount).toFixed(2)} € por "${product.title}"`,
-    link: `/product/${productId}`,
-    read: false,
+  // Use RPC: server validates product, seller, price, self-offer, creates notification
+  const { data, error: rpcError } = await supabase.rpc("create_offer", {
+    p_product_id: productId,
+    p_amount: amount,
+    p_message: message || "",
   });
 
-  return NextResponse.json({ success: true, offer });
+  if (rpcError) {
+    console.warn("[Offers API] create_offer error:", rpcError.message);
+    return NextResponse.json({ error: rpcError.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true, offer: data });
 }

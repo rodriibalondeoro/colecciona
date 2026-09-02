@@ -1,8 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
-import { products, users } from "@/data/mockData";
-import { persistMessage, getFavorites, toggleFavoriteAPI, notifyUser, getOffers, createOffer, updateOffer, sendPush } from "@/lib/dataService";
+import { persistMessage, getFavorites, toggleFavoriteAPI, getOffers } from "@/lib/dataService";
 import { subscribeToMessages, subscribeToNotifications, supabase } from "@/lib/supabase";
 import { ORDER_STATES } from "@/lib/orderStates";
 
@@ -287,6 +286,7 @@ export function AppProvider({ children }) {
           amount: o.amount,
           originalPrice: o.original_price,
           status: o.status,
+          direction: o.direction,
           message: o.message,
           createdAt: o.created_at,
         })));
@@ -322,6 +322,11 @@ export function AppProvider({ children }) {
     const timer = setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
     return () => clearTimeout(timer);
   }, []);
+
+  // ─────────────────────────────────────────────────────────────
+  // Auth token helper
+  // ─────────────────────────────────────────────────────────────
+  const getToken = useCallback(() => session?.access_token || null, [session]);
 
   // ─────────────────────────────────────────────────────────────
   // Cart helpers
@@ -398,133 +403,122 @@ export function AppProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   // Offers helpers
   // ─────────────────────────────────────────────────────────────
-  const makeOffer = useCallback((productId, amount, message) => {
-    const product = products.find((p) => p.id === productId);
-    const seller = users.find((u) => u.id === product?.seller);
-    const newOffer = {
-      id: `o${Date.now()}`,
-      productId,
-      product,
-      fromUser: session || users[2],
-      toUser: seller,
-      amount,
-      originalPrice: product?.price,
-      status: "pending",
-      direction: "sent",
-      message,
-      createdAt: new Date().toISOString(),
-    };
-    setOffers((prev) => [newOffer, ...prev]);
-    showToast(`Oferta de ${amount.toFixed(2)} € enviada`, "success");
-    // Add notification
-    setNotifications((prev) => [
-      {
-        id: `n${Date.now()}`,
-        type: "offer",
-        read: false,
-        title: "Oferta enviada",
-        body: `Tu oferta de ${amount.toFixed(2)} € por "${product?.title}" fue enviada al vendedor`,
-        icon: "offer",
-        time: "ahora",
-        link: `/product/${productId}`,
-      },
-      ...prev,
-    ]);
-    notifyUser({
-      recipientId: seller?.id,
-      type: "offer",
-      title: "Nueva oferta",
-      body: `Han ofertado ${amount.toFixed(2)} € por "${product?.title}"`,
-      link: `/product/${productId}`,
-    });
-    sendPush({
-      recipientId: seller?.id,
-      title: "Nueva oferta",
-      body: `Han ofertado ${amount.toFixed(2)} € por "${product?.title}"`,
-      link: `/product/${productId}`,
-    });
-    if (session?.id) {
-      createOffer({ productId, amount, message }).catch(() => {});
+  const makeOffer = useCallback(async (productId, amount, message) => {
+    const token = getToken();
+    if (!token) {
+      showToast("No autenticado", "error");
+      return null;
     }
-  }, [session, showToast]);
 
-  const respondToOffer = useCallback((offerId, action) => {
-    setOffers((prev) =>
-      prev.map((o) => o.id === offerId ? { ...o, status: action } : o)
-    );
-    const labels = { accepted: "Oferta aceptada ✓", rejected: "Oferta rechazada" };
-    showToast(labels[action] || "Oferta actualizada", action === "accepted" ? "success" : "info");
-    if (session?.id) {
-      updateOffer({ id: offerId, status: action }).catch(() => {});
+    try {
+      const res = await fetch("/api/offers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ productId, amount, message }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al crear oferta");
+
+      const offer = data.offer;
+      const newOffer = {
+        id: offer.offer_id,
+        productId: offer.product_id,
+        product: null,
+        fromUser: { id: session?.id || session?.user?.id },
+        toUser: { id: offer.seller_id },
+        amount: offer.amount,
+        originalPrice: offer.original_price,
+        status: "pending",
+        direction: "sent",
+        message,
+        createdAt: new Date().toISOString(),
+      };
+
+      setOffers((prev) => [newOffer, ...prev]);
+      showToast(`Oferta de ${amount.toFixed(2)} € enviada`, "success");
+      return newOffer;
+    } catch (err) {
+      showToast(err.message || "Error al enviar oferta", "error");
+      return null;
     }
-  }, [session, showToast]);
+  }, [session, getToken, showToast]);
+
+  const respondToOffer = useCallback(async (offerId, action) => {
+    const token = getToken();
+    if (!token) {
+      showToast("No autenticado", "error");
+      return false;
+    }
+
+    try {
+      const res = await fetch(`/api/offers/${offerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al actualizar oferta");
+
+      setOffers((prev) =>
+        prev.map((o) => o.id === offerId ? { ...o, status: action === "accept" ? "accepted" : "rejected" } : o)
+      );
+
+      const labels = { accept: "Oferta aceptada ✓", reject: "Oferta rechazada" };
+      showToast(labels[action] || "Oferta actualizada", action === "accept" ? "success" : "info");
+      return true;
+    } catch (err) {
+      showToast(err.message || "Error al actualizar oferta", "error");
+      return false;
+    }
+  }, [session, getToken, showToast]);
 
   // ── Contraofertas ──
-  // Crea una nueva oferta con el precio contrario y la refleja en el chat
-  // del producto para continuar la negociación de forma dinámica.
-  const counterOffer = useCallback((offerId, amount, message = "") => {
-    const original = offers.find((o) => o.id === offerId);
-    if (!original) return;
+  const counterOffer = useCallback(async (offerId, amount, message = "") => {
+    const token = getToken();
+    if (!token) {
+      showToast("No autenticado", "error");
+      return null;
+    }
 
-    const me = session || users[2];
-    const newOffer = {
-      id: `o${Date.now()}`,
-      productId: original.productId,
-      product: original.product,
-      fromUser: me,
-      toUser: original.fromUser,
-      amount,
-      originalPrice: original.originalPrice || original.product?.price,
-      status: "pending",
-      direction: "sent",
-      message: message || `Contraoferta: ${amount.toFixed(2)} €`,
-      createdAt: new Date().toISOString(),
-    };
+    try {
+      const res = await fetch(`/api/offers/${offerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: "counter", amount, message }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al enviar contraoferta");
 
-    setOffers((prev) => [
-      { ...original, status: "countered" },
-      newOffer,
-      ...prev.filter((o) => o.id !== offerId),
-    ]);
+      const result = data.result;
 
-    // Reflejar la contraoferta en el chat del producto.
-    setThreads((prev) =>
-      prev.map((t) =>
-        t.productId === original.productId
-          ? {
-              ...t,
-              messages: [
-                ...t.messages,
-                {
-                  id: `m${Date.now()}`,
-                  from: "me",
-                  text: `💬 Contraoferta: ${amount.toFixed(2)} € — ${message}`,
-                  time: new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }),
-                },
-              ],
-              lastMessage: `Contraoferta: ${amount.toFixed(2)} €`,
-              lastTime: new Date().toISOString(),
-            }
-          : t
-      )
-    );
+      // Mark original as countered and add new offer
+      setOffers((prev) => {
+        const updated = prev.map((o) =>
+          o.id === offerId ? { ...o, status: "countered" } : o
+        );
+        const newOffer = {
+          id: result.new_offer_id,
+          productId: result.product_id || null,
+          product: null,
+          fromUser: { id: session?.id || session?.user?.id },
+          toUser: { id: result.buyer_id },
+          amount: result.amount,
+          originalPrice: null,
+          status: "pending",
+          direction: "sent",
+          message: message || `Contraoferta: ${amount.toFixed(2)} €`,
+          createdAt: new Date().toISOString(),
+        };
+        return [newOffer, ...updated];
+      });
 
-    showToast(`Contraoferta de ${amount.toFixed(2)} € enviada al vendedor`, "success");
-
-    notifyUser({
-      recipientId: original.fromUser?.id,
-      type: "offer",
-      title: "Contraoferta recibida",
-      body: `Te han contraofertado ${amount.toFixed(2)} € por "${original.product?.title}"`,
-      link: `/product/${original.productId}`,
-    });
-    sendPush({
-      recipientId: original.fromUser?.id,
-      title: "Contraoferta recibida",
-      body: `Te han contraofertado ${amount.toFixed(2)} € por "${original.product?.title}"`,
-      link: `/product/${original.productId}`,
-    });
-  }, [offers, session, showToast]);
+      showToast(`Contraoferta de ${amount.toFixed(2)} € enviada`, "success");
+      return result;
+    } catch (err) {
+      showToast(err.message || "Error al enviar contraoferta", "error");
+      return null;
+    }
+  }, [session, getToken, showToast]);
 
   // ─────────────────────────────────────────────────────────────
   // Messages helpers

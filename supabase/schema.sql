@@ -1063,10 +1063,46 @@ CREATE POLICY "messages_update_receiver" ON messages FOR UPDATE USING (auth.uid(
 ALTER TABLE offers ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "offers_select_participant" ON offers;
 CREATE POLICY "offers_select_participant" ON offers FOR SELECT USING (auth.uid() = from_user_id OR auth.uid() = to_user_id);
-DROP POLICY IF EXISTS "offers_insert_from" ON offers;
-CREATE POLICY "offers_insert_from" ON offers FOR INSERT WITH CHECK (auth.uid() = from_user_id);
-DROP POLICY IF EXISTS "offers_update_recipient" ON offers;
-CREATE POLICY "offers_update_recipient" ON offers FOR UPDATE USING (auth.uid() = to_user_id);
+-- NO INSERT POLICY: offers created via create_offer() RPC only
+-- NO UPDATE POLICY: offers updated via accept_offer/reject_offer/cancel_offer/counter_offer RPCs only
+
+-- Offers lifecycle: validate status transitions
+CREATE OR REPLACE FUNCTION validate_offer_transition()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE allowed BOOLEAN := false;
+BEGIN
+  IF OLD.product_id IS DISTINCT FROM NEW.product_id THEN RAISE EXCEPTION 'Cannot change product_id'; END IF;
+  IF OLD.from_user_id IS DISTINCT FROM NEW.from_user_id THEN RAISE EXCEPTION 'Cannot change from_user_id'; END IF;
+  IF OLD.to_user_id IS DISTINCT FROM NEW.to_user_id THEN RAISE EXCEPTION 'Cannot change to_user_id'; END IF;
+  IF OLD.amount IS DISTINCT FROM NEW.amount THEN RAISE EXCEPTION 'Cannot change amount'; END IF;
+  IF OLD.original_price IS DISTINCT FROM NEW.original_price THEN RAISE EXCEPTION 'Cannot change original_price'; END IF;
+
+  IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    allowed := CASE
+      -- Seller accepts: pending → accepted (product gets reserved)
+      WHEN OLD.status = 'pending' AND NEW.status = 'accepted' THEN true
+      -- Seller rejects: pending → rejected
+      WHEN OLD.status = 'pending' AND NEW.status = 'rejected' THEN true
+      -- Seller counters: pending → countered
+      WHEN OLD.status = 'pending' AND NEW.status = 'countered' THEN true
+      -- Buyer cancels: pending → cancelled
+      WHEN OLD.status = 'pending' AND NEW.status = 'cancelled' THEN true
+      ELSE false
+    END;
+    IF NOT allowed THEN
+      RAISE EXCEPTION 'Invalid offer transition: % -> %', OLD.status, NEW.status;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validate_offer_transition ON offers;
+CREATE TRIGGER trg_validate_offer_transition
+  BEFORE UPDATE ON offers
+  FOR EACH ROW EXECUTE FUNCTION validate_offer_transition();
 
 ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "reviews_select_public" ON reviews;
@@ -1315,6 +1351,228 @@ END;
 $$;
 
 -- ============================================================================
+-- OFFERS RPCs — atomic price negotiation
+-- ============================================================================
+
+-- Create offer: server validates product, seller, price, self-offer
+CREATE OR REPLACE FUNCTION create_offer(
+  p_product_id UUID,
+  p_amount NUMERIC(10,2),
+  p_message TEXT DEFAULT ''
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_product RECORD;
+  v_offer_id UUID;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF p_amount <= 0 THEN RAISE EXCEPTION 'Offer amount must be positive'; END IF;
+
+  -- Get product (locked for consistency)
+  SELECT id, seller, title, price, status INTO v_product
+  FROM products WHERE id = p_product_id FOR UPDATE;
+
+  IF NOT FOUND THEN RAISE EXCEPTION 'Product not found'; END IF;
+  IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION 'Product is not available for offers'; END IF;
+  IF v_product.seller = auth.uid() THEN RAISE EXCEPTION 'Cannot offer on your own product'; END IF;
+
+  INSERT INTO offers (product_id, from_user_id, to_user_id, amount, original_price, status, message)
+  VALUES (p_product_id, auth.uid(), v_product.seller, p_amount, v_product.price, 'pending', p_message)
+  RETURNING id INTO v_offer_id;
+
+  -- Create notification for seller (server-side)
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (
+    v_product.seller,
+    'offer',
+    'Nueva oferta',
+    'Han ofertado ' || p_amount::numeric(10,2) || ' € por "' || v_product.title || '"',
+    jsonb_build_object('offer_id', v_offer_id, 'product_id', p_product_id),
+    false
+  );
+
+  RETURN jsonb_build_object(
+    'offer_id', v_offer_id,
+    'product_id', p_product_id,
+    'seller_id', v_product.seller,
+    'amount', p_amount,
+    'original_price', v_product.price
+  );
+END;
+$$;
+
+-- Accept offer: atomically accept + reserve product + reject other pending offers
+CREATE OR REPLACE FUNCTION accept_offer(p_offer_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_offer RECORD;
+  v_product RECORD;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+
+  -- Lock offer
+  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Offer not found'; END IF;
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION 'Only the seller can accept this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION 'Offer is not pending'; END IF;
+
+  -- Lock product
+  SELECT * INTO v_product FROM products WHERE id = v_offer.product_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Product not found'; END IF;
+  IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION 'Product is no longer available'; END IF;
+  IF v_product.seller <> auth.uid() THEN RAISE EXCEPTION 'You are not the seller'; END IF;
+
+  -- Accept the offer
+  UPDATE offers SET status = 'accepted' WHERE id = p_offer_id;
+
+  -- Reserve product for buyer
+  UPDATE products
+  SET status = 'RESERVED',
+      reserved_by = v_offer.from_user_id,
+      reserved_until = now() + interval '15 minutes'
+  WHERE id = v_offer.product_id AND status = 'ACTIVE';
+
+  -- Reject all other pending offers for this product
+  UPDATE offers SET status = 'rejected'
+  WHERE product_id = v_offer.product_id
+    AND id <> p_offer_id
+    AND status = 'pending';
+
+  -- Notification for buyer
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (
+    v_offer.from_user_id,
+    'offer',
+    'Oferta aceptada',
+    'Tu oferta de ' || v_offer.amount::numeric(10,2) || ' € ha sido aceptada. ¡Realiza el checkout!',
+    jsonb_build_object('offer_id', p_offer_id, 'product_id', v_offer.product_id),
+    false
+  );
+
+  RETURN jsonb_build_object(
+    'offer_id', p_offer_id,
+    'status', 'accepted',
+    'product_status', 'RESERVED',
+    'buyer_id', v_offer.from_user_id
+  );
+END;
+$$;
+
+-- Reject offer: seller rejects a pending offer
+CREATE OR REPLACE FUNCTION reject_offer(p_offer_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_offer RECORD;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+
+  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Offer not found'; END IF;
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION 'Only the seller can reject this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION 'Offer is not pending'; END IF;
+
+  UPDATE offers SET status = 'rejected' WHERE id = p_offer_id;
+
+  -- Notify buyer
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (
+    v_offer.from_user_id,
+    'offer',
+    'Oferta rechazada',
+    'Tu oferta de ' || v_offer.amount::numeric(10,2) || ' € ha sido rechazada',
+    jsonb_build_object('offer_id', p_offer_id),
+    false
+  );
+
+  RETURN jsonb_build_object('offer_id', p_offer_id, 'status', 'rejected');
+END;
+$$;
+
+-- Cancel offer: buyer cancels their own pending offer
+CREATE OR REPLACE FUNCTION cancel_offer(p_offer_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_offer RECORD;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+
+  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Offer not found'; END IF;
+  IF v_offer.from_user_id <> auth.uid() THEN RAISE EXCEPTION 'Only the buyer can cancel this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION 'Only pending offers can be cancelled'; END IF;
+
+  UPDATE offers SET status = 'cancelled' WHERE id = p_offer_id;
+
+  RETURN jsonb_build_object('offer_id', p_offer_id, 'status', 'cancelled');
+END;
+$$;
+
+-- Counter offer: seller creates new offer with different price, atomically
+CREATE OR REPLACE FUNCTION counter_offer(
+  p_offer_id UUID,
+  p_amount NUMERIC(10,2),
+  p_message TEXT DEFAULT ''
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_offer RECORD;
+  v_product RECORD;
+  v_new_offer_id UUID;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF p_amount <= 0 THEN RAISE EXCEPTION 'Counter-offer amount must be positive'; END IF;
+
+  -- Lock original offer
+  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Offer not found'; END IF;
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION 'Only the seller can counter this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION 'Offer is not pending'; END IF;
+
+  -- Lock product
+  SELECT * INTO v_product FROM products WHERE id = v_offer.product_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Product not found'; END IF;
+  IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION 'Product is no longer available'; END IF;
+
+  -- Mark original as countered
+  UPDATE offers SET status = 'countered' WHERE id = p_offer_id;
+
+  -- Create new counter-offer (seller → buyer)
+  INSERT INTO offers (product_id, from_user_id, to_user_id, amount, original_price, status, message)
+  VALUES (v_offer.product_id, auth.uid(), v_offer.from_user_id, p_amount, v_product.price, 'pending',
+    p_message || CASE WHEN p_message = '' THEN '' ELSE E'\n' END || 'Contraoferta de ' || p_amount::numeric(10,2) || ' €')
+  RETURNING id INTO v_new_offer_id;
+
+  -- Notify buyer
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (
+    v_offer.from_user_id,
+    'offer',
+    'Contraoferta recibida',
+    'Te han contraofertado ' || p_amount::numeric(10,2) || ' € por "' || v_product.title || '"',
+    jsonb_build_object('offer_id', v_new_offer_id, 'product_id', v_offer.product_id),
+    false
+  );
+
+  RETURN jsonb_build_object(
+    'original_offer_id', p_offer_id,
+    'new_offer_id', v_new_offer_id,
+    'amount', p_amount,
+    'status', 'pending'
+  );
+END;
+$$;
+
+-- ============================================================================
 -- STORAGE — card images bucket
 -- ============================================================================
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -1370,3 +1628,23 @@ GRANT EXECUTE ON FUNCTION cancel_order(UUID) TO authenticated;
 -- rollback_checkout: service_role only (checkout failure recovery)
 REVOKE ALL ON FUNCTION rollback_checkout(UUID) FROM PUBLIC;
 -- No GRANT to authenticated: only service_role can call this
+
+-- create_offer: authenticated buyer only
+REVOKE ALL ON FUNCTION create_offer(UUID, NUMERIC, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION create_offer(UUID, NUMERIC, TEXT) TO authenticated;
+
+-- accept_offer: authenticated seller only
+REVOKE ALL ON FUNCTION accept_offer(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION accept_offer(UUID) TO authenticated;
+
+-- reject_offer: authenticated seller only
+REVOKE ALL ON FUNCTION reject_offer(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION reject_offer(UUID) TO authenticated;
+
+-- cancel_offer: authenticated buyer only
+REVOKE ALL ON FUNCTION cancel_offer(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cancel_offer(UUID) TO authenticated;
+
+-- counter_offer: authenticated seller only
+REVOKE ALL ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) TO authenticated;
