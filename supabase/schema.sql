@@ -417,7 +417,8 @@ END;
 $$;
 
 -- Canonical payment confirmation: single source of truth
--- LOCKS order + all products, validates conditions, transitions atomically
+-- EXPLICIT LOCKING: order + all products locked before any writes
+-- All validations done before any mutations — if any fail, nothing changes
 CREATE OR REPLACE FUNCTION confirm_payment(p_order_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -426,9 +427,9 @@ DECLARE
   v_order RECORD;
   v_product_ids UUID[];
   v_expected_count INTEGER;
-  v_sold_count INTEGER;
+  v_product RECORD;
 BEGIN
-  -- Lock order
+  -- 1. Lock order
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
 
@@ -441,7 +442,7 @@ BEGIN
     RAISE EXCEPTION 'Order % is not PAYMENT_PROCESSING (current: %)', p_order_id, v_order.status;
   END IF;
 
-  -- Collect product IDs
+  -- 2. Collect product IDs
   SELECT array_agg(product_id) INTO v_product_ids
   FROM order_items WHERE order_id = p_order_id;
 
@@ -450,30 +451,36 @@ BEGIN
     RAISE EXCEPTION 'Order % has no items', p_order_id;
   END IF;
 
-  -- Mark order PAID
+  -- 3. Lock ALL products and validate every one BEFORE any writes
+  -- This ensures no concurrent release/sale can slip in between
+  FOR v_product IN SELECT * FROM products WHERE id = ANY(v_product_ids) FOR UPDATE
+  LOOP
+    IF v_product.status <> 'RESERVED' THEN
+      RAISE EXCEPTION 'Product % is % (expected RESERVED)', v_product.id, v_product.status;
+    END IF;
+    IF v_product.reserved_by <> v_order.buyer_id THEN
+      RAISE EXCEPTION 'Product % reserved_by % (expected buyer %)', v_product.id, v_product.reserved_by, v_order.buyer_id;
+    END IF;
+    IF v_product.reserved_until <= now() THEN
+      RAISE EXCEPTION 'Product % reservation expired', v_product.id;
+    END IF;
+  END LOOP;
+
+  -- 4. All validations passed — now mutate atomically
   UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = p_order_id;
 
-  -- Mark products SOLD (all conditions must match)
   UPDATE products
   SET status = 'SOLD', sold_at = now(), reserved_by = NULL, reserved_until = NULL
-  WHERE id = ANY(v_product_ids)
-    AND status = 'RESERVED'
-    AND reserved_by = v_order.buyer_id
-    AND reserved_until > now();
+  WHERE id = ANY(v_product_ids);
 
-  GET DIAGNOSTICS v_sold_count = ROW_COUNT;
-
-  IF v_sold_count <> v_expected_count THEN
-    RAISE EXCEPTION 'Order %: expected % products sold, but only % met all conditions (RESERVED + buyer + not expired)',
-      p_order_id, v_expected_count, v_sold_count;
-  END IF;
-
-  RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'products_sold', v_sold_count);
+  RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'products_sold', v_expected_count);
 END;
 $$;
 
 -- Cancel order: atomic ORDER → CANCELLED + PRODUCTS → ACTIVE
--- Both buyer and seller can cancel only before payment (PENDING/PAYMENT_PROCESSING)
+-- Only PENDING orders can be cancelled by user.
+-- PAYMENT_PROCESSING orders are controlled by Stripe lifecycle (webhook/cron).
+-- PAID/PREPARING orders require refund via backend (service_role).
 CREATE OR REPLACE FUNCTION cancel_order(p_order_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -495,10 +502,11 @@ BEGIN
     RAISE EXCEPTION 'You are not a participant in this order';
   END IF;
 
-  -- Cancellable states: only before payment (PENDING or PAYMENT_PROCESSING)
-  -- PAID/PREPARING orders require refund via backend (service_role)
-  IF v_order.status NOT IN ('PENDING','PAYMENT_PROCESSING') THEN
-    RAISE EXCEPTION 'Cannot cancel order in status %. Use refund for paid orders.', v_order.status;
+  -- Only PENDING orders can be cancelled by user.
+  -- PAYMENT_PROCESSING: Stripe controls the lifecycle (webhook confirms or cron cleans up).
+  -- Allowing user cancellation here creates risk: Stripe charges but products are released.
+  IF v_order.status <> 'PENDING' THEN
+    RAISE EXCEPTION 'Cannot cancel order in status %. Only PENDING orders can be cancelled.', v_order.status;
   END IF;
 
   -- Collect product IDs
@@ -962,13 +970,14 @@ BEGIN
       WHEN OLD.status = 'DELIVERED' AND NEW.status = 'COMPLETED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
 
-      -- Cancellation (before shipped, before payment): buyer or seller
-      WHEN OLD.status IN ('PENDING','PAYMENT_PROCESSING')
+      -- Cancellation before payment: PENDING only (buyer or seller)
+      WHEN OLD.status = 'PENDING'
         AND NEW.status = 'CANCELLED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
 
-      -- Cancellation after payment: ONLY via service_role (admin/refund flow)
-      WHEN OLD.status IN ('PAID','PREPARING')
+      -- Cancellation during/after payment: ONLY via service_role (admin/refund flow)
+      -- PAYMENT_PROCESSING: must cancel Stripe PI first, then cancel order
+      WHEN OLD.status IN ('PAYMENT_PROCESSING','PAID','PREPARING')
         AND NEW.status = 'CANCELLED'
         AND auth.uid() IS NULL THEN true
 
