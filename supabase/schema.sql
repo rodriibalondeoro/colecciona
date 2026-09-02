@@ -888,10 +888,21 @@ BEGIN
   IF OLD.shipping_method IS DISTINCT FROM NEW.shipping_method THEN RAISE EXCEPTION 'Cannot change shipping_method'; END IF;
   IF OLD.shipping_address IS DISTINCT FROM NEW.shipping_address THEN RAISE EXCEPTION 'Cannot change shipping_address'; END IF;
 
-  -- Block payment_intent_id changes after initial assignment
+  -- payment_intent_id: only assignable during PENDING→PAYMENT_PROCESSING
+  -- and only when payment_processing_started_at is also set atomically
   IF OLD.payment_intent_id IS DISTINCT FROM NEW.payment_intent_id THEN
     IF OLD.payment_intent_id IS NOT NULL THEN
       RAISE EXCEPTION 'Cannot change payment_intent_id after assignment';
+    END IF;
+    -- First assignment: must happen with status transition + timestamp
+    IF NOT (OLD.status = 'PENDING' AND NEW.status = 'PAYMENT_PROCESSING') THEN
+      RAISE EXCEPTION 'payment_intent_id can only be assigned during PENDING→PAYMENT_PROCESSING';
+    END IF;
+    IF NEW.payment_intent_id IS NULL THEN
+      RAISE EXCEPTION 'payment_intent_id cannot be NULL';
+    END IF;
+    IF NEW.payment_processing_started_at IS NULL THEN
+      RAISE EXCEPTION 'payment_processing_started_at must be set with payment_intent_id';
     END IF;
   END IF;
 
@@ -913,6 +924,8 @@ BEGIN
     IF OLD.payment_processing_started_at IS NOT NULL THEN
       RAISE EXCEPTION 'Cannot modify payment_processing_started_at after assignment';
     END IF;
+    -- First assignment: only during PENDING→PAYMENT_PROCESSING (enforced by payment_intent_id block above)
+    -- This block is a secondary guard — the payment_intent_id check already requires this transition
   END IF;
 
   -- Block tracking_number outside of PREPARING→SHIPPED transition
