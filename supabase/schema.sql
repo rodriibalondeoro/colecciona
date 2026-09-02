@@ -234,6 +234,7 @@ END;
 $$;
 
 -- Release expired reservations (call via cron or scheduled function)
+-- Also expires the associated accepted offer when reservation lapses
 CREATE OR REPLACE FUNCTION cleanup_expired_reservations()
 RETURNS INTEGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -241,12 +242,48 @@ AS $$
 DECLARE
   released_count INTEGER;
 BEGIN
+  -- Release expired reservations
   UPDATE products
   SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
   WHERE status = 'RESERVED' AND reserved_until <= now();
 
   GET DIAGNOSTICS released_count = ROW_COUNT;
+
+  -- Expire the accepted offer for each released product
+  -- (the offer that caused the reservation in the first place)
+  UPDATE offers SET status = 'expired'
+  WHERE status = 'accepted'
+    AND product_id IN (
+      SELECT id FROM products
+      WHERE status = 'ACTIVE' AND reserved_by IS NULL
+    )
+    AND id IN (
+      -- Only offers whose reservation window has passed
+      SELECT o.id FROM offers o
+      JOIN products p ON p.id = o.product_id
+      WHERE o.status = 'accepted'
+        AND o.from_user_id = p.reserved_by
+    );
+
   RETURN released_count;
+END;
+$$;
+
+-- Expire stale pending offers (call via cron, e.g. every hour)
+-- PENDING offers older than 48h are marked EXPIRED
+CREATE OR REPLACE FUNCTION cleanup_expired_offers()
+RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  expired_count INTEGER;
+BEGIN
+  UPDATE offers SET status = 'expired'
+  WHERE status = 'pending'
+    AND created_at < now() - interval '48 hours';
+
+  GET DIAGNOSTICS expired_count = ROW_COUNT;
+  RETURN expired_count;
 END;
 $$;
 
@@ -861,7 +898,7 @@ CREATE TABLE IF NOT EXISTS offers (
   to_user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   amount NUMERIC(10,2) NOT NULL CHECK (amount > 0),
   original_price NUMERIC(10,2) NOT NULL CHECK (original_price > 0),
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected','countered')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected','countered','cancelled','expired')),
   message TEXT,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
@@ -1088,6 +1125,8 @@ BEGIN
       WHEN OLD.status = 'pending' AND NEW.status = 'countered' THEN true
       -- Buyer cancels: pending → cancelled
       WHEN OLD.status = 'pending' AND NEW.status = 'cancelled' THEN true
+      -- System expires: pending → expired (stale offers) or accepted → expired (reservation expired)
+      WHEN OLD.status IN ('pending','accepted') AND NEW.status = 'expired' THEN true
       ELSE false
     END;
     IF NOT allowed THEN
@@ -1652,3 +1691,7 @@ GRANT EXECUTE ON FUNCTION cancel_offer(UUID) TO authenticated;
 -- counter_offer: authenticated seller only
 REVOKE ALL ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) TO authenticated;
+
+-- cleanup_expired_offers: service_role/cron only
+REVOKE ALL ON FUNCTION cleanup_expired_offers() FROM PUBLIC;
+-- No GRANT to authenticated: only service_role or pg_cron can call this
