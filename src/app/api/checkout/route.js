@@ -82,7 +82,11 @@ export async function POST(req) {
     // 4. Link payment intent to order
     await supabase
       .from("orders")
-      .update({ payment_intent_id: paymentIntent.id, status: "PAYMENT_PROCESSING" })
+      .update({
+        payment_intent_id: paymentIntent.id,
+        status: "PAYMENT_PROCESSING",
+        payment_processing_started_at: new Date().toISOString(),
+      })
       .eq("id", orderId);
 
     return NextResponse.json({

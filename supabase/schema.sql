@@ -310,54 +310,14 @@ RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-  v_order RECORD;
-  v_product_ids UUID[];
-  v_expected_count INTEGER;
-  v_sold_count INTEGER;
+  v_order_id UUID;
 BEGIN
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can mark products sold'; END IF;
 
-  -- Lock order
-  SELECT * INTO v_order FROM orders WHERE payment_intent_id = p_payment_intent_id FOR UPDATE;
+  SELECT id INTO v_order_id FROM orders WHERE payment_intent_id = p_payment_intent_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order with payment_intent % not found', p_payment_intent_id; END IF;
 
-  -- Idempotency: if already PAID, return success
-  IF v_order.status = 'PAID' THEN
-    RETURN jsonb_build_object('order_id', v_order.id, 'status', 'PAID', 'message', 'Already confirmed');
-  END IF;
-
-  IF v_order.status <> 'PAYMENT_PROCESSING' THEN
-    RAISE EXCEPTION 'Order % is not PAYMENT_PROCESSING (current: %)', v_order.id, v_order.status;
-  END IF;
-
-  -- Collect product IDs
-  SELECT array_agg(product_id) INTO v_product_ids
-  FROM order_items WHERE order_id = v_order.id;
-
-  v_expected_count := COALESCE(array_length(v_product_ids, 1), 0);
-  IF v_expected_count = 0 THEN
-    RAISE EXCEPTION 'Order % has no items', v_order.id;
-  END IF;
-
-  -- Mark order as PAID
-  UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = v_order.id;
-
-  -- Mark products as SOLD (same checks as confirm_order_payment)
-  UPDATE products
-  SET status = 'SOLD', sold_at = now(), reserved_by = NULL, reserved_until = NULL
-  WHERE id = ANY(v_product_ids)
-    AND status = 'RESERVED'
-    AND reserved_by = v_order.buyer_id
-    AND reserved_until > now();
-
-  GET DIAGNOSTICS v_sold_count = ROW_COUNT;
-
-  IF v_sold_count <> v_expected_count THEN
-    RAISE EXCEPTION 'Order %: expected % products sold, but only % met all conditions (RESERVED + buyer match + not expired)',
-      v_order.id, v_expected_count, v_sold_count;
-  END IF;
-
-  RETURN jsonb_build_object('order_id', v_order.id, 'status', 'PAID', 'products_sold', v_sold_count);
+  RETURN confirm_payment(v_order_id);
 END;
 $$;
 
@@ -419,8 +379,8 @@ $$;
 
 -- Find stale PAYMENT_PROCESSING orders (call via cron, e.g. every 30 min)
 -- Returns orders stuck in PAYMENT_PROCESSING for > 1 hour for external verification
+-- Uses payment_processing_started_at (not created_at) for accurate timing
 -- Does NOT cancel directly — the caller must verify with Stripe first
--- This prevents cancelling orders where Stripe is still processing
 CREATE OR REPLACE FUNCTION cleanup_stale_payment_processing()
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -428,26 +388,37 @@ AS $$
 DECLARE
   v_stale_orders JSONB;
 BEGIN
-  -- Only identify stale orders, do NOT cancel them
-  -- The caller (Node.js cron) must check each PaymentIntent with Stripe
   SELECT jsonb_agg(jsonb_build_object(
     'order_id', o.id,
     'payment_intent_id', o.payment_intent_id,
     'buyer_id', o.buyer_id,
     'created_at', o.created_at,
-    'hours_stale', EXTRACT(EPOCH FROM (now() - o.created_at)) / 3600
+    'processing_started_at', o.payment_processing_started_at,
+    'hours_stale', EXTRACT(EPOCH FROM (now() - COALESCE(o.payment_processing_started_at, o.created_at))) / 3600
   )) INTO v_stale_orders
   FROM orders o
   WHERE o.status = 'PAYMENT_PROCESSING'
-    AND o.created_at < now() - interval '1 hour';
+    AND COALESCE(o.payment_processing_started_at, o.created_at) < now() - interval '1 hour';
 
   RETURN COALESCE(v_stale_orders, '[]'::jsonb);
 END;
 $$;
 
 -- Confirm order payment: atomic transition ORDER → PAID + PRODUCTS → SOLD
--- Called by Stripe webhook (service_role only)
+-- Delegates to canonical confirm_payment()
 CREATE OR REPLACE FUNCTION confirm_order_payment(p_order_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can confirm payment'; END IF;
+  RETURN confirm_payment(p_order_id);
+END;
+$$;
+
+-- Canonical payment confirmation: single source of truth
+-- LOCKS order + all products, validates conditions, transitions atomically
+CREATE OR REPLACE FUNCTION confirm_payment(p_order_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
@@ -457,48 +428,34 @@ DECLARE
   v_expected_count INTEGER;
   v_sold_count INTEGER;
 BEGIN
-  -- Only service_role (Stripe webhook) can call this
-  IF auth.uid() IS NOT NULL THEN
-    RAISE EXCEPTION 'Only the system can confirm payment';
-  END IF;
-
-  -- Lock order row to prevent concurrent processing (e.g. duplicate Stripe events)
+  -- Lock order
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
 
-  -- Idempotency: if already PAID, return success without changes
+  -- Idempotency
   IF v_order.status = 'PAID' THEN
-    RETURN jsonb_build_object(
-      'order_id', p_order_id,
-      'status', 'PAID',
-      'message', 'Already confirmed'
-    );
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'message', 'Already confirmed');
   END IF;
 
-  -- Must be in PAYMENT_PROCESSING (Stripe intent created, awaiting confirmation)
   IF v_order.status <> 'PAYMENT_PROCESSING' THEN
-    RAISE EXCEPTION 'Order % is not in PAYMENT_PROCESSING status (current: %)', p_order_id, v_order.status;
+    RAISE EXCEPTION 'Order % is not PAYMENT_PROCESSING (current: %)', p_order_id, v_order.status;
   END IF;
 
-  -- Collect product IDs from order_items
+  -- Collect product IDs
   SELECT array_agg(product_id) INTO v_product_ids
   FROM order_items WHERE order_id = p_order_id;
 
-  IF v_product_ids IS NULL OR array_length(v_product_ids, 1) = 0 THEN
+  v_expected_count := COALESCE(array_length(v_product_ids, 1), 0);
+  IF v_expected_count = 0 THEN
     RAISE EXCEPTION 'Order % has no items', p_order_id;
   END IF;
 
-  v_expected_count := array_length(v_product_ids, 1);
-
-  -- Mark order as PAID
+  -- Mark order PAID
   UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = p_order_id;
 
-  -- Mark all products as SOLD (defense in depth: verify reserved_by matches buyer)
+  -- Mark products SOLD (all conditions must match)
   UPDATE products
-  SET status = 'SOLD',
-      sold_at = now(),
-      reserved_by = NULL,
-      reserved_until = NULL
+  SET status = 'SOLD', sold_at = now(), reserved_by = NULL, reserved_until = NULL
   WHERE id = ANY(v_product_ids)
     AND status = 'RESERVED'
     AND reserved_by = v_order.buyer_id
@@ -506,16 +463,12 @@ BEGIN
 
   GET DIAGNOSTICS v_sold_count = ROW_COUNT;
 
-  -- Verify ALL products were actually RESERVED and updated
   IF v_sold_count <> v_expected_count THEN
-    RAISE EXCEPTION 'Order %: expected % products sold, but only % were RESERVED. Inconsistent state.', p_order_id, v_expected_count, v_sold_count;
+    RAISE EXCEPTION 'Order %: expected % products sold, but only % met all conditions (RESERVED + buyer + not expired)',
+      p_order_id, v_expected_count, v_sold_count;
   END IF;
 
-  RETURN jsonb_build_object(
-    'order_id', p_order_id,
-    'status', 'PAID',
-    'products_sold', v_sold_count
-  );
+  RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'products_sold', v_sold_count);
 END;
 $$;
 
@@ -774,6 +727,7 @@ CREATE TABLE IF NOT EXISTS orders (
   ),
   shipping_address TEXT NOT NULL,
   payment_intent_id TEXT,
+  payment_processing_started_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
   confirmed_at TIMESTAMPTZ,
   shipped_at TIMESTAMPTZ,
@@ -1822,6 +1776,10 @@ GRANT EXECUTE ON FUNCTION create_checkout_order(UUID[], TEXT, TEXT) TO authentic
 -- confirm_order_payment: service_role only (Stripe webhook)
 REVOKE ALL ON FUNCTION confirm_order_payment(UUID) FROM PUBLIC;
 -- No GRANT to authenticated: only service_role can call this
+
+-- confirm_payment: canonical (called by confirm_order_payment and mark_products_sold_by_payment_intent)
+REVOKE ALL ON FUNCTION confirm_payment(UUID) FROM PUBLIC;
+-- No GRANT: called only by other SECURITY DEFINER functions
 
 -- cleanup_expired_reservations: service_role/cron only
 REVOKE ALL ON FUNCTION cleanup_expired_reservations() FROM PUBLIC;
