@@ -1895,6 +1895,9 @@ END;
 $$;
 
 -- Accept offer: atomically accept + reserve product + reject other pending offers
+-- LOCKING ORDER: PRODUCT → OFFER (no existing ORDER in this flow)
+-- This is compatible with global convention (orders → products → offers)
+-- and prevents deadlock with release_expired_reservations (PRODUCT → OFFER via UPDATE).
 CREATE OR REPLACE FUNCTION accept_offer(p_offer_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -1904,18 +1907,25 @@ DECLARE
   v_product RECORD;
   v_buyer_id UUID;
   v_is_counter BOOLEAN;
+  v_updated_count INTEGER;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
 
-  -- Lock offer
-  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
+  -- 1. Read offer without lock to get product_id
+  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id;
   IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
-  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_RECIPIENT] Only the recipient can accept this offer'; END IF;
-  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
 
-  -- Lock product
+  -- 2. LOCK PRODUCT first (global convention: products before offers)
   SELECT * INTO v_product FROM products WHERE id = v_offer.product_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[PRODUCT_NOT_FOUND] Product not found'; END IF;
+
+  -- 3. LOCK OFFER second
+  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
+
+  -- 4. Validate after both locks acquired
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_RECIPIENT] Only the recipient can accept this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
   IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION '[PRODUCT_UNAVAILABLE] Product is no longer available'; END IF;
 
   -- Determine offer type and buyer:
@@ -1941,17 +1951,27 @@ BEGIN
     END IF;
   END IF;
 
-  -- Accept the offer
-  UPDATE offers SET status = 'accepted' WHERE id = p_offer_id;
-
-  -- Reserve product for the actual buyer (always the buyer, regardless of offer type)
+  -- 5. Reserve product (fail-closed: verify ROW_COUNT)
   UPDATE products
   SET status = 'RESERVED',
       reserved_by = v_buyer_id,
       reserved_until = now() + interval '15 minutes'
   WHERE id = v_offer.product_id AND status = 'ACTIVE';
 
-  -- Reject all other pending offers for this product
+  GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+  IF v_updated_count <> 1 THEN
+    RAISE EXCEPTION '[PRODUCT_RACE] Product % was not available for reservation (ROW_COUNT=%)', v_offer.product_id, v_updated_count;
+  END IF;
+
+  -- 6. Accept the offer (fail-closed: verify ROW_COUNT)
+  UPDATE offers SET status = 'accepted' WHERE id = p_offer_id AND status = 'pending';
+
+  GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+  IF v_updated_count <> 1 THEN
+    RAISE EXCEPTION '[OFFER_RACE] Offer % could not be accepted (ROW_COUNT=%)', p_offer_id, v_updated_count;
+  END IF;
+
+  -- 7. Reject all other pending offers for this product (atomic: one transaction)
   UPDATE offers SET status = 'rejected'
   WHERE product_id = v_offer.product_id
     AND id <> p_offer_id
@@ -2032,6 +2052,7 @@ END;
 $$;
 
 -- Counter offer: recipient creates a counter-offer with different price
+-- LOCKING ORDER: PRODUCT → OFFER (same as accept_offer, compatible with global convention)
 CREATE OR REPLACE FUNCTION counter_offer(
   p_offer_id UUID,
   p_amount NUMERIC(10,2),
@@ -2048,15 +2069,21 @@ BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
   IF p_amount <= 0 THEN RAISE EXCEPTION '[INVALID_AMOUNT] Counter-offer amount must be positive'; END IF;
 
-  -- Lock original offer
-  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
+  -- 1. Read offer without lock to get product_id
+  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id;
   IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
-  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_RECIPIENT] Only the recipient can counter this offer'; END IF;
-  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
 
-  -- Lock product
+  -- 2. LOCK PRODUCT first (global convention: products before offers)
   SELECT * INTO v_product FROM products WHERE id = v_offer.product_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[PRODUCT_NOT_FOUND] Product not found'; END IF;
+
+  -- 3. LOCK OFFER second
+  SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
+
+  -- 4. Validate after both locks acquired
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_RECIPIENT] Only the recipient can counter this offer'; END IF;
+  IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
   IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION '[PRODUCT_UNAVAILABLE] Product is no longer available'; END IF;
 
   -- Mark original as countered
