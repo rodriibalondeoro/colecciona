@@ -242,7 +242,7 @@ $$;
 -- Canonical function to release expired reservations + expire associated offers
 -- Uses CTE to capture reserved_by BEFORE clearing it
 -- Called by both cleanup_expired_reservations() and reserve_products_for_checkout()
--- PROTECTION: never releases products tied to an active PAYMENT_PROCESSING order
+-- PROTECTION: never releases products tied to active orders (PENDING or PAYMENT_PROCESSING)
 CREATE OR REPLACE FUNCTION release_expired_reservations(p_product_ids UUID[] DEFAULT NULL)
 RETURNS INTEGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -251,11 +251,14 @@ DECLARE
   released_count INTEGER;
 BEGIN
   WITH active_payment_products AS (
-    -- Products tied to an order in PAYMENT_PROCESSING (Stripe owns lifecycle)
+    -- Products tied to an active order:
+    -- PENDING = checkout in progress (exclude if recent, release if abandoned > 30min)
+    -- PAYMENT_PROCESSING = Stripe owns lifecycle (always exclude)
     SELECT DISTINCT oi.product_id
     FROM order_items oi
     JOIN orders o ON o.id = oi.order_id
     WHERE o.status = 'PAYMENT_PROCESSING'
+       OR (o.status = 'PENDING' AND o.created_at > now() - interval '30 minutes')
   ),
   expired_reservations AS (
     UPDATE products
@@ -307,6 +310,26 @@ BEGIN
 
   GET DIAGNOSTICS expired_count = ROW_COUNT;
   RETURN expired_count;
+END;
+$$;
+
+-- Cancel abandoned PENDING orders (call via cron)
+-- Orders stuck in PENDING for > 30 minutes mean checkout route crashed
+-- between create_checkout_order() and Stripe call. Products were already
+-- released by release_expired_reservations() (which excludes PENDING < 30min).
+CREATE OR REPLACE FUNCTION cleanup_abandoned_pending_orders()
+RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  cancelled_count INTEGER;
+BEGIN
+  UPDATE orders SET status = 'CANCELLED'
+  WHERE status = 'PENDING'
+    AND created_at < now() - interval '30 minutes';
+
+  GET DIAGNOSTICS cancelled_count = ROW_COUNT;
+  RETURN cancelled_count;
 END;
 $$;
 
@@ -2044,6 +2067,10 @@ GRANT EXECUTE ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) TO authenticated;
 -- cleanup_expired_offers: NOT CLIENT-CALLABLE (cron/service_role)
 REVOKE ALL ON FUNCTION cleanup_expired_offers() FROM PUBLIC;
 -- No GRANT: NOT CLIENT-CALLABLE — only backend (cron/admin)
+
+-- cleanup_abandoned_pending_orders: NOT CLIENT-CALLABLE (cron)
+REVOKE ALL ON FUNCTION cleanup_abandoned_pending_orders() FROM PUBLIC;
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron)
 
 -- mark_products_sold_by_payment_intent: NOT CLIENT-CALLABLE (Stripe webhook)
 REVOKE ALL ON FUNCTION mark_products_sold_by_payment_intent(TEXT) FROM PUBLIC;
