@@ -207,9 +207,8 @@ BEGIN
   IF expected_count = 0 THEN RAISE EXCEPTION 'No products provided'; END IF;
 
   -- Auto-release expired reservations for requested products only
-  UPDATE products
-  SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
-  WHERE id = ANY(p_product_ids) AND status = 'RESERVED' AND reserved_until <= now();
+  -- Uses canonical function that also expires associated offers
+  PERFORM release_expired_reservations(p_product_ids);
 
   CREATE TEMPORARY TABLE reserved_rows ON COMMIT DROP AS
   WITH requested AS (
@@ -233,39 +232,47 @@ BEGIN
 END;
 $$;
 
--- Release expired reservations (call via cron or scheduled function)
--- Also expires the associated accepted offer when reservation lapses
-CREATE OR REPLACE FUNCTION cleanup_expired_reservations()
+-- Canonical function to release expired reservations + expire associated offers
+-- Uses CTE to capture reserved_by BEFORE clearing it
+-- Called by both cleanup_expired_reservations() and reserve_products_for_checkout()
+CREATE OR REPLACE FUNCTION release_expired_reservations(p_product_ids UUID[] DEFAULT NULL)
 RETURNS INTEGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
   released_count INTEGER;
 BEGIN
-  -- Release expired reservations
-  UPDATE products
-  SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
-  WHERE status = 'RESERVED' AND reserved_until <= now();
-
-  GET DIAGNOSTICS released_count = ROW_COUNT;
-
-  -- Expire the accepted offer for each released product
-  -- (the offer that caused the reservation in the first place)
-  UPDATE offers SET status = 'expired'
-  WHERE status = 'accepted'
-    AND product_id IN (
-      SELECT id FROM products
-      WHERE status = 'ACTIVE' AND reserved_by IS NULL
-    )
-    AND id IN (
-      -- Only offers whose reservation window has passed
-      SELECT o.id FROM offers o
-      JOIN products p ON p.id = o.product_id
-      WHERE o.status = 'accepted'
-        AND o.from_user_id = p.reserved_by
-    );
+  WITH expired_reservations AS (
+    UPDATE products
+    SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
+    WHERE status = 'RESERVED'
+      AND reserved_until <= now()
+      AND (p_product_ids IS NULL OR id = ANY(p_product_ids))
+    RETURNING id, reserved_by
+  ),
+  expired_offers AS (
+    UPDATE offers o
+    SET status = 'expired'
+    FROM expired_reservations er
+    WHERE o.product_id = er.id
+      AND o.from_user_id = er.reserved_by
+      AND o.status = 'accepted'
+    RETURNING o.id
+  )
+  SELECT count(*) INTO released_count FROM expired_reservations;
 
   RETURN released_count;
+END;
+$$;
+
+-- Release expired reservations (call via cron or scheduled function)
+-- Delegates to canonical release_expired_reservations()
+CREATE OR REPLACE FUNCTION cleanup_expired_reservations()
+RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN release_expired_reservations();
 END;
 $$;
 
@@ -335,13 +342,16 @@ BEGIN
   -- Mark order as PAID
   UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = p_order_id;
 
-  -- Mark all products as SOLD
+  -- Mark all products as SOLD (defense in depth: verify reserved_by matches buyer)
   UPDATE products
   SET status = 'SOLD',
       sold_at = now(),
       reserved_by = NULL,
       reserved_until = NULL
-  WHERE id = ANY(v_product_ids) AND status = 'RESERVED';
+  WHERE id = ANY(v_product_ids)
+    AND status = 'RESERVED'
+    AND reserved_by = v_order.buyer_id
+    AND reserved_until > now();
 
   GET DIAGNOSTICS v_sold_count = ROW_COUNT;
 
@@ -396,13 +406,15 @@ BEGIN
   -- Mark order as CANCELLED
   UPDATE orders SET status = 'CANCELLED' WHERE id = p_order_id;
 
-  -- Release products back to ACTIVE
+  -- Release products back to ACTIVE (only those reserved by this buyer)
   IF v_expected_count > 0 THEN
     UPDATE products
     SET status = 'ACTIVE',
         reserved_by = NULL,
         reserved_until = NULL
-    WHERE id = ANY(v_product_ids) AND status = 'RESERVED';
+    WHERE id = ANY(v_product_ids)
+      AND status = 'RESERVED'
+      AND reserved_by = v_order.buyer_id;
 
     GET DIAGNOSTICS v_released_count = ROW_COUNT;
 
@@ -1663,6 +1675,10 @@ REVOKE ALL ON FUNCTION confirm_order_payment(UUID) FROM PUBLIC;
 -- cleanup_expired_reservations: service_role/cron only
 REVOKE ALL ON FUNCTION cleanup_expired_reservations() FROM PUBLIC;
 -- No GRANT to authenticated: only service_role or pg_cron can call this
+
+-- release_expired_reservations: used internally by other RPCs
+REVOKE ALL ON FUNCTION release_expired_reservations(UUID[]) FROM PUBLIC;
+-- No GRANT: called only by other SECURITY DEFINER functions
 
 -- cancel_order: authenticated participant (buyer or seller)
 REVOKE ALL ON FUNCTION cancel_order(UUID) FROM PUBLIC;
