@@ -304,7 +304,7 @@ END;
 $$;
 
 -- Mark products as SOLD by payment_intent_id (called by Stripe webhook)
--- Validates: order is PAYMENT_PROCESSING, products are RESERVED + reserved_by = buyer
+-- Same guarantees as confirm_order_payment(): validates reserved_by, reserved_until, count
 CREATE OR REPLACE FUNCTION mark_products_sold_by_payment_intent(p_payment_intent_id TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -323,15 +323,12 @@ BEGIN
 
   -- Idempotency: if already PAID, return success
   IF v_order.status = 'PAID' THEN
-    RETURN jsonb_build_object('status', 'PAID', 'message', 'Already confirmed');
+    RETURN jsonb_build_object('order_id', v_order.id, 'status', 'PAID', 'message', 'Already confirmed');
   END IF;
 
   IF v_order.status <> 'PAYMENT_PROCESSING' THEN
     RAISE EXCEPTION 'Order % is not PAYMENT_PROCESSING (current: %)', v_order.id, v_order.status;
   END IF;
-
-  -- Mark order as PAID
-  UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = v_order.id;
 
   -- Collect product IDs
   SELECT array_agg(product_id) INTO v_product_ids
@@ -342,17 +339,22 @@ BEGIN
     RAISE EXCEPTION 'Order % has no items', v_order.id;
   END IF;
 
-  -- Mark products as SOLD (validate reserved_by = buyer)
+  -- Mark order as PAID
+  UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = v_order.id;
+
+  -- Mark products as SOLD (same checks as confirm_order_payment)
   UPDATE products
   SET status = 'SOLD', sold_at = now(), reserved_by = NULL, reserved_until = NULL
   WHERE id = ANY(v_product_ids)
     AND status = 'RESERVED'
-    AND reserved_by = v_order.buyer_id;
+    AND reserved_by = v_order.buyer_id
+    AND reserved_until > now();
 
   GET DIAGNOSTICS v_sold_count = ROW_COUNT;
 
   IF v_sold_count <> v_expected_count THEN
-    RAISE EXCEPTION 'Order %: expected % sold, but only % were RESERVED for buyer', v_order.id, v_expected_count, v_sold_count;
+    RAISE EXCEPTION 'Order %: expected % products sold, but only % met all conditions (RESERVED + buyer match + not expired)',
+      v_order.id, v_expected_count, v_sold_count;
   END IF;
 
   RETURN jsonb_build_object('order_id', v_order.id, 'status', 'PAID', 'products_sold', v_sold_count);
@@ -361,6 +363,7 @@ $$;
 
 -- Release product reservations by payment_intent_id (called on payment failure)
 -- Validates: order is PAYMENT_PROCESSING, releases only products reserved by buyer
+-- Verifies released_count = expected_count before cancelling (same as cancel_order/rollback)
 CREATE OR REPLACE FUNCTION release_product_reservations_by_payment_intent(p_payment_intent_id TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -368,6 +371,7 @@ AS $$
 DECLARE
   v_order RECORD;
   v_product_ids UUID[];
+  v_expected_count INTEGER;
   v_released_count INTEGER;
 BEGIN
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can release reservations'; END IF;
@@ -385,8 +389,11 @@ BEGIN
   SELECT array_agg(product_id) INTO v_product_ids
   FROM order_items WHERE order_id = v_order.id;
 
-  IF v_product_ids IS NULL OR array_length(v_product_ids, 1) = 0 THEN
-    RETURN jsonb_build_object('released', 0);
+  v_expected_count := COALESCE(array_length(v_product_ids, 1), 0);
+  IF v_expected_count = 0 THEN
+    -- No items — just cancel the order
+    UPDATE orders SET status = 'CANCELLED' WHERE id = v_order.id;
+    RETURN jsonb_build_object('order_id', v_order.id, 'status', 'CANCELLED', 'products_released', 0);
   END IF;
 
   -- Release products (only those reserved by this buyer)
@@ -398,6 +405,11 @@ BEGIN
 
   GET DIAGNOSTICS v_released_count = ROW_COUNT;
 
+  -- Verify all products were released (same as cancel_order/rollback_checkout)
+  IF v_released_count <> v_expected_count THEN
+    RAISE EXCEPTION 'Expected % products released, but only % were. Inconsistent state.', v_expected_count, v_released_count;
+  END IF;
+
   -- Cancel the order
   UPDATE orders SET status = 'CANCELLED' WHERE id = v_order.id;
 
@@ -405,29 +417,31 @@ BEGIN
 END;
 $$;
 
--- Cleanup stale PAYMENT_PROCESSING orders (call via cron, e.g. every 30 min)
--- Orders stuck in PAYMENT_PROCESSING for > 1 hour are cancelled and products released
+-- Find stale PAYMENT_PROCESSING orders (call via cron, e.g. every 30 min)
+-- Returns orders stuck in PAYMENT_PROCESSING for > 1 hour for external verification
+-- Does NOT cancel directly — the caller must verify with Stripe first
+-- This prevents cancelling orders where Stripe is still processing
 CREATE OR REPLACE FUNCTION cleanup_stale_payment_processing()
-RETURNS INTEGER
+RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-  stale_orders RECORD;
-  cancelled_count INTEGER := 0;
+  v_stale_orders JSONB;
 BEGIN
-  FOR stale_orders IN
-    SELECT id FROM orders
-    WHERE status = 'PAYMENT_PROCESSING'
-      AND created_at < now() - interval '1 hour'
-  LOOP
-    -- Release products and cancel order
-    PERFORM release_product_reservations_by_payment_intent(
-      (SELECT payment_intent_id FROM orders WHERE id = stale_orders.id)
-    );
-    cancelled_count := cancelled_count + 1;
-  END LOOP;
+  -- Only identify stale orders, do NOT cancel them
+  -- The caller (Node.js cron) must check each PaymentIntent with Stripe
+  SELECT jsonb_agg(jsonb_build_object(
+    'order_id', o.id,
+    'payment_intent_id', o.payment_intent_id,
+    'buyer_id', o.buyer_id,
+    'created_at', o.created_at,
+    'hours_stale', EXTRACT(EPOCH FROM (now() - o.created_at)) / 3600
+  )) INTO v_stale_orders
+  FROM orders o
+  WHERE o.status = 'PAYMENT_PROCESSING'
+    AND o.created_at < now() - interval '1 hour';
 
-  RETURN cancelled_count;
+  RETURN COALESCE(v_stale_orders, '[]'::jsonb);
 END;
 $$;
 
