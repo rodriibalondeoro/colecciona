@@ -1762,28 +1762,52 @@ AS $$
 DECLARE
   v_offer RECORD;
   v_product RECORD;
+  v_buyer_id UUID;
+  v_is_counter BOOLEAN;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
 
   -- Lock offer
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
-  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_SELLER] Only the seller can accept this offer'; END IF;
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_RECIPIENT] Only the recipient can accept this offer'; END IF;
   IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
 
   -- Lock product
   SELECT * INTO v_product FROM products WHERE id = v_offer.product_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[PRODUCT_NOT_FOUND] Product not found'; END IF;
   IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION '[PRODUCT_UNAVAILABLE] Product is no longer available'; END IF;
-  IF v_product.seller <> auth.uid() THEN RAISE EXCEPTION '[NOT_SELLER] You are not the seller'; END IF;
+
+  -- Determine offer type and buyer:
+  -- Normal offer: from_user is buyer (someone offering to buy from seller)
+  -- Counter-offer: from_user is seller (seller offering back to buyer), so buyer = to_user_id
+  v_is_counter := (v_offer.from_user_id = v_product.seller);
+
+  IF v_is_counter THEN
+    -- Counter-offer: seller offered to buyer, buyer accepts
+    -- Buyer = offer.to_user_id (the original buyer)
+    v_buyer_id := v_offer.to_user_id;
+    -- Verify the acceptor is the buyer (to_user_id)
+    IF auth.uid() <> v_offer.to_user_id THEN
+      RAISE EXCEPTION '[NOT_BUYER] Only the buyer can accept a counter-offer';
+    END IF;
+  ELSE
+    -- Normal offer: buyer offered to seller, seller accepts
+    -- Buyer = offer.from_user_id
+    v_buyer_id := v_offer.from_user_id;
+    -- Verify the acceptor is the seller (product seller)
+    IF auth.uid() <> v_product.seller THEN
+      RAISE EXCEPTION '[NOT_SELLER] Only the seller can accept a buyer offer';
+    END IF;
+  END IF;
 
   -- Accept the offer
   UPDATE offers SET status = 'accepted' WHERE id = p_offer_id;
 
-  -- Reserve product for buyer
+  -- Reserve product for the actual buyer (always the buyer, regardless of offer type)
   UPDATE products
   SET status = 'RESERVED',
-      reserved_by = v_offer.from_user_id,
+      reserved_by = v_buyer_id,
       reserved_until = now() + interval '15 minutes'
   WHERE id = v_offer.product_id AND status = 'ACTIVE';
 
@@ -1796,7 +1820,7 @@ BEGIN
   -- Notification for buyer
   INSERT INTO notifications (user_id, type, title, message, data, read)
   VALUES (
-    v_offer.from_user_id,
+    v_buyer_id,
     'offer',
     'Oferta aceptada',
     'Tu oferta de ' || v_offer.amount::numeric(10,2) || ' € ha sido aceptada. ¡Realiza el checkout!',
@@ -1808,7 +1832,8 @@ BEGIN
     'offer_id', p_offer_id,
     'status', 'accepted',
     'product_status', 'RESERVED',
-    'buyer_id', v_offer.from_user_id
+    'buyer_id', v_buyer_id,
+    'is_counter', v_is_counter
   );
 END;
 $$;
@@ -1825,7 +1850,7 @@ BEGIN
 
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
-  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_SELLER] Only the seller can reject this offer'; END IF;
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_RECIPIENT] Only the recipient can reject this offer'; END IF;
   IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
 
   UPDATE offers SET status = 'rejected' WHERE id = p_offer_id;
