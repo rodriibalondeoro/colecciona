@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createClient } from "@supabase/supabase-js";
-import { ORDER_STATES } from "@/lib/orderStates";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -39,38 +38,31 @@ export async function POST(req) {
     case "payment_intent.succeeded": {
       const pi = event.data.object;
       console.log(`[Webhook] Payment succeeded: ${pi.id}`);
-      const { error } = await supabase
-        .from("orders")
-        .update({ status: ORDER_STATES.PAID })
-        .eq("payment_intent_id", pi.id);
-      if (error) console.error("[Webhook] Error updating order:", error);
-      await supabase.rpc("mark_products_sold_by_payment_intent", {
+      const { data, error } = await supabase.rpc("mark_products_sold_by_payment_intent", {
         p_payment_intent_id: pi.id,
       });
+      if (error) console.error("[Webhook] Error marking products sold:", error.message);
+      else console.log("[Webhook] Order confirmed:", data);
       break;
     }
     case "payment_intent.captured": {
       const pi = event.data.object;
       console.log(`[Webhook] Payment captured: ${pi.id}`);
-      await supabase
-        .from("orders")
-        .update({ status: ORDER_STATES.PAID })
-        .eq("payment_intent_id", pi.id);
-      await supabase.rpc("mark_products_sold_by_payment_intent", {
+      const { data, error } = await supabase.rpc("mark_products_sold_by_payment_intent", {
         p_payment_intent_id: pi.id,
       });
+      if (error) console.error("[Webhook] Error capturing payment:", error.message);
+      else console.log("[Webhook] Payment captured:", data);
       break;
     }
     case "payment_intent.payment_failed": {
       const pi = event.data.object;
       console.log(`[Webhook] Payment failed: ${pi.id}`);
-      await supabase
-        .from("orders")
-        .update({ status: ORDER_STATES.CANCELLED })
-        .eq("payment_intent_id", pi.id);
-      await supabase.rpc("release_product_reservations_by_payment_intent", {
+      const { data, error } = await supabase.rpc("release_product_reservations_by_payment_intent", {
         p_payment_intent_id: pi.id,
       });
+      if (error) console.error("[Webhook] Error releasing reservations:", error.message);
+      else console.log("[Webhook] Reservations released:", data);
       break;
     }
     case "charge.succeeded":
@@ -101,7 +93,6 @@ export async function POST(req) {
       const sub = event.data.object;
       const userId = sub.metadata?.user_id;
       console.log(`[Webhook] Subscription updated: ${sub.id} status=${sub.status}`);
-      const isActive = sub.status === "active" || sub.status === "trialing";
       if (userId) {
         await supabase.from("subscriptions").update({
           status: sub.status,

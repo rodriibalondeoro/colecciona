@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
-import { ORDER_STATES } from "@/lib/orderStates";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -29,31 +28,30 @@ export async function POST(req) {
 
     const supabase = createClient(url, key);
 
-    const { data: order, error: fetchError } = await supabase
+    // Atomic: order→PAID + products→SOLD via single RPC
+    const { data, error: rpcError } = await supabase.rpc("mark_products_sold_by_payment_intent", {
+      p_payment_intent_id: paymentIntentId,
+    });
+
+    if (rpcError) {
+      console.error("[Capture] RPC error:", rpcError.message);
+      return NextResponse.json({ error: rpcError.message }, { status: 500 });
+    }
+
+    const { data: order } = await supabase
       .from("orders")
       .select("seller_id")
       .eq("payment_intent_id", paymentIntentId)
       .single();
 
-    if (fetchError || !order) {
-      return NextResponse.json({ error: "Pedido no encontrado" }, { status: 404 });
+    if (order?.seller_id) {
+      await supabase.from("notifications").insert({
+        user_id: order.seller_id,
+        type: "payment_received",
+        title: "Pago recibido",
+        body: "El pago de tu venta ha sido capturado y los fondos están disponibles.",
+      });
     }
-
-    await supabase
-      .from("orders")
-      .update({ status: ORDER_STATES.PAID })
-      .eq("payment_intent_id", paymentIntentId);
-
-    await supabase.rpc("mark_products_sold_by_payment_intent", {
-      p_payment_intent_id: paymentIntentId,
-    });
-
-    await supabase.from("notifications").insert({
-      user_id: order.seller_id,
-      type: "payment_received",
-      title: "Pago recibido",
-      body: "El pago de tu venta ha sido capturado y los fondos están disponibles.",
-    });
 
     return NextResponse.json({
       success: true,

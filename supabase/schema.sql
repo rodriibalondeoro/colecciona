@@ -235,6 +235,7 @@ $$;
 -- Canonical function to release expired reservations + expire associated offers
 -- Uses CTE to capture reserved_by BEFORE clearing it
 -- Called by both cleanup_expired_reservations() and reserve_products_for_checkout()
+-- PROTECTION: never releases products tied to an active PAYMENT_PROCESSING order
 CREATE OR REPLACE FUNCTION release_expired_reservations(p_product_ids UUID[] DEFAULT NULL)
 RETURNS INTEGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -242,11 +243,19 @@ AS $$
 DECLARE
   released_count INTEGER;
 BEGIN
-  WITH expired_reservations AS (
+  WITH active_payment_products AS (
+    -- Products tied to an order in PAYMENT_PROCESSING (Stripe owns lifecycle)
+    SELECT DISTINCT oi.product_id
+    FROM order_items oi
+    JOIN orders o ON o.id = oi.order_id
+    WHERE o.status = 'PAYMENT_PROCESSING'
+  ),
+  expired_reservations AS (
     UPDATE products
     SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
     WHERE status = 'RESERVED'
       AND reserved_until <= now()
+      AND id NOT IN (SELECT product_id FROM active_payment_products)
       AND (p_product_ids IS NULL OR id = ANY(p_product_ids))
     RETURNING id, reserved_by
   ),
@@ -291,6 +300,134 @@ BEGIN
 
   GET DIAGNOSTICS expired_count = ROW_COUNT;
   RETURN expired_count;
+END;
+$$;
+
+-- Mark products as SOLD by payment_intent_id (called by Stripe webhook)
+-- Validates: order is PAYMENT_PROCESSING, products are RESERVED + reserved_by = buyer
+CREATE OR REPLACE FUNCTION mark_products_sold_by_payment_intent(p_payment_intent_id TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+  v_product_ids UUID[];
+  v_expected_count INTEGER;
+  v_sold_count INTEGER;
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can mark products sold'; END IF;
+
+  -- Lock order
+  SELECT * INTO v_order FROM orders WHERE payment_intent_id = p_payment_intent_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order with payment_intent % not found', p_payment_intent_id; END IF;
+
+  -- Idempotency: if already PAID, return success
+  IF v_order.status = 'PAID' THEN
+    RETURN jsonb_build_object('status', 'PAID', 'message', 'Already confirmed');
+  END IF;
+
+  IF v_order.status <> 'PAYMENT_PROCESSING' THEN
+    RAISE EXCEPTION 'Order % is not PAYMENT_PROCESSING (current: %)', v_order.id, v_order.status;
+  END IF;
+
+  -- Mark order as PAID
+  UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = v_order.id;
+
+  -- Collect product IDs
+  SELECT array_agg(product_id) INTO v_product_ids
+  FROM order_items WHERE order_id = v_order.id;
+
+  v_expected_count := COALESCE(array_length(v_product_ids, 1), 0);
+  IF v_expected_count = 0 THEN
+    RAISE EXCEPTION 'Order % has no items', v_order.id;
+  END IF;
+
+  -- Mark products as SOLD (validate reserved_by = buyer)
+  UPDATE products
+  SET status = 'SOLD', sold_at = now(), reserved_by = NULL, reserved_until = NULL
+  WHERE id = ANY(v_product_ids)
+    AND status = 'RESERVED'
+    AND reserved_by = v_order.buyer_id;
+
+  GET DIAGNOSTICS v_sold_count = ROW_COUNT;
+
+  IF v_sold_count <> v_expected_count THEN
+    RAISE EXCEPTION 'Order %: expected % sold, but only % were RESERVED for buyer', v_order.id, v_expected_count, v_sold_count;
+  END IF;
+
+  RETURN jsonb_build_object('order_id', v_order.id, 'status', 'PAID', 'products_sold', v_sold_count);
+END;
+$$;
+
+-- Release product reservations by payment_intent_id (called on payment failure)
+-- Validates: order is PAYMENT_PROCESSING, releases only products reserved by buyer
+CREATE OR REPLACE FUNCTION release_product_reservations_by_payment_intent(p_payment_intent_id TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+  v_product_ids UUID[];
+  v_released_count INTEGER;
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can release reservations'; END IF;
+
+  -- Lock order
+  SELECT * INTO v_order FROM orders WHERE payment_intent_id = p_payment_intent_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order with payment_intent % not found', p_payment_intent_id; END IF;
+
+  -- Only release from PAYMENT_PROCESSING or PENDING orders
+  IF v_order.status NOT IN ('PAYMENT_PROCESSING','PENDING') THEN
+    RETURN jsonb_build_object('status', v_order.status, 'message', 'No reservations to release');
+  END IF;
+
+  -- Collect product IDs
+  SELECT array_agg(product_id) INTO v_product_ids
+  FROM order_items WHERE order_id = v_order.id;
+
+  IF v_product_ids IS NULL OR array_length(v_product_ids, 1) = 0 THEN
+    RETURN jsonb_build_object('released', 0);
+  END IF;
+
+  -- Release products (only those reserved by this buyer)
+  UPDATE products
+  SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
+  WHERE id = ANY(v_product_ids)
+    AND status = 'RESERVED'
+    AND reserved_by = v_order.buyer_id;
+
+  GET DIAGNOSTICS v_released_count = ROW_COUNT;
+
+  -- Cancel the order
+  UPDATE orders SET status = 'CANCELLED' WHERE id = v_order.id;
+
+  RETURN jsonb_build_object('order_id', v_order.id, 'status', 'CANCELLED', 'products_released', v_released_count);
+END;
+$$;
+
+-- Cleanup stale PAYMENT_PROCESSING orders (call via cron, e.g. every 30 min)
+-- Orders stuck in PAYMENT_PROCESSING for > 1 hour are cancelled and products released
+CREATE OR REPLACE FUNCTION cleanup_stale_payment_processing()
+RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  stale_orders RECORD;
+  cancelled_count INTEGER := 0;
+BEGIN
+  FOR stale_orders IN
+    SELECT id FROM orders
+    WHERE status = 'PAYMENT_PROCESSING'
+      AND created_at < now() - interval '1 hour'
+  LOOP
+    -- Release products and cancel order
+    PERFORM release_product_reservations_by_payment_intent(
+      (SELECT payment_intent_id FROM orders WHERE id = stale_orders.id)
+    );
+    cancelled_count := cancelled_count + 1;
+  END LOOP;
+
+  RETURN cancelled_count;
 END;
 $$;
 
@@ -1710,4 +1847,16 @@ GRANT EXECUTE ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) TO authenticated;
 
 -- cleanup_expired_offers: service_role/cron only
 REVOKE ALL ON FUNCTION cleanup_expired_offers() FROM PUBLIC;
+-- No GRANT to authenticated: only service_role or pg_cron can call this
+
+-- mark_products_sold_by_payment_intent: service_role only (Stripe webhook)
+REVOKE ALL ON FUNCTION mark_products_sold_by_payment_intent(TEXT) FROM PUBLIC;
+-- No GRANT to authenticated: only service_role can call this
+
+-- release_product_reservations_by_payment_intent: service_role only (Stripe webhook / cleanup)
+REVOKE ALL ON FUNCTION release_product_reservations_by_payment_intent(TEXT) FROM PUBLIC;
+-- No GRANT to authenticated: only service_role can call this
+
+-- cleanup_stale_payment_processing: service_role/cron only
+REVOKE ALL ON FUNCTION cleanup_stale_payment_processing() FROM PUBLIC;
 -- No GRANT to authenticated: only service_role or pg_cron can call this
