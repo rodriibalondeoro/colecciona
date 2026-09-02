@@ -254,6 +254,7 @@ DECLARE
   v_order_id UUID;
   v_order RECORD;
   v_product_after_lock RECORD;
+  v_updated_count INTEGER;
 BEGIN
   -- Find expired reservations (snapshot, no lock yet)
   FOR v_product IN
@@ -311,6 +312,12 @@ BEGIN
       AND reserved_by = v_product.reserved_by
       AND reserved_until <= now();
 
+    -- Verify the product was actually released
+    GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+    IF v_updated_count <> 1 THEN
+      RAISE EXCEPTION 'Expected exactly one expired reservation to be released for product %, got %', v_product_after_lock.id, v_updated_count;
+    END IF;
+
     -- Expire the accepted offer for this buyer
     UPDATE offers
     SET status = 'expired'
@@ -354,10 +361,11 @@ BEGIN
 END;
 $$;
 
--- Cancel abandoned PENDING orders (call via cron)
--- PROTOCOL: locks each order with FOR UPDATE, re-reads status after lock.
+-- Cancel abandoned PENDING orders and release their products atomically (call via cron)
+-- PROTOCOL: locks order first, then products (global convention: orders → products by id).
 -- This serializes with checkout's PENDING→PAYMENT_PROCESSING transition.
 -- If checkout transitions the order while we hold the lock, we see the new status.
+-- Atomicity: ORDER → CANCELLED + PRODUCTS → ACTIVE in a single transaction.
 CREATE OR REPLACE FUNCTION cleanup_abandoned_pending_orders()
 RETURNS INTEGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -365,22 +373,49 @@ AS $$
 DECLARE
   cancelled_count INTEGER := 0;
   v_order RECORD;
+  v_product_ids UUID[];
+  v_product RECORD;
+  v_released_count INTEGER;
 BEGIN
   FOR v_order IN
     SELECT id FROM orders
     WHERE status = 'PENDING'
       AND created_at < now() - interval '30 minutes'
+    ORDER BY id
     FOR UPDATE
   LOOP
     -- Re-read status after lock — checkout may have transitioned it
     SELECT * INTO v_order FROM orders WHERE id = v_order.id;
 
-    IF v_order.status = 'PENDING' THEN
-      -- Still PENDING after lock — safe to cancel
-      UPDATE orders SET status = 'CANCELLED' WHERE id = v_order.id;
-      cancelled_count := cancelled_count + 1;
+    IF v_order.status <> 'PENDING' THEN
+      -- Status changed (e.g., to PAYMENT_PROCESSING) — checkout won the race, skip
+      CONTINUE;
     END IF;
-    -- If status changed (e.g., to PAYMENT_PROCESSING), skip — checkout won the race
+
+    -- Collect product IDs for this order
+    SELECT array_agg(product_id) INTO v_product_ids
+    FROM order_items WHERE order_id = v_order.id;
+
+    -- Lock products in deterministic order (global convention: orders → products by id)
+    IF v_product_ids IS NOT NULL AND array_length(v_product_ids, 1) > 0 THEN
+      FOR v_product IN
+        SELECT id FROM products
+        WHERE id = ANY(v_product_ids)
+        ORDER BY id
+        FOR UPDATE
+      LOOP
+        -- Release each product (only those still RESERVED by this buyer)
+        UPDATE products
+        SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
+        WHERE id = v_product.id
+          AND status = 'RESERVED'
+          AND reserved_by = v_order.buyer_id;
+      END LOOP;
+    END IF;
+
+    -- Cancel the order AFTER products are locked/released
+    UPDATE orders SET status = 'CANCELLED' WHERE id = v_order.id;
+    cancelled_count := cancelled_count + 1;
   END LOOP;
 
   RETURN cancelled_count;
@@ -538,7 +573,8 @@ BEGIN
 
   -- 3. Lock ALL products and validate every one BEFORE any writes
   -- This ensures no concurrent release/sale can slip in between
-  FOR v_product IN SELECT * FROM products WHERE id = ANY(v_product_ids) FOR UPDATE
+  -- ORDER BY id ensures deterministic locking order (global convention: orders → products by id)
+  FOR v_product IN SELECT * FROM products WHERE id = ANY(v_product_ids) ORDER BY id FOR UPDATE
   LOOP
     v_locked_count := v_locked_count + 1;
 
@@ -809,6 +845,12 @@ END;
 $$;
 
 -- Atomic checkout: validate prices server-side, create order + order_items
+-- Create checkout order: PRODUCT locks → INSERT new order + items
+-- NOTE: This locks products BEFORE creating the order. This does NOT violate the
+-- global locking convention (orders → products) because the order doesn't exist yet.
+-- The INSERT creates a new row, it does not compete for an existing order lock.
+-- All other lifecycle functions (confirm_payment, cancel_order, etc.) follow:
+--   LOCK existing ORDER → LOCK products by id → decide → UPDATE
 CREATE OR REPLACE FUNCTION create_checkout_order(
   p_product_ids UUID[],
   p_shipping_method TEXT DEFAULT 'standard',
@@ -845,10 +887,12 @@ BEGIN
   END IF;
 
   -- Lock and validate all products (FOR UPDATE prevents race conditions)
+  -- ORDER BY id ensures deterministic locking order (global convention: orders → products by id)
   FOR v_product IN
     SELECT p.id, p.price, p.seller, p.reserved_by, p.reserved_until, p.status
     FROM products p
     JOIN unnest(p_product_ids) AS ids(id) ON p.id = ids.id
+    ORDER BY p.id
     FOR UPDATE OF p
   LOOP
     v_found_count := v_found_count + 1;
