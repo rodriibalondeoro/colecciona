@@ -374,8 +374,10 @@ DECLARE
   cancelled_count INTEGER := 0;
   v_order RECORD;
   v_product_ids UUID[];
-  v_product RECORD;
+  v_expected_count INTEGER;
   v_released_count INTEGER;
+  v_updated_count INTEGER;
+  v_product RECORD;
 BEGIN
   FOR v_order IN
     SELECT id FROM orders
@@ -396,8 +398,11 @@ BEGIN
     SELECT array_agg(product_id) INTO v_product_ids
     FROM order_items WHERE order_id = v_order.id;
 
+    v_expected_count := COALESCE(array_length(v_product_ids, 1), 0);
+    v_released_count := 0;
+
     -- Lock products in deterministic order (global convention: orders → products by id)
-    IF v_product_ids IS NOT NULL AND array_length(v_product_ids, 1) > 0 THEN
+    IF v_expected_count > 0 THEN
       FOR v_product IN
         SELECT id FROM products
         WHERE id = ANY(v_product_ids)
@@ -410,10 +415,22 @@ BEGIN
         WHERE id = v_product.id
           AND status = 'RESERVED'
           AND reserved_by = v_order.buyer_id;
+
+        GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+        IF v_updated_count <> 1 THEN
+          RAISE EXCEPTION 'Order %: expected reserved product % to be released, but ROW_COUNT = %', v_order.id, v_product.id, v_updated_count;
+        END IF;
+
+        v_released_count := v_released_count + 1;
       END LOOP;
+
+      -- Verify all expected products were released (fail-closed: rollback if inconsistent)
+      IF v_released_count <> v_expected_count THEN
+        RAISE EXCEPTION 'Order %: expected % products released, got %', v_order.id, v_expected_count, v_released_count;
+      END IF;
     END IF;
 
-    -- Cancel the order AFTER products are locked/released
+    -- Cancel the order AFTER all products are verified released
     UPDATE orders SET status = 'CANCELLED' WHERE id = v_order.id;
     cancelled_count := cancelled_count + 1;
   END LOOP;
