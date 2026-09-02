@@ -426,14 +426,6 @@ BEGIN
           RAISE EXCEPTION 'Order %: expected reserved product % to be released, but ROW_COUNT = %', v_order.id, v_product.id, v_updated_count;
         END IF;
 
-        -- Expire the accepted offer for this buyer on this product
-        -- Maintains invariant: if PRODUCT is no longer RESERVED, OFFER cannot be ACCEPTED
-        UPDATE offers
-        SET status = 'expired'
-        WHERE product_id = v_product.id
-          AND buyer_id = v_order.buyer_id
-          AND status = 'accepted';
-
         v_released_count := v_released_count + 1;
       END LOOP;
 
@@ -441,6 +433,14 @@ BEGIN
       IF v_released_count <> v_expected_count THEN
         RAISE EXCEPTION 'Order %: expected % products released, got %', v_order.id, v_expected_count, v_released_count;
       END IF;
+
+      -- AFTER verification: expire accepted offers for released products
+      -- Maintains invariant: if PRODUCT is no longer RESERVED, OFFER cannot be ACCEPTED
+      UPDATE offers
+      SET status = 'expired'
+      WHERE product_id = ANY(v_product_ids)
+        AND buyer_id = v_order.buyer_id
+        AND status = 'accepted';
     END IF;
 
     -- Cancel the order AFTER all products are verified released
