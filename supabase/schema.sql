@@ -6,6 +6,13 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================================================
+-- SECURITY: deny-by-default for function execution
+-- New functions are NOT callable by any role until explicitly granted.
+-- Prevents: forgotten REVOKE after CREATE FUNCTION → unintended public access.
+-- ============================================================================
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
+-- ============================================================================
 -- ENUMS
 -- ============================================================================
 
@@ -553,7 +560,7 @@ BEGIN
 END;
 $$;
 
--- Rollback checkout: release reserved products + cancel order (service_role only)
+-- Rollback checkout: release reserved products + cancel order (NOT CLIENT-CALLABLE)
 -- Used when Stripe fails after order creation
 CREATE OR REPLACE FUNCTION rollback_checkout(p_order_id UUID)
 RETURNS VOID
@@ -1963,29 +1970,29 @@ GRANT EXECUTE ON FUNCTION reserve_products_for_checkout(UUID[], UUID, TIMESTAMPT
 REVOKE ALL ON FUNCTION create_checkout_order(UUID[], TEXT, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION create_checkout_order(UUID[], TEXT, TEXT) TO authenticated;
 
--- confirm_order_payment: service_role only (Stripe webhook)
+-- confirm_order_payment: NOT CLIENT-CALLABLE (Stripe webhook via service_role)
 REVOKE ALL ON FUNCTION confirm_order_payment(UUID) FROM PUBLIC;
--- No GRANT to authenticated: only service_role can call this
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (webhook/cron/admin)
 
 -- confirm_payment: canonical (called by confirm_order_payment and mark_products_sold_by_payment_intent)
 REVOKE ALL ON FUNCTION confirm_payment(UUID) FROM PUBLIC;
--- No GRANT: called only by other SECURITY DEFINER functions
+-- No GRANT: NOT CLIENT-CALLABLE — called only by other SECURITY DEFINER functions
 
--- cleanup_expired_reservations: service_role/cron only
+-- cleanup_expired_reservations: NOT CLIENT-CALLABLE (cron/service_role)
 REVOKE ALL ON FUNCTION cleanup_expired_reservations() FROM PUBLIC;
--- No GRANT to authenticated: only service_role or pg_cron can call this
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron/admin)
 
--- release_expired_reservations: used internally by other RPCs
+-- release_expired_reservations: NOT CLIENT-CALLABLE (internal to other RPCs)
 REVOKE ALL ON FUNCTION release_expired_reservations(UUID[]) FROM PUBLIC;
--- No GRANT: called only by other SECURITY DEFINER functions
+-- No GRANT: NOT CLIENT-CALLABLE — called only by other SECURITY DEFINER functions
 
 -- cancel_order: authenticated participant (buyer or seller)
 REVOKE ALL ON FUNCTION cancel_order(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cancel_order(UUID) TO authenticated;
 
--- rollback_checkout: service_role only (checkout failure recovery)
+-- rollback_checkout: NOT CLIENT-CALLABLE (checkout failure recovery)
 REVOKE ALL ON FUNCTION rollback_checkout(UUID) FROM PUBLIC;
--- No GRANT to authenticated: only service_role can call this
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (checkout API with service_role)
 
 -- create_offer: authenticated buyer only
 REVOKE ALL ON FUNCTION create_offer(UUID, NUMERIC, TEXT) FROM PUBLIC;
@@ -2007,21 +2014,21 @@ GRANT EXECUTE ON FUNCTION cancel_offer(UUID) TO authenticated;
 REVOKE ALL ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) TO authenticated;
 
--- cleanup_expired_offers: service_role/cron only
+-- cleanup_expired_offers: NOT CLIENT-CALLABLE (cron/service_role)
 REVOKE ALL ON FUNCTION cleanup_expired_offers() FROM PUBLIC;
--- No GRANT to authenticated: only service_role or pg_cron can call this
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron/admin)
 
--- mark_products_sold_by_payment_intent: service_role only (Stripe webhook)
+-- mark_products_sold_by_payment_intent: NOT CLIENT-CALLABLE (Stripe webhook)
 REVOKE ALL ON FUNCTION mark_products_sold_by_payment_intent(TEXT) FROM PUBLIC;
--- No GRANT to authenticated: only service_role can call this
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (webhook/capture API)
 
--- release_product_reservations_by_payment_intent: service_role only (Stripe webhook / cleanup)
+-- release_product_reservations_by_payment_intent: NOT CLIENT-CALLABLE (Stripe webhook / cleanup)
 REVOKE ALL ON FUNCTION release_product_reservations_by_payment_intent(TEXT) FROM PUBLIC;
--- No GRANT to authenticated: only service_role can call this
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (webhook/cron)
 
--- cleanup_stale_payment_processing: service_role/cron only
+-- cleanup_stale_payment_processing: NOT CLIENT-CALLABLE (cron/service_role)
 REVOKE ALL ON FUNCTION cleanup_stale_payment_processing() FROM PUBLIC;
--- No GRANT to authenticated: only service_role or pg_cron can call this
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron/admin)
 
 -- mark_order_preparing: authenticated seller only
 REVOKE ALL ON FUNCTION mark_order_preparing(UUID) FROM PUBLIC;
