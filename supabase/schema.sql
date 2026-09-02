@@ -240,45 +240,66 @@ END;
 $$;
 
 -- Canonical function to release expired reservations + expire associated offers
--- Uses CTE to capture reserved_by BEFORE clearing it
+-- PROTOCOL: locks orders BEFORE deciding to release products.
+-- This serializes with checkout's PENDING→PAYMENT_PROCESSING transition.
+-- If checkout transitions the order while we hold the lock, we see the new status.
 -- Called by both cleanup_expired_reservations() and reserve_products_for_checkout()
--- PROTECTION: never releases products tied to active orders (PENDING or PAYMENT_PROCESSING)
 CREATE OR REPLACE FUNCTION release_expired_reservations(p_product_ids UUID[] DEFAULT NULL)
 RETURNS INTEGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-  released_count INTEGER;
+  released_count INTEGER := 0;
+  v_product RECORD;
+  v_order_id UUID;
+  v_order RECORD;
 BEGIN
-  WITH active_payment_products AS (
-    -- Products tied to an active order:
-    -- PENDING = checkout in progress (exclude if recent, release if abandoned > 30min)
-    -- PAYMENT_PROCESSING = Stripe owns lifecycle (always exclude)
-    SELECT DISTINCT oi.product_id
+  -- Find expired reservations
+  FOR v_product IN
+    SELECT p.id, p.reserved_by
+    FROM products p
+    WHERE p.status = 'RESERVED'
+      AND p.reserved_until <= now()
+      AND (p_product_ids IS NULL OR p.id = ANY(p_product_ids))
+  LOOP
+    -- Check if this product is tied to any order
+    SELECT oi.order_id INTO v_order_id
     FROM order_items oi
-    JOIN orders o ON o.id = oi.order_id
-    WHERE o.status = 'PAYMENT_PROCESSING'
-       OR (o.status = 'PENDING' AND o.created_at > now() - interval '30 minutes')
-  ),
-  expired_reservations AS (
+    WHERE oi.product_id = v_product.id
+    LIMIT 1;
+
+    IF v_order_id IS NOT NULL THEN
+      -- Lock the order and re-read status — this serializes with checkout
+      SELECT * INTO v_order FROM orders WHERE id = v_order_id FOR UPDATE;
+
+      -- After lock: re-check status
+      IF v_order.status = 'PAYMENT_PROCESSING' THEN
+        -- Stripe owns lifecycle — DO NOT release
+        CONTINUE;
+      ELSIF v_order.status = 'PENDING' AND v_order.created_at > now() - interval '30 minutes' THEN
+        -- Checkout in progress — DO NOT release
+        CONTINUE;
+      ELSIF v_order.status = 'PENDING' AND v_order.created_at <= now() - interval '30 minutes' THEN
+        -- Abandoned checkout — cancel order, then release
+        UPDATE orders SET status = 'CANCELLED' WHERE id = v_order_id;
+      END IF;
+      -- For other statuses (PAID, CANCELLED, etc.) — release is safe
+    END IF;
+
+    -- Release the product
     UPDATE products
     SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
-    WHERE status = 'RESERVED'
-      AND reserved_until <= now()
-      AND id NOT IN (SELECT product_id FROM active_payment_products)
-      AND (p_product_ids IS NULL OR id = ANY(p_product_ids))
-    RETURNING id, reserved_by
-  ),
-  expired_offers AS (
-    UPDATE offers o
+    WHERE id = v_product.id AND status = 'RESERVED';
+
+    -- Expire the accepted offer for this buyer
+    UPDATE offers
     SET status = 'expired'
-    FROM expired_reservations er
-    WHERE o.product_id = er.id
-      AND o.buyer_id = er.reserved_by
-      AND o.status = 'accepted'
-    RETURNING o.id
-  )
-  SELECT count(*) INTO released_count FROM expired_reservations;
+    WHERE product_id = v_product.id
+      AND buyer_id = v_product.reserved_by
+      AND status = 'accepted';
+
+    released_count := released_count + 1;
+  END LOOP;
 
   RETURN released_count;
 END;
@@ -314,21 +335,34 @@ END;
 $$;
 
 -- Cancel abandoned PENDING orders (call via cron)
--- Orders stuck in PENDING for > 30 minutes mean checkout route crashed
--- between create_checkout_order() and Stripe call. Products were already
--- released by release_expired_reservations() (which excludes PENDING < 30min).
+-- PROTOCOL: locks each order with FOR UPDATE, re-reads status after lock.
+-- This serializes with checkout's PENDING→PAYMENT_PROCESSING transition.
+-- If checkout transitions the order while we hold the lock, we see the new status.
 CREATE OR REPLACE FUNCTION cleanup_abandoned_pending_orders()
 RETURNS INTEGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-  cancelled_count INTEGER;
+  cancelled_count INTEGER := 0;
+  v_order RECORD;
 BEGIN
-  UPDATE orders SET status = 'CANCELLED'
-  WHERE status = 'PENDING'
-    AND created_at < now() - interval '30 minutes';
+  FOR v_order IN
+    SELECT id FROM orders
+    WHERE status = 'PENDING'
+      AND created_at < now() - interval '30 minutes'
+    FOR UPDATE
+  LOOP
+    -- Re-read status after lock — checkout may have transitioned it
+    SELECT * INTO v_order FROM orders WHERE id = v_order.id;
 
-  GET DIAGNOSTICS cancelled_count = ROW_COUNT;
+    IF v_order.status = 'PENDING' THEN
+      -- Still PENDING after lock — safe to cancel
+      UPDATE orders SET status = 'CANCELLED' WHERE id = v_order.id;
+      cancelled_count := cancelled_count + 1;
+    END IF;
+    -- If status changed (e.g., to PAYMENT_PROCESSING), skip — checkout won the race
+  END LOOP;
+
   RETURN cancelled_count;
 END;
 $$;
