@@ -1924,9 +1924,9 @@ BEGIN
   -- Mark original as countered
   UPDATE offers SET status = 'countered' WHERE id = p_offer_id;
 
-  -- Create new counter-offer (seller → buyer, buyer_id = original buyer)
+  -- Create new counter-offer, preserve buyer_id from original negotiation
   INSERT INTO offers (product_id, from_user_id, to_user_id, buyer_id, amount, original_price, status, message)
-  VALUES (v_offer.product_id, auth.uid(), v_offer.from_user_id, v_offer.from_user_id, p_amount, v_product.price, 'pending',
+  VALUES (v_offer.product_id, auth.uid(), v_offer.from_user_id, v_offer.buyer_id, p_amount, v_product.price, 'pending',
     p_message || CASE WHEN p_message = '' THEN '' ELSE E'\n' END || 'Contraoferta de ' || p_amount::numeric(10,2) || ' €')
   RETURNING id INTO v_new_offer_id;
 
