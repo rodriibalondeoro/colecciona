@@ -5,6 +5,16 @@ import { verifyAuth } from "@/lib/serverAuth";
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+function mapRpcError(message) {
+  if (!message) return { status: 500, code: "INTERNAL" };
+  const m = message.toLowerCase();
+  if (m.includes("not found")) return { status: 404, code: "NOT_FOUND" };
+  if (m.includes("not authenticated") || m.includes("authentication required")) return { status: 401, code: "UNAUTHENTICATED" };
+  if (m.includes("not authorized") || m.includes("only the seller") || m.includes("only the buyer") || m.includes("you are not")) return { status: 403, code: "FORBIDDEN" };
+  if (m.includes("not pending") || m.includes("no longer available") || m.includes("cannot") || m.includes("amount must be")) return { status: 409, code: "CONFLICT" };
+  return { status: 500, code: "INTERNAL" };
+}
+
 export async function PATCH(req, { params }) {
   const { user, error } = await verifyAuth(req);
   if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
@@ -53,8 +63,8 @@ export async function PATCH(req, { params }) {
   }
 
   if (rpcResult.error) {
-    console.warn(`[Offers API] ${action} error:`, rpcResult.error.message);
-    return NextResponse.json({ error: rpcResult.error.message }, { status: 500 });
+    const mapped = mapRpcError(rpcResult.error.message);
+    return NextResponse.json({ error: rpcResult.error.message }, { status: mapped.status });
   }
 
   return NextResponse.json({ success: true, result: rpcResult.data });

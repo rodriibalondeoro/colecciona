@@ -5,6 +5,16 @@ import { verifyAuth } from "@/lib/serverAuth";
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+function mapRpcError(message) {
+  if (!message) return { status: 500 };
+  const m = message.toLowerCase();
+  if (m.includes("not found")) return { status: 404 };
+  if (m.includes("not authenticated") || m.includes("authentication required")) return { status: 401 };
+  if (m.includes("not authorized") || m.includes("only the seller") || m.includes("you are not")) return { status: 403 };
+  if (m.includes("not available") || m.includes("cannot offer") || m.includes("amount must")) return { status: 409 };
+  return { status: 500 };
+}
+
 export async function GET(req) {
   const { user, error } = await verifyAuth(req);
   if (error) return NextResponse.json({ offers: [] }, { status: 401 });
@@ -67,7 +77,8 @@ export async function POST(req) {
 
   if (rpcError) {
     console.warn("[Offers API] create_offer error:", rpcError.message);
-    return NextResponse.json({ error: rpcError.message }, { status: 500 });
+    const mapped = mapRpcError(rpcError.message);
+    return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
   }
 
   return NextResponse.json({ success: true, offer: data });

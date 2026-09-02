@@ -1393,13 +1393,11 @@ BEGIN
     false
   );
 
-  RETURN jsonb_build_object(
-    'offer_id', v_offer_id,
-    'product_id', p_product_id,
-    'seller_id', v_product.seller,
-    'amount', p_amount,
-    'original_price', v_product.price
-  );
+  -- Return the full offer row so frontend doesn't reconstruct
+  RETURN (SELECT row_to_json(o.*) FROM (
+    SELECT id, product_id, from_user_id, to_user_id, amount, original_price, status, message, created_at
+    FROM offers WHERE id = v_offer_id
+  ) o);
 END;
 $$;
 
@@ -1563,12 +1561,13 @@ BEGIN
     false
   );
 
-  RETURN jsonb_build_object(
+  RETURN (SELECT jsonb_build_object(
     'original_offer_id', p_offer_id,
-    'new_offer_id', v_new_offer_id,
-    'amount', p_amount,
-    'status', 'pending'
-  );
+    'new_offer', row_to_json(n.*
+  ) FROM (
+    SELECT id, product_id, from_user_id, to_user_id, amount, original_price, status, message, created_at
+    FROM offers WHERE id = v_new_offer_id
+  ) n);
 END;
 $$;
 

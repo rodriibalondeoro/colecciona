@@ -419,19 +419,19 @@ export function AppProvider({ children }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al crear oferta");
 
-      const offer = data.offer;
+      const o = data.offer;
       const newOffer = {
-        id: offer.offer_id,
-        productId: offer.product_id,
+        id: o.id,
+        productId: o.product_id,
         product: null,
-        fromUser: { id: session?.id || session?.user?.id },
-        toUser: { id: offer.seller_id },
-        amount: offer.amount,
-        originalPrice: offer.original_price,
-        status: "pending",
+        fromUser: { id: o.from_user_id },
+        toUser: { id: o.to_user_id },
+        amount: o.amount,
+        originalPrice: o.original_price,
+        status: o.status,
         direction: "sent",
-        message,
-        createdAt: new Date().toISOString(),
+        message: o.message,
+        createdAt: o.created_at,
       };
 
       setOffers((prev) => [newOffer, ...prev]);
@@ -459,12 +459,14 @@ export function AppProvider({ children }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Error al actualizar oferta");
 
+      const result = data.result;
+
       setOffers((prev) =>
-        prev.map((o) => o.id === offerId ? { ...o, status: action === "accept" ? "accepted" : "rejected" } : o)
+        prev.map((o) => o.id === offerId ? { ...o, status: result.status } : o)
       );
 
-      const labels = { accept: "Oferta aceptada ✓", reject: "Oferta rechazada" };
-      showToast(labels[action] || "Oferta actualizada", action === "accept" ? "success" : "info");
+      const labels = { accepted: "Oferta aceptada ✓", rejected: "Oferta rechazada" };
+      showToast(labels[result.status] || "Oferta actualizada", result.status === "accepted" ? "success" : "info");
       return true;
     } catch (err) {
       showToast(err.message || "Error al actualizar oferta", "error");
@@ -490,26 +492,27 @@ export function AppProvider({ children }) {
       if (!res.ok) throw new Error(data.error || "Error al enviar contraoferta");
 
       const result = data.result;
+      const newOffer = result.new_offer;
 
-      // Mark original as countered and add new offer
+      // Mark original as countered and add new offer from server
       setOffers((prev) => {
         const updated = prev.map((o) =>
           o.id === offerId ? { ...o, status: "countered" } : o
         );
-        const newOffer = {
-          id: result.new_offer_id,
-          productId: result.product_id || null,
+        const mapped = {
+          id: newOffer.id,
+          productId: newOffer.product_id,
           product: null,
-          fromUser: { id: session?.id || session?.user?.id },
-          toUser: { id: result.buyer_id },
-          amount: result.amount,
-          originalPrice: null,
-          status: "pending",
+          fromUser: { id: newOffer.from_user_id },
+          toUser: { id: newOffer.to_user_id },
+          amount: newOffer.amount,
+          originalPrice: newOffer.original_price,
+          status: newOffer.status,
           direction: "sent",
-          message: message || `Contraoferta: ${amount.toFixed(2)} €`,
-          createdAt: new Date().toISOString(),
+          message: newOffer.message,
+          createdAt: newOffer.created_at,
         };
-        return [newOffer, ...updated];
+        return [mapped, ...updated];
       });
 
       showToast(`Contraoferta de ${amount.toFixed(2)} € enviada`, "success");
