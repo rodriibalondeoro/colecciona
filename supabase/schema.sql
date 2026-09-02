@@ -426,6 +426,14 @@ BEGIN
           RAISE EXCEPTION 'Order %: expected reserved product % to be released, but ROW_COUNT = %', v_order.id, v_product.id, v_updated_count;
         END IF;
 
+        -- Expire the accepted offer for this buyer on this product
+        -- Maintains invariant: if PRODUCT is no longer RESERVED, OFFER cannot be ACCEPTED
+        UPDATE offers
+        SET status = 'expired'
+        WHERE product_id = v_product.id
+          AND buyer_id = v_order.buyer_id
+          AND status = 'accepted';
+
         v_released_count := v_released_count + 1;
       END LOOP;
 
@@ -510,6 +518,13 @@ BEGIN
   IF v_released_count <> v_expected_count THEN
     RAISE EXCEPTION 'Expected % products released, but only % were. Inconsistent state.', v_expected_count, v_released_count;
   END IF;
+
+  -- Expire accepted offers for released products (maintains offer/product state coherence)
+  UPDATE offers
+  SET status = 'expired'
+  WHERE product_id = ANY(v_product_ids)
+    AND buyer_id = v_order.buyer_id
+    AND status = 'accepted';
 
   -- Cancel the order
   UPDATE orders SET status = 'CANCELLED' WHERE id = v_order.id;
@@ -685,6 +700,13 @@ BEGIN
     IF v_released_count <> v_expected_count THEN
       RAISE EXCEPTION 'Expected % products released, but only % were. Inconsistent state.', v_expected_count, v_released_count;
     END IF;
+
+    -- Expire accepted offers for released products (maintains offer/product state coherence)
+    UPDATE offers
+    SET status = 'expired'
+    WHERE product_id = ANY(v_product_ids)
+      AND buyer_id = v_order.buyer_id
+      AND status = 'accepted';
   END IF;
 
   RETURN jsonb_build_object(
@@ -737,6 +759,13 @@ BEGIN
     IF v_released_count <> v_expected_count THEN
       RAISE EXCEPTION 'Rollback: expected % products released, but only % were', v_expected_count, v_released_count;
     END IF;
+
+    -- Expire accepted offers for released products (maintains offer/product state coherence)
+    UPDATE offers
+    SET status = 'expired'
+    WHERE product_id = ANY(v_product_ids)
+      AND buyer_id = v_order.buyer_id
+      AND status = 'accepted';
   END IF;
 
   -- Cancel the order
