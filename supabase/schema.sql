@@ -1960,6 +1960,11 @@ BEGIN
     END IF;
   END IF;
 
+  -- Defensive: buyer must not be the seller (matches reserve_products_for_checkout constraint)
+  IF v_buyer_id = v_product.seller THEN
+    RAISE EXCEPTION '[SELF_BUYER] Buyer cannot be the seller of this product';
+  END IF;
+
   -- 5. Reserve product (fail-closed: verify ROW_COUNT)
   UPDATE products
   SET status = 'RESERVED',
