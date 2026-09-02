@@ -88,20 +88,60 @@ export async function GET(req) {
           }
 
         } else if (pi.status === "requires_action" && hoursStale > REQUIRES_ACTION_MAX_HOURS) {
-          // requires_action for too long — cancel PaymentIntent + release
-          console.log(`[Cron] PI ${pi.id} requires_action for ${hoursStale.toFixed(1)}h — force cancelling`);
+          // requires_action for too long — must confirm cancel BEFORE releasing
+          console.log(`[Cron] PI ${pi.id} requires_action for ${hoursStale.toFixed(1)}h — attempting cancel`);
           try {
-            await stripe.paymentIntents.cancel(pi.id, {
+            const canceledPI = await stripe.paymentIntents.cancel(pi.id, {
               cancellation_reason: "abandoned",
             });
+            // Verify Stripe actually cancelled it
+            if (canceledPI.status !== "canceled") {
+              console.warn(`[Cron] PI ${pi.id} cancel returned status=${canceledPI.status} — NOT releasing`);
+              results.errors.push({
+                order_id: order.order_id,
+                action: "cancel_verify",
+                error: `PaymentIntent status after cancel: ${canceledPI.status}`,
+              });
+              results.kept++;
+              continue;
+            }
           } catch (cancelErr) {
-            console.warn(`[Cron] Stripe cancel error (may already be canceled):`, cancelErr.message);
+            // Cancel failed — do NOT release. Re-check status to understand why.
+            console.error(`[Cron] PI ${pi.id} cancel failed: ${cancelErr.message}`);
+            try {
+              const piAfter = await stripe.paymentIntents.retrieve(pi.id);
+              if (piAfter.status === "canceled" || piAfter.status === "requires_payment_method") {
+                // Already terminal — safe to release
+                console.log(`[Cron] PI ${pi.id} already ${piAfter.status} — safe to release`);
+              } else {
+                // Still active — do NOT release, retry next cron run
+                console.warn(`[Cron] PI ${pi.id} still ${piAfter.status} — NOT releasing, will retry`);
+                results.errors.push({
+                  order_id: order.order_id,
+                  action: "cancel_failed",
+                  error: `Cancel failed and PI still ${piAfter.status}: ${cancelErr.message}`,
+                });
+                results.kept++;
+                continue;
+              }
+            } catch (retrieveErr) {
+              // Can't even retrieve — definitely do NOT release
+              console.error(`[Cron] PI ${pi.id} retrieve also failed: ${retrieveErr.message}`);
+              results.errors.push({
+                order_id: order.order_id,
+                action: "retrieve_failed",
+                error: `Cannot verify PI status: ${retrieveErr.message}`,
+              });
+              results.kept++;
+              continue;
+            }
           }
+          // Only reaches here if cancel succeeded or PI already terminal
           const { error: releaseError } = await supabase.rpc("release_product_reservations_by_payment_intent", {
             p_payment_intent_id: order.payment_intent_id,
           });
           if (releaseError) {
-            results.errors.push({ order_id: order.order_id, action: "force_cancel", error: releaseError.message });
+            results.errors.push({ order_id: order.order_id, action: "release", error: releaseError.message });
           } else {
             results.force_cancelled++;
           }
