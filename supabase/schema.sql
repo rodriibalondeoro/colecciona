@@ -240,7 +240,7 @@ END;
 $$;
 
 -- Canonical function to release expired reservations + expire associated offers
--- PROTOCOL: locks orders BEFORE deciding to release products.
+-- LOCKING ORDER: ORDER → PRODUCT → OFFER (UPDATE acquires row lock on accepted offer)
 -- This serializes with checkout's PENDING→PAYMENT_PROCESSING transition.
 -- If checkout transitions the order while we hold the lock, we see the new status.
 -- Called by both cleanup_expired_reservations() and reserve_products_for_checkout()
@@ -345,6 +345,11 @@ $$;
 
 -- Expire stale pending offers (call via cron, e.g. every hour)
 -- PENDING offers older than 48h are marked EXPIRED
+-- RACE CONDITION: No explicit FOR UPDATE needed — PostgreSQL serializes concurrent
+-- UPDATEs on the same row. If accept_offer()/counter_offer() wins first (PENDING→ACCEPTED/
+-- COUNTERED), this UPDATE's WHERE status='pending' won't match the changed row.
+-- If this cron wins first (PENDING→EXPIRED), the user's UPDATE will see EXPIRED
+-- and fail its status check. Both outcomes are correct.
 CREATE OR REPLACE FUNCTION cleanup_expired_offers()
 RETURNS INTEGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -1898,6 +1903,10 @@ $$;
 -- LOCKING ORDER: PRODUCT → OFFER (no existing ORDER in this flow)
 -- This is compatible with global convention (orders → products → offers)
 -- and prevents deadlock with release_expired_reservations (PRODUCT → OFFER via UPDATE).
+-- MULTIPLE OFFERS POLICY: Other pending offers for the same product remain PENDING.
+-- This is intentional: if the accepted reservation expires (PRODUCT → ACTIVE), the seller
+-- can subsequently accept another pending offer. The rejected offers are only those
+-- explicitly rejected by the seller during this acceptance.
 CREATE OR REPLACE FUNCTION accept_offer(p_offer_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
