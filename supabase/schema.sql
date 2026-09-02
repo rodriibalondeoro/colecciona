@@ -630,15 +630,14 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION '[ORDER_NOT_FOUND] Order not found'; END IF;
   IF auth.uid() <> v_order.seller_id THEN RAISE EXCEPTION '[NOT_SELLER] Only the seller can mark order as shipped'; END IF;
   IF v_order.status <> 'PREPARING' THEN RAISE EXCEPTION '[ORDER_NOT_PREPARING] Order must be PREPARING to ship'; END IF;
+  IF p_tracking_number IS NOT NULL AND p_tracking_number = '' THEN
+    RAISE EXCEPTION '[INVALID_TRACKING] Tracking number cannot be empty';
+  END IF;
 
   UPDATE orders SET
     status = 'SHIPPED',
     tracking_number = COALESCE(p_tracking_number, v_order.tracking_number)
   WHERE id = p_order_id;
-
-  IF p_tracking_number IS NOT NULL AND p_tracking_number = '' THEN
-    RAISE EXCEPTION '[INVALID_TRACKING] Tracking number cannot be empty';
-  END IF;
 
   -- Notify buyer
   INSERT INTO notifications (user_id, type, title, message, data, read)
@@ -924,8 +923,10 @@ BEGIN
     IF OLD.payment_processing_started_at IS NOT NULL THEN
       RAISE EXCEPTION 'Cannot modify payment_processing_started_at after assignment';
     END IF;
-    -- First assignment: only during PENDING→PAYMENT_PROCESSING (enforced by payment_intent_id block above)
-    -- This block is a secondary guard — the payment_intent_id check already requires this transition
+    -- First assignment: must happen during PENDING→PAYMENT_PROCESSING only
+    IF NOT (OLD.status = 'PENDING' AND NEW.status = 'PAYMENT_PROCESSING') THEN
+      RAISE EXCEPTION 'payment_processing_started_at can only be assigned during PENDING→PAYMENT_PROCESSING';
+    END IF;
   END IF;
 
   -- Block tracking_number outside of PREPARING→SHIPPED transition
