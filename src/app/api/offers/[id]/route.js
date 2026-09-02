@@ -12,6 +12,7 @@ function mapRpcError(message) {
     case "NOT_SELLER": return { status: 403, code };
     case "NOT_BUYER": return { status: 403, code };
     case "NOT_RECIPIENT": return { status: 403, code };
+    case "NOT_SENDER": return { status: 403, code };
     case "OFFER_NOT_PENDING": return { status: 409, code };
     case "PRODUCT_UNAVAILABLE": return { status: 409, code };
     case "INVALID_AMOUNT": return { status: 400, code };

@@ -271,7 +271,7 @@ BEGIN
     SET status = 'expired'
     FROM expired_reservations er
     WHERE o.product_id = er.id
-      AND o.from_user_id = er.reserved_by
+      AND o.buyer_id = er.reserved_by
       AND o.status = 'accepted'
     RETURNING o.id
   )
@@ -1209,6 +1209,7 @@ CREATE TABLE IF NOT EXISTS offers (
   product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   from_user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   to_user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  buyer_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   amount NUMERIC(10,2) NOT NULL CHECK (amount > 0),
   original_price NUMERIC(10,2) NOT NULL CHECK (original_price > 0),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected','countered','cancelled','expired')),
@@ -1216,6 +1217,7 @@ CREATE TABLE IF NOT EXISTS offers (
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_offers_to_user ON offers(to_user_id);
+CREATE INDEX IF NOT EXISTS idx_offers_buyer ON offers(buyer_id);
 
 -- ============================================================================
 -- 11. REVIEWS — buyer+seller reviews per order
@@ -1731,8 +1733,8 @@ BEGIN
   IF v_product.status <> 'ACTIVE' THEN RAISE EXCEPTION '[PRODUCT_UNAVAILABLE] Product is not available for offers'; END IF;
   IF v_product.seller = auth.uid() THEN RAISE EXCEPTION '[SELF_OFFER] Cannot offer on your own product'; END IF;
 
-  INSERT INTO offers (product_id, from_user_id, to_user_id, amount, original_price, status, message)
-  VALUES (p_product_id, auth.uid(), v_product.seller, p_amount, v_product.price, 'pending', p_message)
+  INSERT INTO offers (product_id, from_user_id, to_user_id, buyer_id, amount, original_price, status, message)
+  VALUES (p_product_id, auth.uid(), v_product.seller, auth.uid(), p_amount, v_product.price, 'pending', p_message)
   RETURNING id INTO v_offer_id;
 
   -- Create notification for seller (server-side)
@@ -1748,7 +1750,7 @@ BEGIN
 
   -- Return the full offer row so frontend doesn't reconstruct
   RETURN (SELECT row_to_json(o.*) FROM (
-    SELECT id, product_id, from_user_id, to_user_id, amount, original_price, status, message, created_at
+    SELECT id, product_id, from_user_id, to_user_id, buyer_id, amount, original_price, status, message, created_at
     FROM offers WHERE id = v_offer_id
   ) o);
 END;
@@ -1870,7 +1872,7 @@ BEGIN
 END;
 $$;
 
--- Cancel offer: buyer cancels their own pending offer
+-- Cancel offer: sender cancels their own pending offer
 CREATE OR REPLACE FUNCTION cancel_offer(p_offer_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -1882,7 +1884,7 @@ BEGIN
 
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
-  IF v_offer.from_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_BUYER] Only the buyer can cancel this offer'; END IF;
+  IF v_offer.from_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_SENDER] Only the sender can cancel this offer'; END IF;
   IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Only pending offers can be cancelled'; END IF;
 
   UPDATE offers SET status = 'cancelled' WHERE id = p_offer_id;
@@ -1891,7 +1893,7 @@ BEGIN
 END;
 $$;
 
--- Counter offer: seller creates new offer with different price, atomically
+-- Counter offer: recipient creates a counter-offer with different price
 CREATE OR REPLACE FUNCTION counter_offer(
   p_offer_id UUID,
   p_amount NUMERIC(10,2),
@@ -1911,7 +1913,7 @@ BEGIN
   -- Lock original offer
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
-  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_SELLER] Only the seller can counter this offer'; END IF;
+  IF v_offer.to_user_id <> auth.uid() THEN RAISE EXCEPTION '[NOT_RECIPIENT] Only the recipient can counter this offer'; END IF;
   IF v_offer.status <> 'pending' THEN RAISE EXCEPTION '[OFFER_NOT_PENDING] Offer is not pending'; END IF;
 
   -- Lock product
@@ -1922,9 +1924,9 @@ BEGIN
   -- Mark original as countered
   UPDATE offers SET status = 'countered' WHERE id = p_offer_id;
 
-  -- Create new counter-offer (seller → buyer)
-  INSERT INTO offers (product_id, from_user_id, to_user_id, amount, original_price, status, message)
-  VALUES (v_offer.product_id, auth.uid(), v_offer.from_user_id, p_amount, v_product.price, 'pending',
+  -- Create new counter-offer (seller → buyer, buyer_id = original buyer)
+  INSERT INTO offers (product_id, from_user_id, to_user_id, buyer_id, amount, original_price, status, message)
+  VALUES (v_offer.product_id, auth.uid(), v_offer.from_user_id, v_offer.from_user_id, p_amount, v_product.price, 'pending',
     p_message || CASE WHEN p_message = '' THEN '' ELSE E'\n' END || 'Contraoferta de ' || p_amount::numeric(10,2) || ' €')
   RETURNING id INTO v_new_offer_id;
 
@@ -1942,13 +1944,13 @@ BEGIN
   RETURN (SELECT jsonb_build_object(
     'original_offer', row_to_json(orig.*
   ) FROM (
-    SELECT id, product_id, from_user_id, to_user_id, amount, original_price, status, message, created_at
+    SELECT id, product_id, from_user_id, to_user_id, buyer_id, amount, original_price, status, message, created_at
     FROM offers WHERE id = p_offer_id
   ) orig)
   || (SELECT jsonb_build_object(
     'new_offer', row_to_json(n.*
   ) FROM (
-    SELECT id, product_id, from_user_id, to_user_id, amount, original_price, status, message, created_at
+    SELECT id, product_id, from_user_id, to_user_id, buyer_id, amount, original_price, status, message, created_at
     FROM offers WHERE id = v_new_offer_id
   ) n);
 END;
@@ -2031,11 +2033,11 @@ GRANT EXECUTE ON FUNCTION accept_offer(UUID) TO authenticated;
 REVOKE ALL ON FUNCTION reject_offer(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION reject_offer(UUID) TO authenticated;
 
--- cancel_offer: authenticated buyer only
+-- cancel_offer: authenticated sender only (buyer or seller depending on offer direction)
 REVOKE ALL ON FUNCTION cancel_offer(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cancel_offer(UUID) TO authenticated;
 
--- counter_offer: authenticated seller only
+-- counter_offer: authenticated recipient only
 REVOKE ALL ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION counter_offer(UUID, NUMERIC, TEXT) TO authenticated;
 
