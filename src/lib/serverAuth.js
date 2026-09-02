@@ -20,3 +20,19 @@ export async function verifyAuth(req) {
   }
   return { user: data.user, error: null };
 }
+
+// Creates a Supabase client authenticated with the user's JWT.
+// Use this when calling RPCs that check auth.uid() — the user's identity
+// must be embedded in the JWT for RLS and SECURITY DEFINER functions.
+export function createUserClient(token) {
+  return createClient(url, serviceKey, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
+}
+
+// Extracts the Bearer token from the request, or returns null.
+export function extractToken(req) {
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  return authHeader.slice(7);
+}

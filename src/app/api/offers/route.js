@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -67,6 +67,9 @@ export async function POST(req) {
   const { user, error } = await verifyAuth(req);
   if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
+  const token = extractToken(req);
+  if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
   const body = await req.json();
   const { productId, amount, message } = body;
 
@@ -74,9 +77,8 @@ export async function POST(req) {
     return NextResponse.json({ error: "productId y amount son obligatorios" }, { status: 400 });
   }
 
-  const supabase = createClient(url, serviceKey);
+  const supabase = createUserClient(token);
 
-  // Use RPC: server validates product, seller, price, self-offer, creates notification
   const { data, error: rpcError } = await supabase.rpc("create_offer", {
     p_product_id: productId,
     p_amount: amount,

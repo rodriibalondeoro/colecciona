@@ -1,9 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { verifyAuth } from "@/lib/serverAuth";
-
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
 function mapRpcError(message) {
   if (!message) return { status: 500, code: "INTERNAL" };
@@ -18,13 +14,18 @@ function mapRpcError(message) {
     case "OFFER_NOT_PENDING": return { status: 409, code };
     case "PRODUCT_UNAVAILABLE": return { status: 409, code };
     case "INVALID_AMOUNT": return { status: 400, code };
-    default: return { status: 500, code: "INTERNAL" };
+    case "CANNOT_SELF_OFFER": return { status: 400, code };
+    case "OFFER_EXISTS": return { status: 409, code };
+    default: return { status: 500, code };
   }
 }
 
 export async function PATCH(req, { params }) {
   const { user, error } = await verifyAuth(req);
   if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+  const token = extractToken(req);
+  if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
   const { id } = await params;
   const body = await req.json();
@@ -34,7 +35,7 @@ export async function PATCH(req, { params }) {
     return NextResponse.json({ error: "action es obligatorio (accept, reject, cancel, counter)" }, { status: 400 });
   }
 
-  const supabase = createClient(url, serviceKey);
+  const supabase = createUserClient(token);
   let rpcResult;
 
   switch (action) {

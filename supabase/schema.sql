@@ -585,6 +585,129 @@ BEGIN
 END;
 $$;
 
+-- ============================================================================
+-- ORDER STATE TRANSITION RPCs — all client→order changes go through here
+-- ============================================================================
+
+-- Seller marks order as preparing (PAID → PREPARING)
+CREATE OR REPLACE FUNCTION mark_order_preparing(p_order_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION '[ORDER_NOT_FOUND] Order not found'; END IF;
+  IF auth.uid() <> v_order.seller_id THEN RAISE EXCEPTION '[NOT_SELLER] Only the seller can mark order as preparing'; END IF;
+  IF v_order.status <> 'PAID' THEN RAISE EXCEPTION '[ORDER_NOT_PAID] Order must be PAID to start preparing'; END IF;
+
+  UPDATE orders SET status = 'PREPARING' WHERE id = p_order_id;
+
+  -- Notify buyer
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (v_order.buyer_id, 'order', 'Pedido en preparación',
+    'Tu pedido está siendo preparado para envío',
+    jsonb_build_object('order_id', p_order_id), false);
+
+  RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PREPARING');
+END;
+$$;
+
+-- Seller marks order as shipped with tracking number (PREPARING → SHIPPED)
+CREATE OR REPLACE FUNCTION mark_order_shipped(p_order_id UUID, p_tracking_number TEXT DEFAULT NULL)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION '[ORDER_NOT_FOUND] Order not found'; END IF;
+  IF auth.uid() <> v_order.seller_id THEN RAISE EXCEPTION '[NOT_SELLER] Only the seller can mark order as shipped'; END IF;
+  IF v_order.status <> 'PREPARING' THEN RAISE EXCEPTION '[ORDER_NOT_PREPARING] Order must be PREPARING to ship'; END IF;
+
+  UPDATE orders SET
+    status = 'SHIPPED',
+    tracking_number = COALESCE(p_tracking_number, v_order.tracking_number)
+  WHERE id = p_order_id;
+
+  IF p_tracking_number IS NOT NULL AND p_tracking_number = '' THEN
+    RAISE EXCEPTION '[INVALID_TRACKING] Tracking number cannot be empty';
+  END IF;
+
+  -- Notify buyer
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (v_order.buyer_id, 'order', 'Pedido enviado',
+    'Tu pedido ha sido enviado' || CASE WHEN p_tracking_number IS NOT NULL THEN '. Seguimiento: ' || p_tracking_number ELSE '' END,
+    jsonb_build_object('order_id', p_order_id, 'tracking_number', p_tracking_number), false);
+
+  RETURN jsonb_build_object('order_id', p_order_id, 'status', 'SHIPPED', 'tracking_number', p_tracking_number);
+END;
+$$;
+
+-- Buyer confirms delivery (SHIPPED → DELIVERED)
+CREATE OR REPLACE FUNCTION confirm_order_delivery(p_order_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION '[ORDER_NOT_FOUND] Order not found'; END IF;
+  IF auth.uid() <> v_order.buyer_id THEN RAISE EXCEPTION '[NOT_BUYER] Only the buyer can confirm delivery'; END IF;
+  IF v_order.status <> 'SHIPPED' THEN RAISE EXCEPTION '[ORDER_NOT_SHIPPED] Order must be SHIPPED to confirm delivery'; END IF;
+
+  UPDATE orders SET status = 'DELIVERED' WHERE id = p_order_id;
+
+  -- Notify seller
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (v_order.seller_id, 'order', 'Entrega confirmada',
+    'El comprador ha confirmado la recepción del pedido',
+    jsonb_build_object('order_id', p_order_id), false);
+
+  RETURN jsonb_build_object('order_id', p_order_id, 'status', 'DELIVERED');
+END;
+$$;
+
+-- Either party completes order (DELIVERED → COMPLETED)
+CREATE OR REPLACE FUNCTION complete_order(p_order_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+  v_notify_id UUID;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION '[ORDER_NOT_FOUND] Order not found'; END IF;
+  IF auth.uid() <> v_order.buyer_id AND auth.uid() <> v_order.seller_id THEN
+    RAISE EXCEPTION '[NOT_PARTICIPANT] You are not a participant in this order';
+  END IF;
+  IF v_order.status <> 'DELIVERED' THEN RAISE EXCEPTION '[ORDER_NOT_DELIVERED] Order must be DELIVERED to complete'; END IF;
+
+  UPDATE orders SET status = 'COMPLETED' WHERE id = p_order_id;
+
+  -- Notify the other party
+  v_notify_id := CASE WHEN auth.uid() = v_order.buyer_id THEN v_order.seller_id ELSE v_order.buyer_id END;
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (v_notify_id, 'order', 'Pedido completado',
+    'El pedido ha sido completado exitosamente',
+    jsonb_build_object('order_id', p_order_id), false);
+
+  RETURN jsonb_build_object('order_id', p_order_id, 'status', 'COMPLETED');
+END;
+$$;
+
 -- Atomic checkout: validate prices server-side, create order + order_items
 CREATE OR REPLACE FUNCTION create_checkout_order(
   p_product_ids UUID[],
@@ -755,7 +878,7 @@ RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE allowed BOOLEAN := false;
 BEGIN
-  -- Block changes to immutable fields
+  -- Block changes to immutable fields (financial + identity)
   IF OLD.seller_id IS DISTINCT FROM NEW.seller_id THEN RAISE EXCEPTION 'Cannot change seller_id'; END IF;
   IF OLD.buyer_id IS DISTINCT FROM NEW.buyer_id THEN RAISE EXCEPTION 'Cannot change buyer_id'; END IF;
   IF OLD.subtotal IS DISTINCT FROM NEW.subtotal THEN RAISE EXCEPTION 'Cannot change subtotal'; END IF;
@@ -764,16 +887,48 @@ BEGIN
   IF OLD.total IS DISTINCT FROM NEW.total THEN RAISE EXCEPTION 'Cannot change total'; END IF;
   IF OLD.shipping_method IS DISTINCT FROM NEW.shipping_method THEN RAISE EXCEPTION 'Cannot change shipping_method'; END IF;
   IF OLD.shipping_address IS DISTINCT FROM NEW.shipping_address THEN RAISE EXCEPTION 'Cannot change shipping_address'; END IF;
-  IF OLD.payment_intent_id IS DISTINCT FROM NEW.payment_intent_id THEN RAISE EXCEPTION 'Cannot change payment_intent_id'; END IF;
+
+  -- Block payment_intent_id changes after initial assignment
+  IF OLD.payment_intent_id IS DISTINCT FROM NEW.payment_intent_id THEN
+    IF OLD.payment_intent_id IS NOT NULL THEN
+      RAISE EXCEPTION 'Cannot change payment_intent_id after assignment';
+    END IF;
+  END IF;
+
+  -- Block timestamp manipulation — only set by trigger during status transitions
+  IF OLD.created_at IS DISTINCT FROM NEW.created_at THEN RAISE EXCEPTION 'Cannot change created_at'; END IF;
+  IF OLD.confirmed_at IS DISTINCT FROM NEW.confirmed_at AND NEW.status = OLD.status THEN
+    RAISE EXCEPTION 'Cannot modify confirmed_at directly';
+  END IF;
+  IF OLD.shipped_at IS DISTINCT FROM NEW.shipped_at AND NEW.status = OLD.status THEN
+    RAISE EXCEPTION 'Cannot modify shipped_at directly';
+  END IF;
+  IF OLD.delivered_at IS DISTINCT FROM NEW.delivered_at AND NEW.status = OLD.status THEN
+    RAISE EXCEPTION 'Cannot modify delivered_at directly';
+  END IF;
+  IF OLD.completed_at IS DISTINCT FROM NEW.completed_at AND NEW.status = OLD.status THEN
+    RAISE EXCEPTION 'Cannot modify completed_at directly';
+  END IF;
+  IF OLD.payment_processing_started_at IS DISTINCT FROM NEW.payment_processing_started_at THEN
+    IF OLD.payment_processing_started_at IS NOT NULL THEN
+      RAISE EXCEPTION 'Cannot modify payment_processing_started_at after assignment';
+    END IF;
+  END IF;
+
+  -- Block tracking_number outside of PREPARING→SHIPPED transition
+  IF OLD.tracking_number IS DISTINCT FROM NEW.tracking_number THEN
+    IF NOT (OLD.status = 'PREPARING' AND NEW.status = 'SHIPPED') THEN
+      RAISE EXCEPTION 'tracking_number can only be set during PREPARING→SHIPPED transition';
+    END IF;
+  END IF;
 
   IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
     allowed := CASE
-      -- Payment flow: buyer initiates PENDING→PAYMENT_PROCESSING
+      -- Payment flow: service_role (checkout) sets PENDING→PAYMENT_PROCESSING
       WHEN OLD.status = 'PENDING' AND NEW.status = 'PAYMENT_PROCESSING'
-        AND auth.uid() = OLD.buyer_id THEN true
+        AND auth.uid() IS NULL THEN true
 
       -- Payment confirmation: ONLY via service_role (Stripe webhook)
-      -- auth.uid() IS NULL when called from service_role
       WHEN OLD.status = 'PAYMENT_PROCESSING' AND NEW.status = 'PAID'
         AND auth.uid() IS NULL THEN true
 
@@ -793,7 +948,7 @@ BEGIN
       WHEN OLD.status = 'DELIVERED' AND NEW.status = 'COMPLETED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
 
-      -- Cancellation (before shipped, before payment)
+      -- Cancellation (before shipped, before payment): buyer or seller
       WHEN OLD.status IN ('PENDING','PAYMENT_PROCESSING')
         AND NEW.status = 'CANCELLED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
@@ -808,7 +963,7 @@ BEGIN
         AND NEW.status = 'REFUNDED'
         AND auth.uid() IS NULL THEN true
 
-      -- Dispute (any time before completed/cancelled)
+      -- Dispute (any time before completed/cancelled/refunded)
       WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','REFUNDED','DISPUTED')
         AND NEW.status = 'DISPUTED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
@@ -817,10 +972,10 @@ BEGIN
     END;
 
     IF NOT allowed THEN
-      RAISE EXCEPTION 'Invalid order transition: % -> %', OLD.status, NEW.status;
+      RAISE EXCEPTION 'Invalid order transition: % -> % (actor: %)', OLD.status, NEW.status, auth.uid();
     END IF;
 
-    -- Set timestamps
+    -- Set timestamps automatically on status transitions (never by client)
     IF NEW.status = 'PAID' AND OLD.status IS DISTINCT FROM 'PAID' THEN NEW.confirmed_at := now();
     ELSIF NEW.status = 'SHIPPED' AND OLD.status IS DISTINCT FROM 'SHIPPED' THEN NEW.shipped_at := now();
     ELSIF NEW.status = 'DELIVERED' AND OLD.status IS DISTINCT FROM 'DELIVERED' THEN NEW.delivered_at := now();
@@ -1131,8 +1286,9 @@ DROP POLICY IF EXISTS "orders_select_participant" ON orders;
 CREATE POLICY "orders_select_participant" ON orders FOR SELECT USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
 -- NO INSERT POLICY: orders created via create_checkout_order() RPC only
 -- Server-side calculates price, shipping, commission — client never sends these
-DROP POLICY IF EXISTS "orders_update_participant" ON orders;
-CREATE POLICY "orders_update_participant" ON orders FOR UPDATE USING (auth.uid() = buyer_id OR auth.uid() = seller_id);
+-- NO UPDATE POLICY: all status changes via RPCs only (mark_order_preparing,
+-- mark_order_shipped, confirm_order_delivery, complete_order, etc.)
+-- Trigger protects: immutable fields, timestamp manipulation, tracking_number
 
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "order_items_select_participant" ON order_items;
@@ -1832,3 +1988,19 @@ REVOKE ALL ON FUNCTION release_product_reservations_by_payment_intent(TEXT) FROM
 -- cleanup_stale_payment_processing: service_role/cron only
 REVOKE ALL ON FUNCTION cleanup_stale_payment_processing() FROM PUBLIC;
 -- No GRANT to authenticated: only service_role or pg_cron can call this
+
+-- mark_order_preparing: authenticated seller only
+REVOKE ALL ON FUNCTION mark_order_preparing(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION mark_order_preparing(UUID) TO authenticated;
+
+-- mark_order_shipped: authenticated seller only
+REVOKE ALL ON FUNCTION mark_order_shipped(UUID, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION mark_order_shipped(UUID, TEXT) TO authenticated;
+
+-- confirm_order_delivery: authenticated buyer only
+REVOKE ALL ON FUNCTION confirm_order_delivery(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION confirm_order_delivery(UUID) TO authenticated;
+
+-- complete_order: authenticated participant only
+REVOKE ALL ON FUNCTION complete_order(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION complete_order(UUID) TO authenticated;
