@@ -427,6 +427,7 @@ DECLARE
   v_order RECORD;
   v_product_ids UUID[];
   v_expected_count INTEGER;
+  v_locked_count INTEGER := 0;
   v_product RECORD;
 BEGIN
   -- 1. Lock order
@@ -455,6 +456,8 @@ BEGIN
   -- This ensures no concurrent release/sale can slip in between
   FOR v_product IN SELECT * FROM products WHERE id = ANY(v_product_ids) FOR UPDATE
   LOOP
+    v_locked_count := v_locked_count + 1;
+
     IF v_product.status <> 'RESERVED' THEN
       RAISE EXCEPTION 'Product % is % (expected RESERVED)', v_product.id, v_product.status;
     END IF;
@@ -466,7 +469,13 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- 4. All validations passed — now mutate atomically
+  -- 4. Verify ALL expected products were found and locked
+  -- Catches: missing FK row, duplicates in order_items, orphans
+  IF v_locked_count <> v_expected_count THEN
+    RAISE EXCEPTION 'Order %: expected % products, found/locked %. Check order_items integrity.', p_order_id, v_expected_count, v_locked_count;
+  END IF;
+
+  -- 5. All validations passed — now mutate atomically
   UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = p_order_id;
 
   UPDATE products
@@ -874,9 +883,11 @@ CREATE TABLE IF NOT EXISTS order_items (
   order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
   price NUMERIC(10,2) NOT NULL CHECK (price >= 0),
-  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  UNIQUE(order_id, product_id)
 );
 CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+-- UNIQUE(product_id): a product can only be sold once across ALL orders
 CREATE UNIQUE INDEX IF NOT EXISTS idx_order_items_product ON order_items(product_id);
 
 -- Order state machine: validate transitions + block immutable fields
