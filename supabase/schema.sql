@@ -253,21 +253,23 @@ DECLARE
   v_product RECORD;
   v_order_id UUID;
   v_order RECORD;
+  v_product_after_lock RECORD;
 BEGIN
-  -- Find expired reservations
+  -- Find expired reservations (snapshot, no lock yet)
   FOR v_product IN
-    SELECT p.id, p.reserved_by
+    SELECT p.id, p.reserved_by, p.reserved_until
     FROM products p
     WHERE p.status = 'RESERVED'
       AND p.reserved_until <= now()
       AND (p_product_ids IS NULL OR p.id = ANY(p_product_ids))
   LOOP
-    -- Check if this product is tied to any order
+    -- UNIQUE(order_items.product_id) guarantees at most one order per product
     SELECT oi.order_id INTO v_order_id
     FROM order_items oi
     WHERE oi.product_id = v_product.id
     LIMIT 1;
 
+    -- LOCKING ORDER: orders BEFORE products (global convention for deadlock prevention)
     IF v_order_id IS NOT NULL THEN
       -- Lock the order and re-read status — this serializes with checkout
       SELECT * INTO v_order FROM orders WHERE id = v_order_id FOR UPDATE;
@@ -286,15 +288,33 @@ BEGIN
       -- For other statuses (PAID, CANCELLED, etc.) — release is safe
     END IF;
 
-    -- Release the product
+    -- NOW lock the product with FOR UPDATE and re-read current state
+    SELECT * INTO v_product_after_lock
+    FROM products
+    WHERE id = v_product.id
+    FOR UPDATE;
+
+    -- Re-check after lock: another flow may have renewed/modified the reservation
+    IF v_product_after_lock.status <> 'RESERVED'
+       OR v_product_after_lock.reserved_until > now()
+       OR v_product_after_lock.reserved_by <> v_product.reserved_by
+    THEN
+      -- Reservation was renewed or changed — DO NOT release
+      CONTINUE;
+    END IF;
+
+    -- Release the product (defensive: re-check all invariants in WHERE)
     UPDATE products
     SET status = 'ACTIVE', reserved_by = NULL, reserved_until = NULL
-    WHERE id = v_product.id AND status = 'RESERVED';
+    WHERE id = v_product_after_lock.id
+      AND status = 'RESERVED'
+      AND reserved_by = v_product.reserved_by
+      AND reserved_until <= now();
 
     -- Expire the accepted offer for this buyer
     UPDATE offers
     SET status = 'expired'
-    WHERE product_id = v_product.id
+    WHERE product_id = v_product_after_lock.id
       AND buyer_id = v_product.reserved_by
       AND status = 'accepted';
 
