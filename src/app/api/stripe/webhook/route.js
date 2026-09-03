@@ -102,10 +102,14 @@ export async function POST(req) {
       console.log(`[Webhook] ${event.type} — handled`);
       break;
 
-    case "charge.refunded": {
-      const charge = event.data.object;
-      const piId = charge.payment_intent;
-      console.log(`[Webhook] Charge refunded: ${charge.id} (PI: ${piId})`);
+    case "refund.created":
+    case "refund.updated": {
+      const refund = event.data.object;
+      console.log(`[Webhook] Refund ${event.type}: ${refund.id} (amount=${refund.amount}, status=${refund.status})`);
+
+      // Individual Refund object: refund.id, refund.amount, refund.status, refund.payment_intent
+      const piId = refund.payment_intent;
+      const refundId = refund.id;
 
       // Find order by payment_intent_id
       const { data: order, error: orderError } = await supabase
@@ -115,7 +119,6 @@ export async function POST(req) {
         .single();
 
       // CRITICAL: DB failure (timeout, connection, Supabase down) → 500 → Stripe retry.
-      // Do NOT treat as "order not found" — the refund already succeeded in Stripe.
       if (orderError) {
         console.error(`[Webhook] DB error finding order for PI ${piId}:`, orderError.message);
         criticalError = orderError.message;
@@ -123,62 +126,85 @@ export async function POST(req) {
       }
 
       // Identity inconsistency: a marketplace PI should always have an order.
-      // Treat as critical so Stripe retries (avoid silent financial discrepancy).
       if (!order) {
         console.error(`[Webhook] No order found for PI ${piId} — identity inconsistency`);
         criticalError = `No order found for PI ${piId}`;
         break;
       }
 
-      // CRITICAL: Only mark REFUNDED if this is a FULL refund
-      // Compare integer cents (Stripe amount_refunded is in cents; order.total is in euros)
-      const expectedAmountCents = Math.round(Number(order.total) * 100);
-      const isFullRefund = charge.amount_refunded === expectedAmountCents;
-
-      // Persist refund evidence (full AND partial) — financial source of truth
-      // UPSERT: if /api/refund already created a PENDING record, update it to succeeded.
-      // Idempotent: repeated webhooks converge to the same succeeded state.
+      // Compute full-refund signal using cumulative refund amounts for this PI later;
+      // here we persist THIS individual refund accurately.
+      // UPSERT on stripe_refund_id: /api/refund created PENDING record, this confirms it.
       const { error: persistError } = await supabase.from("refunds").upsert(
         {
           order_id: order.id,
           payment_intent_id: piId,
-          charge_id: charge.id,
-          stripe_refund_id: event.data.object.refund || null,
-          amount_cents: charge.amount_refunded,
-          status: "succeeded",
-          is_full_refund: isFullRefund,
-          reason: "stripe_webhook",
+          stripe_refund_id: refundId,
+          amount_cents: refund.amount,
+          status: refund.status === "succeeded" ? "succeeded" : refund.status,
+          reason: refund.reason || null,
         },
         { onConflict: "stripe_refund_id" }
       );
 
       if (persistError) {
-        // Refund happened but we failed to persist evidence — critical
-        console.error(`[Webhook] Failed to persist refund evidence for order ${order.id}:`, persistError.message);
+        console.error(`[Webhook] Failed to persist refund ${refundId} for order ${order.id}:`, persistError.message);
         criticalError = persistError.message;
         break;
       }
 
-      if (!isFullRefund) {
-        console.log(`[Webhook] Partial refund: ${charge.amount_refunded} cents of ${expectedAmountCents} cents — persisted, order remains ${order.status}`);
-        // Partial refund: order stays in current state, evidence persisted for admin
-        break;
-      }
+      // Full-refund check: use the latest Charge's cumulative amount_refunded.
+      // Stripe is the financial authority for whether the order is fully refunded.
+      if (refund.status === "succeeded") {
+        try {
+          const expectedAmountCents = Math.round(Number(order.total) * 100);
 
-      // Only mark as REFUNDED if order is in a refundable state
-      if (["PAID", "PREPARING", "SHIPPED", "DELIVERED", "DISPUTED"].includes(order.status)) {
-        const { error: refundError } = await supabase.rpc("mark_order_refunded", {
-          p_order_id: order.id,
-        });
-        if (refundError) {
-          console.error(`[Webhook] Error marking order ${order.id} refunded:`, refundError.message);
-          criticalError = refundError.message;
-        } else {
-          console.log(`[Webhook] Order ${order.id} marked REFUNDED (full refund confirmed)`);
+          // Retrieve the Charge to get cumulative amount_refunded (all refunds summed).
+          let totalRefundedCents = null;
+          const chargeId = refund.charge;
+          if (chargeId) {
+            const ch = await stripe.charges.retrieve(chargeId);
+            totalRefundedCents = ch.amount_refunded;
+          }
+
+          if (totalRefundedCents === null) {
+            console.warn(`[Webhook] Could not determine cumulative refunded for refund ${refundId}`);
+            break;
+          }
+
+          const fullRefund = totalRefundedCents >= expectedAmountCents;
+
+          // Update is_full_refund on this individual refund record.
+          await supabase.from("refunds")
+            .update({ is_full_refund: fullRefund })
+            .eq("stripe_refund_id", refundId);
+
+          if (fullRefund && ["PAID", "PREPARING", "SHIPPED", "DELIVERED", "DISPUTED"].includes(order.status)) {
+            const { error: refundError } = await supabase.rpc("mark_order_refunded", {
+              p_order_id: order.id,
+            });
+            if (refundError) {
+              console.error(`[Webhook] Error marking order ${order.id} refunded:`, refundError.message);
+              criticalError = refundError.message;
+            } else {
+              console.log(`[Webhook] Order ${order.id} marked REFUNDED (full refund ${totalRefundedCents}/${expectedAmountCents} cents)`);
+            }
+          } else if (!fullRefund) {
+            console.log(`[Webhook] Partial refund ${refundId}: ${totalRefundedCents}/${expectedAmountCents} cents — order remains ${order.status}`);
+          }
+        } catch (piErr) {
+          console.error(`[Webhook] Error verifying full refund for PI ${piId}:`, piErr.message);
+          criticalError = piErr.message;
         }
-      } else {
-        console.log(`[Webhook] Order ${order.id} status=${order.status} — skipping refund marking`);
       }
+      break;
+    }
+
+    case "charge.refunded": {
+      // Legacy/fallback for charge-level refund events: refresh via refund.created/updated.
+      // We keep this case as a no-op log since per-refund events carry authoritative data.
+      const charge = event.data.object;
+      console.log(`[Webhook] charge.refunded received for charge ${charge.id} — handled via refund.* events`);
       break;
     }
 

@@ -1994,7 +1994,7 @@ CREATE TABLE IF NOT EXISTS refunds (
   charge_id TEXT,
   stripe_refund_id TEXT UNIQUE,
   amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
-  status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed','canceled')),
+  status TEXT NOT NULL CHECK (status IN ('pending','requires_action','succeeded','failed','canceled')),
   is_full_refund BOOLEAN DEFAULT false NOT NULL,
   reason TEXT,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
