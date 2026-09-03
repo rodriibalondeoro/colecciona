@@ -361,6 +361,7 @@ DECLARE
   v_order RECORD;
   v_product_after_lock RECORD;
   v_updated_count INTEGER;
+  v_should_cancel_order BOOLEAN;
 BEGIN
   -- Find expired reservations (snapshot, no lock yet)
   FOR v_product IN
@@ -370,6 +371,8 @@ BEGIN
       AND p.reserved_until <= now()
       AND (p_product_ids IS NULL OR p.id = ANY(p_product_ids))
   LOOP
+    v_should_cancel_order := FALSE;
+
     -- UNIQUE(order_items.product_id) guarantees at most one order per product
     SELECT oi.order_id INTO v_order_id
     FROM order_items oi
@@ -389,8 +392,8 @@ BEGIN
         -- Checkout in progress — DO NOT release
         CONTINUE;
       ELSIF v_order.status = 'PENDING' AND v_order.created_at <= now() - interval '30 minutes' THEN
-        -- Abandoned checkout — cancel order, then release
-        UPDATE orders SET status = 'CANCELLED' WHERE id = v_order_id;
+        -- Abandoned checkout — mark for cancellation (cancel AFTER product release)
+        v_should_cancel_order := TRUE;
       ELSIF v_order.status = 'CANCELLED' THEN
         -- Order already cancelled — release is safe
         NULL; -- fall through to release
@@ -398,7 +401,6 @@ BEGIN
         -- PAID, PREPARING, SHIPPED, DELIVERED, COMPLETED, REFUNDED, DISPUTED
         -- PRODUCT=RESERVED with these statuses is an INCONSISTENCY.
         -- DO NOT release — this would violate the master invariant.
-        -- The product must stay RESERVED until the inconsistency is investigated.
         RAISE EXCEPTION 'Product % has order % in status % — cannot release reserved product from non-cancellable order. Requires investigation.', v_product.id, v_order_id, v_order.status;
       END IF;
     END IF;
@@ -415,6 +417,7 @@ BEGIN
        OR v_product_after_lock.reserved_by <> v_product.reserved_by
     THEN
       -- Reservation was renewed or changed — DO NOT release
+      -- If we marked order for cancellation, undo it (reservation was renewed)
       CONTINUE;
     END IF;
 
@@ -438,6 +441,12 @@ BEGIN
     WHERE product_id = v_product_after_lock.id
       AND buyer_id = v_product.reserved_by
       AND status = 'accepted';
+
+    -- NOW cancel the order (AFTER product release, not before)
+    -- This guarantees: PRODUCT → ACTIVE before ORDER → CANCELLED
+    IF v_should_cancel_order THEN
+      UPDATE orders SET status = 'CANCELLED' WHERE id = v_order_id;
+    END IF;
 
     released_count := released_count + 1;
   END LOOP;
