@@ -276,11 +276,19 @@ export async function POST(req) {
         break;
       }
 
-      const { error } = await supabase.from("subscriptions").update({
+      // UPSERT (not UPDATE): converges even if the created webhook was lost
+      // and this subscription has no row yet. Prevents silent 0-row update → 200.
+      const { error } = await supabase.from("subscriptions").upsert({
+        user_id: userId,
+        stripe_subscription_id: sub.id,
+        stripe_customer_id: sub.customer,
         status: sub.status,
+        plan: "premium_monthly",
+        amount: (sub.items?.data?.[0]?.price?.unit_amount || 499) / 100,
+        current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
         current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
         cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
-      }).eq("stripe_subscription_id", sub.id);
+      }, { onConflict: "stripe_subscription_id" });
       if (error) {
         console.error("[Webhook] Subscription update error:", error.message);
         criticalError = error.message;
@@ -298,9 +306,18 @@ export async function POST(req) {
         break;
       }
 
-      const { error } = await supabase.from("subscriptions").update({
+      // UPSERT with canceled status: converges even if no row exists yet.
+      const { error } = await supabase.from("subscriptions").upsert({
+        user_id: userId,
+        stripe_subscription_id: sub.id,
+        stripe_customer_id: sub.customer,
         status: "canceled",
-      }).eq("stripe_subscription_id", sub.id);
+        plan: "premium_monthly",
+        amount: (sub.items?.data?.[0]?.price?.unit_amount || 499) / 100,
+        current_period_start: sub.current_period_start ? new Date(sub.current_period_start * 1000).toISOString() : null,
+        current_period_end: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null,
+        cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
+      }, { onConflict: "stripe_subscription_id" });
       if (error) {
         console.error("[Webhook] Subscription delete error:", error.message);
         criticalError = error.message;
