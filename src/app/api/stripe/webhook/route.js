@@ -136,16 +136,21 @@ export async function POST(req) {
       const isFullRefund = charge.amount_refunded === expectedAmountCents;
 
       // Persist refund evidence (full AND partial) — financial source of truth
-      const { error: persistError } = await supabase.from("refunds").insert({
-        order_id: order.id,
-        payment_intent_id: piId,
-        charge_id: charge.id,
-        stripe_refund_id: event.data.object.refund || null,
-        amount_cents: charge.amount_refunded,
-        status: "succeeded",
-        is_full_refund: isFullRefund,
-        reason: "stripe_webhook",
-      });
+      // UPSERT: if /api/refund already created a PENDING record, update it to succeeded.
+      // Idempotent: repeated webhooks converge to the same succeeded state.
+      const { error: persistError } = await supabase.from("refunds").upsert(
+        {
+          order_id: order.id,
+          payment_intent_id: piId,
+          charge_id: charge.id,
+          stripe_refund_id: event.data.object.refund || null,
+          amount_cents: charge.amount_refunded,
+          status: "succeeded",
+          is_full_refund: isFullRefund,
+          reason: "stripe_webhook",
+        },
+        { onConflict: "stripe_refund_id" }
+      );
 
       if (persistError) {
         // Refund happened but we failed to persist evidence — critical

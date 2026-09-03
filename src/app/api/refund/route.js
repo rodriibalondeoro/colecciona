@@ -83,13 +83,15 @@ export async function POST(req) {
     console.log(`[Refund] Created refund ${refund.id} for order ${orderId}`);
 
     // 6. Persist refund evidence (pending state — webhook updates to succeeded)
+    // is_full_refund set to false here: Stripe is the financial authority.
+    // The webhook will compute the true is_full_refund by comparing amount_refunded vs total.
     const { error: persistError } = await supabase.from("refunds").insert({
       order_id: orderId,
       payment_intent_id: order.payment_intent_id,
       stripe_refund_id: refund.id,
       amount_cents: refund.amount,
       status: refund.status || "pending",
-      is_full_refund: true, // seller-initiated refunds are full refunds
+      is_full_refund: false, // pending confirmation by Stripe webhook
       reason: reason || "requested_by_customer",
     });
 
