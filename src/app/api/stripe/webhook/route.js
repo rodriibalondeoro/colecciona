@@ -186,7 +186,9 @@ export async function POST(req) {
             break;
           }
 
-          if (fullRefund && ["PAID", "PREPARING", "SHIPPED", "DELIVERED", "DISPUTED"].includes(order.status)) {
+          if (fullRefund) {
+            // mark_order_refunded() requires REFUND_PENDING (set by /api/refund).
+            // If status is already REFUND_PENDING, it transitions to REFUNDED.
             const { error: refundError } = await supabase.rpc("mark_order_refunded", {
               p_order_id: order.id,
             });
@@ -196,7 +198,7 @@ export async function POST(req) {
             } else {
               console.log(`[Webhook] Order ${order.id} marked REFUNDED (full refund ${totalRefundedCents}/${expectedAmountCents} cents)`);
             }
-          } else if (!fullRefund) {
+          } else {
             console.log(`[Webhook] Partial refund ${refundId}: ${totalRefundedCents}/${expectedAmountCents} cents — order remains ${order.status}`);
           }
         } catch (piErr) {

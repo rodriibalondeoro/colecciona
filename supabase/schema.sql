@@ -1315,9 +1315,11 @@ BEGIN
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
 
-  -- Only PAID/PREPARING/SHIPPED/DELIVERED/DISPUTED orders can be refunded
-  IF v_order.status NOT IN ('PAID','PREPARING','SHIPPED','DELIVERED','DISPUTED') THEN
-    RAISE EXCEPTION 'Cannot refund order in status %', v_order.status;
+  -- Only REFUND_PENDING orders can be marked refunded
+  -- The webhook first transitions to REFUND_PENDING (initiation),
+  -- then confirms with this function → REFUNDED.
+  IF v_order.status <> 'REFUND_PENDING' THEN
+    RAISE EXCEPTION 'Cannot refund order in status % (expected REFUND_PENDING)', v_order.status;
   END IF;
 
   UPDATE orders SET status = 'REFUNDED' WHERE id = p_order_id;
@@ -1335,6 +1337,39 @@ BEGIN
     jsonb_build_object('order_id', p_order_id), false);
 
   RETURN jsonb_build_object('order_id', p_order_id, 'status', 'REFUNDED');
+END;
+$$;
+
+-- Begin refund: atomically transition order to REFUND_PENDING (interlock)
+-- Blocks DISPUTED→COMPLETED and other resolutions while refund is in flight.
+-- Called by /api/refund BEFORE Stripe Refund.create().
+CREATE OR REPLACE FUNCTION begin_refund(p_order_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can begin refund'; END IF;
+
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Only refundable states can begin a refund
+  IF v_order.status NOT IN ('PAID','PREPARING','SHIPPED','DELIVERED','DISPUTED') THEN
+    RAISE EXCEPTION 'Cannot begin refund for order in status %', v_order.status;
+  END IF;
+
+  UPDATE orders SET status = 'REFUND_PENDING' WHERE id = p_order_id;
+
+  RETURN jsonb_build_object(
+    'order_id', p_order_id,
+    'status', 'REFUND_PENDING',
+    'seller_id', v_order.seller_id,
+    'buyer_id', v_order.buyer_id,
+    'payment_intent_id', v_order.payment_intent_id,
+    'message', 'Refund initiated — awaiting Stripe confirmation'
+  );
 END;
 $$;
 
@@ -1515,7 +1550,7 @@ CREATE TABLE IF NOT EXISTS orders (
   shipping_method TEXT NOT NULL CHECK (shipping_method IN ('standard', 'tracked')),
   tracking_number TEXT,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
-    status IN ('PENDING','PAYMENT_PROCESSING','CAPTURING','PAID','PREPARING','SHIPPED','DELIVERED','COMPLETED','CANCELLED','REFUNDED','DISPUTED')
+    status IN ('PENDING','PAYMENT_PROCESSING','CAPTURING','PAID','PREPARING','SHIPPED','DELIVERED','COMPLETED','REFUND_PENDING','CANCELLED','REFUNDED','DISPUTED')
   ),
   shipping_address TEXT NOT NULL CHECK (length(shipping_address) <= 500),
   payment_intent_id TEXT,
@@ -1566,8 +1601,9 @@ BEGIN
   SELECT status INTO v_new_order_status
   FROM orders WHERE id = NEW.order_id;
 
-  -- If the new order is cancelled/refunded/disputed, no constraint needed
-  IF v_new_order_status IN ('CANCELLED', 'REFUNDED', 'DISPUTED') THEN
+  -- If the new order is cancelled/refunded, no constraint needed (product released)
+  -- DISPUTED is NOT included: a disputed order still holds the product until resolution.
+  IF v_new_order_status IN ('CANCELLED', 'REFUNDED') THEN
     RETURN NEW;
   END IF;
 
@@ -1579,7 +1615,7 @@ BEGIN
   JOIN orders o ON oi.order_id = o.id
   WHERE oi.product_id = NEW.product_id
     AND o.id <> NEW.order_id  -- Exclude the current order
-    AND o.status NOT IN ('CANCELLED', 'REFUNDED', 'DISPUTED');
+    AND o.status NOT IN ('CANCELLED', 'REFUNDED');
 
   IF v_active_count > 0 THEN
     RAISE EXCEPTION 'Product % already exists in an active order. Cannot sell to multiple buyers simultaneously.', NEW.product_id;
@@ -1728,24 +1764,26 @@ BEGIN
         AND NEW.status = 'CANCELLED'
         AND auth.uid() IS NULL THEN true
 
-      -- Refund: money captured then returned — Stripe refund confirmed
-      -- REFUNDED = money captured and subsequently devuelto
-      -- ONLY via service_role (Stripe refund / admin)
-      WHEN OLD.status IN ('PAID','PREPARING','SHIPPED','DELIVERED')
+      -- Refund initiated: money captured, refund requested — system moves to REFUND_PENDING
+      -- REFUND_PENDING is the interlock: blocks DISPUTED→COMPLETED and other resolutions
+      -- while the refund is in flight. Only Stripe confirmation resolves it.
+      WHEN OLD.status IN ('PAID','PREPARING','SHIPPED','DELIVERED','DISPUTED')
+        AND NEW.status = 'REFUND_PENDING'
+        AND auth.uid() IS NULL THEN true
+
+      -- Refund confirmed: Stripe refund succeeded — REFUND_PENDING → REFUNDED (system only)
+      WHEN OLD.status = 'REFUND_PENDING'
         AND NEW.status = 'REFUNDED'
         AND auth.uid() IS NULL THEN true
 
       -- Dispute: buyer or seller can open dispute (any time before terminal)
-      WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','REFUNDED','DISPUTED')
+      WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','REFUNDED','DISPUTED','REFUND_PENDING')
         AND NEW.status = 'DISPUTED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
 
-      -- Dispute resolution: REFUNDED — Stripe refund really confirmed (system only)
-      WHEN OLD.status = 'DISPUTED'
-        AND NEW.status = 'REFUNDED'
-        AND auth.uid() IS NULL THEN true
-
       -- Dispute resolution: COMPLETED — dispute resolved in favor of completing (system only)
+      -- ONLY valid while still DISPUTED. Once refund is initiated (REFUND_PENDING),
+      -- this transition is blocked — the order is no longer DISPUTED.
       WHEN OLD.status = 'DISPUTED'
         AND NEW.status = 'COMPLETED'
         AND auth.uid() IS NULL THEN true
@@ -2917,3 +2955,6 @@ REVOKE ALL ON FUNCTION clear_capture_in_progress(UUID) FROM PUBLIC;
 
 -- mark_order_refunded: NOT CLIENT-CALLABLE (Stripe webhook only)
 REVOKE ALL ON FUNCTION mark_order_refunded(UUID) FROM PUBLIC;
+
+-- begin_refund: NOT CLIENT-CALLABLE (service_role / refund route only)
+REVOKE ALL ON FUNCTION begin_refund(UUID) FROM PUBLIC;
