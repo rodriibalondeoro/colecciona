@@ -1331,6 +1331,7 @@ BEGIN
       WHERE product_id = v_product.id
         AND buyer_id = auth.uid()
         AND status = 'accepted'
+      ORDER BY created_at DESC  -- Deterministic: most recent if edge case
       LIMIT 1;
 
       IF FOUND AND v_offer_amount IS NOT NULL THEN
@@ -1379,6 +1380,7 @@ BEGIN
        WHERE o.product_id = p.id
          AND o.buyer_id = auth.uid()
          AND o.status = 'accepted'
+       ORDER BY o.created_at DESC  -- Deterministic: most recent if edge case
        LIMIT 1),
       p.price
     )
@@ -1767,6 +1769,14 @@ CREATE TABLE IF NOT EXISTS offers (
 );
 CREATE INDEX IF NOT EXISTS idx_offers_to_user ON offers(to_user_id);
 CREATE INDEX IF NOT EXISTS idx_offers_buyer ON offers(buyer_id);
+
+-- CRITICAL: At most 1 accepted offer per product (partial unique index)
+-- Prevents data inconsistency where multiple accepted offers exist for the same product.
+-- The accept_offer() function rejects all other pending offers atomically,
+-- but this index is the safety net against bugs or manual data corruption.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_offers_accepted_per_product
+  ON offers (product_id)
+  WHERE status = 'accepted';
 
 -- ============================================================================
 -- 11. REVIEWS — buyer+seller reviews per order
