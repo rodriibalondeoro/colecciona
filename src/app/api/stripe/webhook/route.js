@@ -235,7 +235,8 @@ export async function POST(req) {
     }
 
     // --- Premium Subscription Events ---
-    // Non-critical: log errors but don't block webhook response
+    // CRITICAL: Premium controls user privileges — DB failure must trigger retry.
+    // Any sync error sets criticalError → 500 → Stripe retry.
     case "customer.subscription.created": {
       const sub = event.data.object;
       const userId = sub.metadata?.user_id;
@@ -251,7 +252,10 @@ export async function POST(req) {
           current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
           current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
         }, { onConflict: "stripe_subscription_id" });
-        if (error) console.error("[Webhook] Subscription upsert error:", error.message);
+        if (error) {
+          console.error("[Webhook] Subscription upsert error:", error.message);
+          criticalError = error.message;
+        }
       }
       break;
     }
@@ -265,7 +269,10 @@ export async function POST(req) {
           current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
           cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
         }).eq("stripe_subscription_id", sub.id);
-        if (error) console.error("[Webhook] Subscription update error:", error.message);
+        if (error) {
+          console.error("[Webhook] Subscription update error:", error.message);
+          criticalError = error.message;
+        }
       }
       break;
     }
@@ -277,7 +284,10 @@ export async function POST(req) {
         const { error } = await supabase.from("subscriptions").update({
           status: "canceled",
         }).eq("stripe_subscription_id", sub.id);
-        if (error) console.error("[Webhook] Subscription delete error:", error.message);
+        if (error) {
+          console.error("[Webhook] Subscription delete error:", error.message);
+          criticalError = error.message;
+        }
       }
       break;
     }
