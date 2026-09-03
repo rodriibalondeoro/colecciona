@@ -632,9 +632,10 @@ END;
 $$;
 
 -- Link PaymentIntent to order and confirm payment (atomic, crash recovery)
--- PROTOCOL: FOR UPDATE on order → validate PENDING → link PI → confirm payment
--- This prevents races between cron recovery and webhook confirmation.
--- If another caller already linked/confirmed, FOR UPDATE waits then re-reads.
+-- PROTOCOL: FOR UPDATE on order → validate identity → link PI → confirm payment
+-- IDENTITY VALIDATION: If order already has a PI, it must match the incoming one.
+-- This prevents linking the wrong PI to an order (financial integrity).
+-- IDEMPOTENT: If already PAID or PAYMENT_PROCESSING with same PI, proceeds safely.
 CREATE OR REPLACE FUNCTION link_payment_intent_and_confirm(
   p_order_id UUID,
   p_payment_intent_id TEXT
@@ -649,31 +650,41 @@ BEGIN
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
 
-  -- Idempotent: already confirmed
+  -- IDENTITY VALIDATION: If order already has a PI, it must match
+  IF v_order.payment_intent_id IS NOT NULL AND v_order.payment_intent_id <> p_payment_intent_id THEN
+    RAISE EXCEPTION 'IDENTITY MISMATCH: Order % has PI %, cannot link PI %', p_order_id, v_order.payment_intent_id, p_payment_intent_id;
+  END IF;
+
+  -- Already confirmed (idempotent)
   IF v_order.status = 'PAID' THEN
     RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'message', 'Already confirmed');
   END IF;
 
-  -- Must be PENDING to link (payment_intent_id should be NULL)
-  IF v_order.status <> 'PENDING' THEN
-    RAISE EXCEPTION 'Order % is not PENDING (current: %)', p_order_id, v_order.status;
+  -- Already in PAYMENT_PROCESSING with same PI — just confirm (idempotent)
+  IF v_order.status = 'PAYMENT_PROCESSING' AND v_order.payment_intent_id = p_payment_intent_id THEN
+    RETURN confirm_payment(p_order_id);
   END IF;
 
-  -- Link PI to order
-  UPDATE orders
-  SET payment_intent_id = p_payment_intent_id,
-      status = 'PAYMENT_PROCESSING',
-      payment_processing_started_at = now()
-  WHERE id = p_order_id;
+  -- PENDING — link PI and confirm
+  IF v_order.status = 'PENDING' THEN
+    UPDATE orders
+    SET payment_intent_id = p_payment_intent_id,
+        status = 'PAYMENT_PROCESSING',
+        payment_processing_started_at = now()
+    WHERE id = p_order_id;
+    RETURN confirm_payment(p_order_id);
+  END IF;
 
-  -- Delegate to canonical confirm_payment
-  RETURN confirm_payment(p_order_id);
+  -- Any other state — error
+  RAISE EXCEPTION 'Order % cannot be confirmed (status: %)', p_order_id, v_order.status;
 END;
 $$;
 
 -- Link PaymentIntent to order and release reservations (atomic, crash recovery)
--- PROTOCOL: FOR UPDATE on order → validate PENDING → link PI → release products
+-- PROTOCOL: FOR UPDATE on order → validate identity → link PI → release products
+-- IDENTITY VALIDATION: If order already has a PI, it must match the incoming one.
 -- Used when PI is already failed/cancelled in Stripe during crash recovery.
+-- IDEMPOTENT: If already CANCELLED, returns success. If PAYMENT_PROCESSING with same PI, releases.
 CREATE OR REPLACE FUNCTION link_payment_intent_and_release(
   p_order_id UUID,
   p_payment_intent_id TEXT
@@ -688,31 +699,41 @@ BEGIN
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
 
-  -- Idempotent: already cancelled
+  -- IDENTITY VALIDATION: If order already has a PI, it must match
+  IF v_order.payment_intent_id IS NOT NULL AND v_order.payment_intent_id <> p_payment_intent_id THEN
+    RAISE EXCEPTION 'IDENTITY MISMATCH: Order % has PI %, cannot link PI %', p_order_id, v_order.payment_intent_id, p_payment_intent_id;
+  END IF;
+
+  -- Already cancelled (idempotent)
   IF v_order.status = 'CANCELLED' THEN
     RETURN jsonb_build_object('order_id', p_order_id, 'status', 'CANCELLED', 'message', 'Already cancelled');
   END IF;
 
-  -- Must be PENDING to link
-  IF v_order.status <> 'PENDING' THEN
-    RAISE EXCEPTION 'Order % is not PENDING (current: %)', p_order_id, v_order.status;
+  -- Already in PAYMENT_PROCESSING with same PI — just release (idempotent)
+  IF v_order.status = 'PAYMENT_PROCESSING' AND v_order.payment_intent_id = p_payment_intent_id THEN
+    RETURN release_product_reservations_by_payment_intent(p_payment_intent_id);
   END IF;
 
-  -- Link PI to order
-  UPDATE orders
-  SET payment_intent_id = p_payment_intent_id,
-      status = 'PAYMENT_PROCESSING',
-      payment_processing_started_at = now()
-  WHERE id = p_order_id;
+  -- PENDING — link PI and release
+  IF v_order.status = 'PENDING' THEN
+    UPDATE orders
+    SET payment_intent_id = p_payment_intent_id,
+        status = 'PAYMENT_PROCESSING',
+        payment_processing_started_at = now()
+    WHERE id = p_order_id;
+    RETURN release_product_reservations_by_payment_intent(p_payment_intent_id);
+  END IF;
 
-  -- Delegate to canonical release function
-  RETURN release_product_reservations_by_payment_intent(p_payment_intent_id);
+  -- Any other state — error
+  RAISE EXCEPTION 'Order % cannot release (status: %)', p_order_id, v_order.status;
 END;
 $$;
 
 -- Link PaymentIntent to order without state change (atomic, crash recovery)
--- PROTOCOL: FOR UPDATE on order → validate PENDING → link PI only
+-- PROTOCOL: FOR UPDATE on order → validate identity → link PI only
+-- IDENTITY VALIDATION: If order already has a PI, it must match the incoming one.
 -- Used when PI is still active (requires_action/processing) — webhook handles final state.
+-- IDEMPOTENT: If already linked with same PI, returns success.
 CREATE OR REPLACE FUNCTION link_payment_intent_to_order(
   p_order_id UUID,
   p_payment_intent_id TEXT
@@ -727,24 +748,37 @@ BEGIN
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
 
-  -- Idempotent: already linked
+  -- IDENTITY VALIDATION: If order already has a PI, it must match
+  IF v_order.payment_intent_id IS NOT NULL AND v_order.payment_intent_id <> p_payment_intent_id THEN
+    RAISE EXCEPTION 'IDENTITY MISMATCH: Order % has PI %, cannot link PI %', p_order_id, v_order.payment_intent_id, p_payment_intent_id;
+  END IF;
+
+  -- Already linked (idempotent)
   IF v_order.payment_intent_id = p_payment_intent_id THEN
-    RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'message', 'Already linked');
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'payment_intent_id', p_payment_intent_id, 'message', 'Already linked');
   END IF;
 
-  -- Must be PENDING to link
-  IF v_order.status <> 'PENDING' THEN
-    RAISE EXCEPTION 'Order % is not PENDING (current: %)', p_order_id, v_order.status;
+  -- PENDING — link PI only
+  IF v_order.status = 'PENDING' THEN
+    UPDATE orders
+    SET payment_intent_id = p_payment_intent_id,
+        status = 'PAYMENT_PROCESSING',
+        payment_processing_started_at = now()
+    WHERE id = p_order_id;
+    RETURN jsonb_build_object('order_id', p_order_id, 'payment_intent_id', p_payment_intent_id, 'status', 'PAYMENT_PROCESSING');
   END IF;
 
-  -- Link PI to order
-  UPDATE orders
-  SET payment_intent_id = p_payment_intent_id,
-      status = 'PAYMENT_PROCESSING',
-      payment_processing_started_at = now()
-  WHERE id = p_order_id;
+  -- Already in PAYMENT_PROCESSING without PI — link it
+  IF v_order.status = 'PAYMENT_PROCESSING' AND v_order.payment_intent_id IS NULL THEN
+    UPDATE orders
+    SET payment_intent_id = p_payment_intent_id,
+        payment_processing_started_at = now()
+    WHERE id = p_order_id;
+    RETURN jsonb_build_object('order_id', p_order_id, 'payment_intent_id', p_payment_intent_id, 'status', 'PAYMENT_PROCESSING');
+  END IF;
 
-  RETURN jsonb_build_object('order_id', p_order_id, 'payment_intent_id', p_payment_intent_id, 'status', 'PAYMENT_PROCESSING');
+  -- Any other state — error
+  RAISE EXCEPTION 'Order % cannot link PI (status: %)', p_order_id, v_order.status;
 END;
 $$;
 
