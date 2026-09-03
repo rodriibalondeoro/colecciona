@@ -146,9 +146,11 @@ export async function POST(req) {
   // CRITICAL: Return non-2xx on RPC failure so Stripe retries.
   // Stripe retries with exponential backoff (up to 3 days).
   // This ensures transient errors (race conditions, DB locks) are recovered.
+  // Do NOT expose internal details in response — log them instead.
   if (criticalError) {
+    console.error("[Webhook] Returning 500 to trigger Stripe retry:", criticalError);
     return NextResponse.json(
-      { error: "Processing failed, will retry", details: criticalError },
+      { error: "Processing failed" },
       { status: 500 }
     );
   }

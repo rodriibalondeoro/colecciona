@@ -36,6 +36,7 @@ export async function GET(req) {
     released: 0,
     kept: 0,
     force_cancelled: 0,
+    recovered: 0,
     errors: [],
   };
 
@@ -159,20 +160,105 @@ export async function GET(req) {
 
     // 3. RECOVERY: Find orphaned PENDING orders without payment_intent_id
     // Handles server crash between PI creation and order update.
-    // Strategy: These orders have a PI in Stripe but payment_intent_id = NULL in DB.
-    // We can't link them automatically (don't know the PI id), so we let them be cancelled
-    // by cleanup_abandoned_pending_orders after 30 min. The PI will expire in Stripe (7 days).
-    // This is acceptable: user retries checkout, products are released.
+    // The checkout route stores order_id in PI metadata, so we can search Stripe.
     const { data: orphanedOrders, error: orphanError } = await supabase
       .rpc("cleanup_orphaned_pending_orders");
 
     if (orphanError) {
       console.error("[Cron] Error fetching orphaned orders:", orphanError.message);
     } else if (orphanedOrders && orphanedOrders.length > 0) {
-      console.log(`[Cron] Found ${orphanedOrders.length} orphaned PENDING orders (no payment_intent_id)`);
-      // Log for monitoring — these will be cancelled by cleanup_abandoned_pending_orders
+      console.log(`[Cron] Found ${orphanedOrders.length} orphaned PENDING orders — attempting recovery`);
+
       for (const order of orphanedOrders) {
-        console.log(`[Cron] Orphaned order ${order.order_id} (${order.minutes_old?.toFixed(0)} min old) — will be cancelled if no PI linked`);
+        try {
+          // Search Stripe for PI with this order_id in metadata
+          const piList = await stripe.paymentIntents.list({
+            limit: 10,
+          });
+
+          // Find PI with matching order_id in metadata
+          const matchingPI = piList.data.find(
+            (pi) => pi.metadata?.orderId === order.order_id
+          );
+
+          if (!matchingPI) {
+            // No PI found in Stripe — this is a pure orphan, let it be cancelled
+            console.log(`[Cron] Orphaned order ${order.order_id} — no PI found in Stripe, will be cancelled`);
+            continue;
+          }
+
+          console.log(`[Cron] Recovery: Found PI ${matchingPI.id} for order ${order.order_id} (status=${matchingPI.status})`);
+
+          // Link PI to order and transition based on PI status
+          if (matchingPI.status === "succeeded") {
+            // PI succeeded — link and confirm payment
+            await supabase
+              .from("orders")
+              .update({
+                payment_intent_id: matchingPI.id,
+                status: "PAYMENT_PROCESSING",
+                payment_processing_started_at: new Date().toISOString(),
+              })
+              .eq("id", order.order_id);
+
+            const { error: confirmError } = await supabase.rpc("mark_products_sold_by_payment_intent", {
+              p_payment_intent_id: matchingPI.id,
+            });
+            if (confirmError) {
+              console.error(`[Cron] Recovery: Confirm failed for order ${order.order_id}:`, confirmError.message);
+              results.errors.push({ order_id: order.order_id, action: "recovery_confirm", error: confirmError.message });
+            } else {
+              console.log(`[Cron] Recovery: Order ${order.order_id} confirmed (PI succeeded)`);
+              results.confirmed++;
+            }
+
+          } else if (matchingPI.status === "canceled" || matchingPI.status === "requires_payment_method") {
+            // PI failed/cancelled — link and release reservations
+            await supabase
+              .from("orders")
+              .update({
+                payment_intent_id: matchingPI.id,
+                status: "PAYMENT_PROCESSING",
+                payment_processing_started_at: new Date().toISOString(),
+              })
+              .eq("id", order.order_id);
+
+            const { error: releaseError } = await supabase.rpc("release_product_reservations_by_payment_intent", {
+              p_payment_intent_id: matchingPI.id,
+            });
+            if (releaseError) {
+              console.error(`[Cron] Recovery: Release failed for order ${order.order_id}:`, releaseError.message);
+              results.errors.push({ order_id: order.order_id, action: "recovery_release", error: releaseError.message });
+            } else {
+              console.log(`[Cron] Recovery: Order ${order.order_id} released (PI ${matchingPI.status})`);
+              results.released++;
+            }
+
+          } else if (matchingPI.status === "requires_action" || matchingPI.status === "processing") {
+            // PI still active — link and transition to PAYMENT_PROCESSING
+            // Webhook will handle final state
+            await supabase
+              .from("orders")
+              .update({
+                payment_intent_id: matchingPI.id,
+                status: "PAYMENT_PROCESSING",
+                payment_processing_started_at: new Date().toISOString(),
+              })
+              .eq("id", order.order_id);
+
+            console.log(`[Cron] Recovery: Order ${order.order_id} linked to PI ${matchingPI.id} (status=${matchingPI.status})`);
+            results.recovered = (results.recovered || 0) + 1;
+
+          } else {
+            // Unknown PI status — log and skip
+            console.warn(`[Cron] Recovery: PI ${matchingPI.id} has unexpected status ${matchingPI.status} for order ${order.order_id}`);
+            results.errors.push({ order_id: order.order_id, action: "recovery_unknown_status", error: `PI status: ${matchingPI.status}` });
+          }
+
+        } catch (recoveryErr) {
+          console.error(`[Cron] Recovery error for order ${order.order_id}:`, recoveryErr.message);
+          results.errors.push({ order_id: order.order_id, action: "recovery", error: recoveryErr.message });
+        }
       }
     }
 

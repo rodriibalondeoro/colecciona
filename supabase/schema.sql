@@ -607,7 +607,8 @@ $$;
 -- Find orphaned PENDING orders without payment_intent_id (call via cron, e.g. every 5 min)
 -- RECOVERY: Handles server crash between PI creation and order update.
 -- These orders have a PaymentIntent in Stripe but payment_intent_id = NULL in DB.
--- Returns orders for the caller to check against Stripe and either link or cancel.
+-- The cron searches Stripe by metadata.order_id to find and link the PI.
+-- Returns orders for the caller to process.
 CREATE OR REPLACE FUNCTION cleanup_orphaned_pending_orders()
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
