@@ -7,6 +7,9 @@ const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function POST(req) {
+  let captureInitiated = false;
+  let orderId = null;
+
   try {
     const { user, error: authError } = await verifyAuth(req);
     if (authError) {
@@ -37,6 +40,9 @@ export async function POST(req) {
     // 4. Capture with idempotency key
     // 5. Confirm via RPC (idempotent — webhook/cron recover if this fails)
 
+    // CRITICAL RULE: clear_capture_in_progress() ONLY allowed BEFORE Stripe capture()
+    // AFTER Stripe capture(): financial state is unknown → leave CAPTURING → webhook/cron recover
+
     // 1. Lock order atomically (serializes concurrent capture attempts)
     const { data: lockResult, error: lockError } = await supabase
       .rpc("begin_capture_order", { p_payment_intent_id: paymentIntentId });
@@ -45,24 +51,27 @@ export async function POST(req) {
       return NextResponse.json({ error: "Cannot capture this order" }, { status: 400 });
     }
 
+    orderId = lockResult.order_id;
     const order = lockResult;
 
     // 2. Verify user is the SELLER (only seller captures when shipping)
+    // BEFORE Stripe capture → safe to clear on failure
     if (order.seller_id !== user.id) {
-      // Clear capture_in_progress on authorization failure
-      await supabase.rpc("clear_capture_in_progress", { p_order_id: order.order_id });
+      await supabase.rpc("clear_capture_in_progress", { p_order_id: orderId });
       return NextResponse.json({ error: "Only the seller can capture this payment" }, { status: 403 });
     }
 
     // 3. Verify PI status is requires_capture via Stripe
+    // BEFORE Stripe capture → safe to clear on failure
     const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
     if (pi.status !== "requires_capture") {
-      // Clear capture_in_progress if PI is not in expected state
-      await supabase.rpc("clear_capture_in_progress", { p_order_id: order.order_id });
+      await supabase.rpc("clear_capture_in_progress", { p_order_id: orderId });
       return NextResponse.json({ error: `PaymentIntent status is ${pi.status}, expected requires_capture` }, { status: 400 });
     }
 
     // 4. Capture with idempotency key (prevents duplicate capture on retry/timeout)
+    // AFTER this point: DO NOT clear capture_in_progress on error
+    captureInitiated = true;
     const paymentIntent = await stripe.paymentIntents.capture(
       paymentIntentId,
       {},
@@ -77,9 +86,7 @@ export async function POST(req) {
     if (rpcError) {
       console.error("[Capture] RPC error:", rpcError.message);
       // Stripe already captured — webhook/cron will recover.
-      // Do NOT expose internal error details to client.
-      // Note: capture_in_progress will remain TRUE, but webhook/cron will clear it
-      // when they confirm payment.
+      // Do NOT clear capture_in_progress → CAPTURING stays → webhook/cron confirm.
       return NextResponse.json(
         { error: "Payment captured but order confirmation is pending" },
         { status: 500 }
@@ -102,6 +109,20 @@ export async function POST(req) {
     });
   } catch (error) {
     console.error("Error en Stripe Capture API:", error);
+
+    // CRITICAL: Only clear if capture was NOT initiated
+    // If capture was initiated, financial state is unknown → leave CAPTURING → webhook/cron recover
+    if (!captureInitiated && orderId) {
+      // Error BEFORE Stripe capture → safe to reset to PAYMENT_PROCESSING
+      try {
+        const supabase = createClient(url, key);
+        await supabase.rpc("clear_capture_in_progress", { p_order_id: orderId });
+      } catch (clearErr) {
+        console.error("[Capture] Failed to clear capture lock:", clearErr.message);
+      }
+    }
+    // If captureInitiated = true: leave as CAPTURING → webhook/cron recover via Stripe query
+
     return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
   }
 }
