@@ -1697,10 +1697,20 @@ BEGIN
         AND NEW.status = 'REFUNDED'
         AND auth.uid() IS NULL THEN true
 
-      -- Dispute (any time before completed/cancelled/refunded)
+      -- Dispute: buyer or seller can open dispute (any time before terminal)
       WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','REFUNDED','DISPUTED')
         AND NEW.status = 'DISPUTED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
+
+      -- Dispute resolution: REFUNDED — Stripe refund really confirmed (system only)
+      WHEN OLD.status = 'DISPUTED'
+        AND NEW.status = 'REFUNDED'
+        AND auth.uid() IS NULL THEN true
+
+      -- Dispute resolution: COMPLETED — dispute resolved in favor of completing (system only)
+      WHEN OLD.status = 'DISPUTED'
+        AND NEW.status = 'COMPLETED'
+        AND auth.uid() IS NULL THEN true
 
       ELSE false
     END;
