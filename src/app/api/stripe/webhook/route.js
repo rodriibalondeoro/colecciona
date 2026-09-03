@@ -206,6 +206,21 @@ export async function POST(req) {
           criticalError = piErr.message;
         }
       }
+
+      // Refund failed/canceled: revert REFUND_PENDING → previous status
+      // Prevents the order from being stuck in REFUND_PENDING forever.
+      if (refund.status === "failed" || refund.status === "canceled") {
+        console.log(`[Webhook] Refund ${refundId} ${refund.status} — reverting order ${order.id} from REFUND_PENDING`);
+        const { error: revertError } = await supabase.rpc("resolve_refund_failed", {
+          p_order_id: order.id,
+        });
+        if (revertError) {
+          console.error(`[Webhook] Error reverting order ${order.id} after refund failure:`, revertError.message);
+          criticalError = revertError.message;
+        } else {
+          console.log(`[Webhook] Order ${order.id} reverted after refund ${refund.status}`);
+        }
+      }
       break;
     }
 

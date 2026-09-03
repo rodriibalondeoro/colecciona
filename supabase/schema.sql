@@ -1345,6 +1345,42 @@ BEGIN
 END;
 $$;
 
+-- Resolve refund failure: revert REFUND_PENDING → previous status
+-- Called by webhook when Stripe confirms refund failed/canceled.
+-- Prevents REFUND_PENDING from being stuck forever.
+CREATE OR REPLACE FUNCTION resolve_refund_failed(p_order_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+  v_previous_status TEXT;
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can resolve refund'; END IF;
+
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Idempotency: if already resolved (not REFUND_PENDING), return no-op
+  IF v_order.status <> 'REFUND_PENDING' THEN
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'message', 'Already resolved');
+  END IF;
+
+  -- Revert to previous status (from begin_refund), fallback to DISPUTED
+  v_previous_status := COALESCE(
+    NULLIF(v_order.refund_previous_status, ''),
+    'DISPUTED'
+  );
+
+  UPDATE orders
+  SET status = v_previous_status,
+      refund_previous_status = NULL
+  WHERE id = p_order_id;
+
+  RETURN jsonb_build_object('order_id', p_order_id, 'status', v_previous_status, 'message', 'Refund failed — reverted');
+END;
+$$;
+
 -- Begin refund: atomically transition order to REFUND_PENDING (interlock)
 -- Blocks DISPUTED→COMPLETED and other resolutions while refund is in flight.
 -- Called by /api/refund BEFORE Stripe Refund.create().
@@ -1365,11 +1401,16 @@ BEGIN
     RAISE EXCEPTION 'Cannot begin refund for order in status %', v_order.status;
   END IF;
 
-  UPDATE orders SET status = 'REFUND_PENDING' WHERE id = p_order_id;
+  -- Store previous status for refund-failure recovery
+  UPDATE orders
+  SET status = 'REFUND_PENDING',
+      refund_previous_status = v_order.status
+  WHERE id = p_order_id;
 
   RETURN jsonb_build_object(
     'order_id', p_order_id,
     'status', 'REFUND_PENDING',
+    'previous_status', v_order.status,
     'seller_id', v_order.seller_id,
     'buyer_id', v_order.buyer_id,
     'payment_intent_id', v_order.payment_intent_id,
@@ -1562,6 +1603,7 @@ CREATE TABLE IF NOT EXISTS orders (
   payment_processing_started_at TIMESTAMPTZ,
   capture_in_progress BOOLEAN DEFAULT FALSE NOT NULL,  -- End-to-end capture serialization
   capture_started_at TIMESTAMPTZ,  -- When capture_in_progress was set (for stale lock detection)
+  refund_previous_status TEXT,  -- Status before REFUND_PENDING (for refund failure recovery)
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
   confirmed_at TIMESTAMPTZ,
   shipped_at TIMESTAMPTZ,
@@ -1779,6 +1821,12 @@ BEGIN
       -- Refund confirmed: Stripe refund succeeded — REFUND_PENDING → REFUNDED (system only)
       WHEN OLD.status = 'REFUND_PENDING'
         AND NEW.status = 'REFUNDED'
+        AND auth.uid() IS NULL THEN true
+
+      -- Refund failed/canceled: revert to previous status (system only)
+      -- resolve_refund_failed() restores refund_previous_status
+      WHEN OLD.status = 'REFUND_PENDING'
+        AND NEW.status IN ('PAID','PREPARING','SHIPPED','DELIVERED','DISPUTED')
         AND auth.uid() IS NULL THEN true
 
       -- Dispute: buyer or seller can open dispute (any time before terminal)
@@ -2963,3 +3011,6 @@ REVOKE ALL ON FUNCTION mark_order_refunded(UUID) FROM PUBLIC;
 
 -- begin_refund: NOT CLIENT-CALLABLE (service_role / refund route only)
 REVOKE ALL ON FUNCTION begin_refund(UUID) FROM PUBLIC;
+
+-- resolve_refund_failed: NOT CLIENT-CALLABLE (Stripe webhook only)
+REVOKE ALL ON FUNCTION resolve_refund_failed(UUID) FROM PUBLIC;
