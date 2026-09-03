@@ -635,16 +635,18 @@ BEGIN
     -- Stale lock detected — reset and allow new capture
   END IF;
 
-  -- Set capture_in_progress = TRUE + capture_started_at = now() (persists across RPC calls)
+  -- Set CAPTURING status + capture lock (atomic, persists across RPC calls)
   UPDATE orders
-  SET capture_in_progress = TRUE, capture_started_at = now()
+  SET status = 'CAPTURING',
+      capture_in_progress = TRUE,
+      capture_started_at = now()
   WHERE id = v_order.id;
 
   RETURN jsonb_build_object(
     'order_id', v_order.id,
     'buyer_id', v_order.buyer_id,
     'seller_id', v_order.seller_id,
-    'status', v_order.status,
+    'status', 'CAPTURING',
     'capture_in_progress', TRUE,
     'message', 'Order locked for capture'
   );
@@ -1652,8 +1654,13 @@ BEGIN
       WHEN OLD.status = 'PENDING' AND NEW.status = 'PAYMENT_PROCESSING'
         AND auth.uid() IS NULL THEN true
 
-      -- Payment confirmation: ONLY via service_role (Stripe webhook)
-      WHEN OLD.status = 'PAYMENT_PROCESSING' AND NEW.status = 'PAID'
+      -- Capture flow: service_role (capture route) sets PAYMENT_PROCESSING→CAPTURING
+      WHEN OLD.status = 'PAYMENT_PROCESSING' AND NEW.status = 'CAPTURING'
+        AND auth.uid() IS NULL THEN true
+
+      -- Payment confirmation: ONLY via service_role (Stripe webhook/cron)
+      -- Accepts both PAYMENT_PROCESSING→PAID and CAPTURING→PAID
+      WHEN OLD.status IN ('PAYMENT_PROCESSING','CAPTURING') AND NEW.status = 'PAID'
         AND auth.uid() IS NULL THEN true
 
       -- Seller prepares
@@ -1678,8 +1685,8 @@ BEGIN
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
 
       -- Cancellation during/after payment: ONLY via service_role (admin/refund flow)
-      -- PAYMENT_PROCESSING: must cancel Stripe PI first, then cancel order
-      WHEN OLD.status IN ('PAYMENT_PROCESSING','PAID','PREPARING')
+      -- PAYMENT_PROCESSING/CAPTURING: must cancel Stripe PI first, then cancel order
+      WHEN OLD.status IN ('PAYMENT_PROCESSING','CAPTURING','PAID','PREPARING')
         AND NEW.status = 'CANCELLED'
         AND auth.uid() IS NULL THEN true
 
