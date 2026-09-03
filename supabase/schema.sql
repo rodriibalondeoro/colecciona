@@ -610,7 +610,7 @@ BEGIN
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can begin capture'; END IF;
 
   -- Lock order atomically (serializes concurrent captures)
-  SELECT id, buyer_id, seller_id, status, payment_intent_id, capture_in_progress, payment_processing_started_at
+  SELECT id, buyer_id, seller_id, status, payment_intent_id, capture_in_progress, capture_started_at
   INTO v_order
   FROM orders
   WHERE payment_intent_id = p_payment_intent_id
@@ -628,15 +628,17 @@ BEGIN
   -- End-to-end serialization: check capture_in_progress flag
   IF v_order.capture_in_progress THEN
     -- Stale lock protection: if capture_in_progress for >5 minutes, assume stuck and allow new capture
-    IF v_order.payment_processing_started_at IS NOT NULL
-       AND v_order.payment_processing_started_at > now() - v_capture_timeout THEN
+    IF v_order.capture_started_at IS NOT NULL
+       AND v_order.capture_started_at > now() - v_capture_timeout THEN
       RAISE EXCEPTION 'Capture already in progress for order %', v_order.id;
     END IF;
     -- Stale lock detected — reset and allow new capture
   END IF;
 
-  -- Set capture_in_progress = TRUE (persists across RPC calls)
-  UPDATE orders SET capture_in_progress = TRUE WHERE id = v_order.id;
+  -- Set capture_in_progress = TRUE + capture_started_at = now() (persists across RPC calls)
+  UPDATE orders
+  SET capture_in_progress = TRUE, capture_started_at = now()
+  WHERE id = v_order.id;
 
   RETURN jsonb_build_object(
     'order_id', v_order.id,
@@ -659,7 +661,7 @@ BEGIN
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can clear capture lock'; END IF;
 
   UPDATE orders
-  SET capture_in_progress = FALSE
+  SET capture_in_progress = FALSE, capture_started_at = NULL
   WHERE id = p_order_id
     AND capture_in_progress = TRUE;
 END;
@@ -1012,7 +1014,7 @@ BEGIN
   END IF;
 
   -- 5. All validations passed — now mutate atomically
-  UPDATE orders SET status = 'PAID', confirmed_at = now(), capture_in_progress = FALSE WHERE id = p_order_id;
+  UPDATE orders SET status = 'PAID', confirmed_at = now(), capture_in_progress = FALSE, capture_started_at = NULL WHERE id = p_order_id;
 
   UPDATE products
   SET status = 'SOLD', sold_at = now(), reserved_by = NULL, reserved_until = NULL
@@ -1457,6 +1459,7 @@ CREATE TABLE IF NOT EXISTS orders (
   payment_intent_id TEXT,
   payment_processing_started_at TIMESTAMPTZ,
   capture_in_progress BOOLEAN DEFAULT FALSE NOT NULL,  -- End-to-end capture serialization
+  capture_started_at TIMESTAMPTZ,  -- When capture_in_progress was set (for stale lock detection)
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
   confirmed_at TIMESTAMPTZ,
   shipped_at TIMESTAMPTZ,
@@ -1544,6 +1547,19 @@ BEGIN
     -- Can only change if status is PAYMENT_PROCESSING or CAPTURING
     IF NEW.status NOT IN ('PAYMENT_PROCESSING', 'CAPTURING') THEN
       RAISE EXCEPTION 'capture_in_progress can only be changed during capture flow';
+    END IF;
+  END IF;
+
+  -- capture_started_at: must be set atomically with capture_in_progress = TRUE
+  -- and cleared when capture_in_progress = FALSE
+  IF OLD.capture_started_at IS DISTINCT FROM NEW.capture_started_at THEN
+    -- If setting capture_started_at, capture_in_progress must be TRUE
+    IF NEW.capture_started_at IS NOT NULL AND NOT NEW.capture_in_progress THEN
+      RAISE EXCEPTION 'capture_started_at can only be set when capture_in_progress = TRUE';
+    END IF;
+    -- If clearing capture_started_at, capture_in_progress must be FALSE
+    IF NEW.capture_started_at IS NULL AND NEW.capture_in_progress THEN
+      RAISE EXCEPTION 'capture_started_at cannot be cleared while capture_in_progress = TRUE';
     END IF;
   END IF;
 
