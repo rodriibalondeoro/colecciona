@@ -244,8 +244,15 @@ export async function GET(req) {
               results.released++;
             }
 
-          } else if (matchingPI.status === "requires_action" || matchingPI.status === "processing") {
-            // PI still active — link atomically, webhook will handle final state
+          } else if (
+            matchingPI.status === "requires_action" ||
+            matchingPI.status === "processing" ||
+            matchingPI.status === "requires_capture" ||
+            matchingPI.status === "requires_confirmation"
+          ) {
+            // PI still active — link atomically, webhook/capture will handle final state
+            // requires_capture: funds authorized, awaiting seller capture (capture_method: manual)
+            // requires_confirmation: PI created but not yet confirmed by frontend
             const { error: linkError } = await supabase.rpc("link_payment_intent_to_order", {
               p_order_id: order.order_id,
               p_payment_intent_id: matchingPI.id,
