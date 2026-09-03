@@ -699,13 +699,14 @@ BEGIN
   SELECT * INTO v_order FROM orders WHERE payment_intent_id = p_payment_intent_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order with payment_intent % not found', p_payment_intent_id; END IF;
 
-  -- Only release from PAYMENT_PROCESSING or PENDING orders
+  -- Only release from PAYMENT_PROCESSING, CAPTURING, or PENDING orders
   -- PAYMENT_PROCESSING: normal flow — PI failed/cancelled, release products
+  -- CAPTURING: capture failed/cancelled — Stripe confirmed terminal, release products
   -- PENDING: crash recovery — PI was created in Stripe and linked to order,
   --   but the order status update failed (server crash after PI creation).
   --   The payment_intent_id lookup ensures identity: only the correct order is found.
   --   Other statuses (PAID, CANCELLED, etc.) → no-op (already processed or impossible).
-  IF v_order.status NOT IN ('PAYMENT_PROCESSING','PENDING') THEN
+  IF v_order.status NOT IN ('PAYMENT_PROCESSING','CAPTURING','PENDING') THEN
     RETURN jsonb_build_object('status', v_order.status, 'message', 'No reservations to release');
   END IF;
 
@@ -1682,9 +1683,10 @@ BEGIN
         AND NEW.status = 'CANCELLED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
 
-      -- Cancellation during/after payment: ONLY via service_role (admin/refund flow)
-      -- PAYMENT_PROCESSING/CAPTURING: must cancel Stripe PI first, then cancel order
-      WHEN OLD.status IN ('PAYMENT_PROCESSING','CAPTURING','PAID','PREPARING')
+      -- Cancellation after Stripe confirms terminal failure: PAID/PREPARING only (service_role)
+      -- PAYMENT_PROCESSING/CAPTURING: must go through release_product_reservations_by_payment_intent()
+      -- which queries Stripe FIRST to confirm PI is terminal (canceled/failed)
+      WHEN OLD.status IN ('PAID','PREPARING')
         AND NEW.status = 'CANCELLED'
         AND auth.uid() IS NULL THEN true
 
