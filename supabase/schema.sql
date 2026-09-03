@@ -391,8 +391,16 @@ BEGIN
       ELSIF v_order.status = 'PENDING' AND v_order.created_at <= now() - interval '30 minutes' THEN
         -- Abandoned checkout — cancel order, then release
         UPDATE orders SET status = 'CANCELLED' WHERE id = v_order_id;
+      ELSIF v_order.status = 'CANCELLED' THEN
+        -- Order already cancelled — release is safe
+        NULL; -- fall through to release
+      ELSE
+        -- PAID, PREPARING, SHIPPED, DELIVERED, COMPLETED, REFUNDED, DISPUTED
+        -- PRODUCT=RESERVED with these statuses is an INCONSISTENCY.
+        -- DO NOT release — this would violate the master invariant.
+        -- The product must stay RESERVED until the inconsistency is investigated.
+        RAISE EXCEPTION 'Product % has order % in status % — cannot release reserved product from non-cancellable order. Requires investigation.', v_product.id, v_order_id, v_order.status;
       END IF;
-      -- For other statuses (PAID, CANCELLED, etc.) — release is safe
     END IF;
 
     -- NOW lock the product with FOR UPDATE and re-read current state
@@ -599,6 +607,11 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'Order with payment_intent % not found', p_payment_intent_id; END IF;
 
   -- Only release from PAYMENT_PROCESSING or PENDING orders
+  -- PAYMENT_PROCESSING: normal flow — PI failed/cancelled, release products
+  -- PENDING: crash recovery — PI was created in Stripe and linked to order,
+  --   but the order status update failed (server crash after PI creation).
+  --   The payment_intent_id lookup ensures identity: only the correct order is found.
+  --   Other statuses (PAID, CANCELLED, etc.) → no-op (already processed or impossible).
   IF v_order.status NOT IN ('PAYMENT_PROCESSING','PENDING') THEN
     RETURN jsonb_build_object('status', v_order.status, 'message', 'No reservations to release');
   END IF;
