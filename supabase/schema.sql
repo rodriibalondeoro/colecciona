@@ -605,12 +605,11 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
   v_order RECORD;
-  v_capture_timeout INTERVAL := INTERVAL '5 minutes';
 BEGIN
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can begin capture'; END IF;
 
   -- Lock order atomically (serializes concurrent captures)
-  SELECT id, buyer_id, seller_id, status, payment_intent_id, capture_in_progress, capture_started_at
+  SELECT id, buyer_id, seller_id, status, payment_intent_id
   INTO v_order
   FROM orders
   WHERE payment_intent_id = p_payment_intent_id
@@ -621,18 +620,9 @@ BEGIN
   END IF;
 
   -- Only PAYMENT_PROCESSING orders can be captured
+  -- CAPTURING orders are recovered by cron (Stripe authority)
   IF v_order.status <> 'PAYMENT_PROCESSING' THEN
     RAISE EXCEPTION 'Cannot capture order in status %', v_order.status;
-  END IF;
-
-  -- End-to-end serialization: check capture_in_progress flag
-  IF v_order.capture_in_progress THEN
-    -- Stale lock protection: if capture_in_progress for >5 minutes, assume stuck and allow new capture
-    IF v_order.capture_started_at IS NOT NULL
-       AND v_order.capture_started_at > now() - v_capture_timeout THEN
-      RAISE EXCEPTION 'Capture already in progress for order %', v_order.id;
-    END IF;
-    -- Stale lock detected — reset and allow new capture
   END IF;
 
   -- Set CAPTURING status + capture lock (atomic, persists across RPC calls)
