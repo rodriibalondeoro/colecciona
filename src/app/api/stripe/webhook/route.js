@@ -102,6 +102,41 @@ export async function POST(req) {
       console.log(`[Webhook] ${event.type} — handled`);
       break;
 
+    case "charge.refunded": {
+      const charge = event.data.object;
+      const piId = charge.payment_intent;
+      console.log(`[Webhook] Charge refunded: ${charge.id} (PI: ${piId})`);
+
+      // Find order by payment_intent_id
+      const { data: order, error: orderError } = await supabase
+        .from("orders")
+        .select("id, status")
+        .eq("payment_intent_id", piId)
+        .single();
+
+      if (orderError || !order) {
+        console.error(`[Webhook] No order found for PI ${piId}`);
+        break;
+      }
+
+      // Only mark as REFUNDED if order is in a refundable state
+      // idempotent: if already REFUNDED, mark_order_refunded will handle
+      if (["PAID", "PREPARING", "SHIPPED", "DELIVERED", "DISPUTED"].includes(order.status)) {
+        const { error: refundError } = await supabase.rpc("mark_order_refunded", {
+          p_order_id: order.id,
+        });
+        if (refundError) {
+          console.error(`[Webhook] Error marking order ${order.id} refunded:`, refundError.message);
+          criticalError = refundError.message;
+        } else {
+          console.log(`[Webhook] Order ${order.id} marked REFUNDED`);
+        }
+      } else {
+        console.log(`[Webhook] Order ${order.id} status=${order.status} — skipping refund marking`);
+      }
+      break;
+    }
+
     // --- Premium Subscription Events ---
     // Non-critical: log errors but don't block webhook response
     case "customer.subscription.created": {

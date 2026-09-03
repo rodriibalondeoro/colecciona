@@ -1300,6 +1300,44 @@ BEGIN
 END;
 $$;
 
+-- Mark order as refunded: ONLY called after Stripe confirms refund succeeded
+-- Called by webhook handler for charge.refunded event
+-- This is the ONLY way to transition to REFUNDED status
+CREATE OR REPLACE FUNCTION mark_order_refunded(p_order_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can mark order refunded'; END IF;
+
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Only PAID/PREPARING/SHIPPED/DELIVERED/DISPUTED orders can be refunded
+  IF v_order.status NOT IN ('PAID','PREPARING','SHIPPED','DELIVERED','DISPUTED') THEN
+    RAISE EXCEPTION 'Cannot refund order in status %', v_order.status;
+  END IF;
+
+  UPDATE orders SET status = 'REFUNDED' WHERE id = p_order_id;
+
+  -- Notify buyer
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (v_order.buyer_id, 'order', 'Reembolso procesado',
+    'Tu pedido ha sido reembolsado exitosamente',
+    jsonb_build_object('order_id', p_order_id), false);
+
+  -- Notify seller
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (v_order.seller_id, 'order', 'Reembolso procesado',
+    'El pedido ha sido reembolsado',
+    jsonb_build_object('order_id', p_order_id), false);
+
+  RETURN jsonb_build_object('order_id', p_order_id, 'status', 'REFUNDED');
+END;
+$$;
+
 -- Atomic checkout: validate prices server-side, create order + order_items
 -- Create checkout order: PRODUCT locks → INSERT new order + items
 -- NOTE: This locks products BEFORE creating the order. This does NOT violate the
@@ -2845,3 +2883,6 @@ REVOKE ALL ON FUNCTION begin_capture_order(TEXT) FROM PUBLIC;
 
 -- clear_capture_in_progress: NOT CLIENT-CALLABLE (service_role/cron only)
 REVOKE ALL ON FUNCTION clear_capture_in_progress(UUID) FROM PUBLIC;
+
+-- mark_order_refunded: NOT CLIENT-CALLABLE (Stripe webhook only)
+REVOKE ALL ON FUNCTION mark_order_refunded(UUID) FROM PUBLIC;
