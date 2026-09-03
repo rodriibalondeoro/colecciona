@@ -595,6 +595,45 @@ BEGIN
 END;
 $$;
 
+-- Begin capture: atomically lock order and verify it's capturable
+-- Returns order details if successful, raises exception if not.
+-- Used by capture-payment route to serialize concurrent capture attempts.
+-- The FOR UPDATE ensures only one capture can proceed at a time.
+CREATE OR REPLACE FUNCTION begin_capture_order(p_payment_intent_id TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can begin capture'; END IF;
+
+  -- Lock order atomically (serializes concurrent captures)
+  SELECT id, buyer_id, seller_id, status, payment_intent_id
+  INTO v_order
+  FROM orders
+  WHERE payment_intent_id = p_payment_intent_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order with payment_intent % not found', p_payment_intent_id;
+  END IF;
+
+  -- Only PAYMENT_PROCESSING orders can be captured
+  IF v_order.status <> 'PAYMENT_PROCESSING' THEN
+    RAISE EXCEPTION 'Cannot capture order in status %', v_order.status;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'order_id', v_order.id,
+    'buyer_id', v_order.buyer_id,
+    'seller_id', v_order.seller_id,
+    'status', v_order.status,
+    'message', 'Order locked for capture'
+  );
+END;
+$$;
+
 -- Release product reservations by payment_intent_id (called on payment failure)
 -- IDEMPOTENT: If order not in PAYMENT_PROCESSING/PENDING, returns "No reservations to release".
 -- Validates: releases only products reserved by buyer, verifies released_count = expected_count.
