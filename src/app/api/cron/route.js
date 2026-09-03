@@ -172,36 +172,52 @@ export async function GET(req) {
       for (const order of orphanedOrders) {
         try {
           // Search Stripe for PI with this order_id in metadata
-          const piList = await stripe.paymentIntents.list({
-            limit: 10,
-          });
+          // Use time-based filter: only search PIs created in last 2 hours (crash window)
+          const createdAfter = Math.floor((Date.now() - 2 * 60 * 60 * 1000) / 1000);
+          let matchingPI = null;
+          let hasMore = true;
+          let startingAfter = null;
 
-          // Find PI with matching order_id in metadata
-          const matchingPI = piList.data.find(
-            (pi) => pi.metadata?.orderId === order.order_id
-          );
+          // Paginate through Stripe results until we find a match or exhaust all pages
+          while (hasMore && !matchingPI) {
+            const listParams = {
+              limit: 100,
+              created: { gte: createdAfter },
+            };
+            if (startingAfter) {
+              listParams.starting_after = startingAfter;
+            }
+
+            const piList = await stripe.paymentIntents.list(listParams);
+
+            // Search this page for matching orderId
+            for (const pi of piList.data) {
+              if (pi.metadata?.orderId === order.order_id) {
+                matchingPI = pi;
+                break;
+              }
+            }
+
+            hasMore = piList.has_more;
+            if (hasMore && piList.data.length > 0) {
+              startingAfter = piList.data[piList.data.length - 1].id;
+            }
+          }
 
           if (!matchingPI) {
-            // No PI found in Stripe — this is a pure orphan, let it be cancelled
+            // No PI found in Stripe — pure orphan, let it be cancelled
             console.log(`[Cron] Orphaned order ${order.order_id} — no PI found in Stripe, will be cancelled`);
             continue;
           }
 
           console.log(`[Cron] Recovery: Found PI ${matchingPI.id} for order ${order.order_id} (status=${matchingPI.status})`);
 
-          // Link PI to order and transition based on PI status
+          // ATOMIC RECONCILIATION: Use SQL function with FOR UPDATE to prevent races
+          // This ensures only one caller can link the PI to the order
           if (matchingPI.status === "succeeded") {
-            // PI succeeded — link and confirm payment
-            await supabase
-              .from("orders")
-              .update({
-                payment_intent_id: matchingPI.id,
-                status: "PAYMENT_PROCESSING",
-                payment_processing_started_at: new Date().toISOString(),
-              })
-              .eq("id", order.order_id);
-
-            const { error: confirmError } = await supabase.rpc("mark_products_sold_by_payment_intent", {
+            // PI succeeded — link and confirm payment atomically
+            const { error: confirmError } = await supabase.rpc("link_payment_intent_and_confirm", {
+              p_order_id: order.order_id,
               p_payment_intent_id: matchingPI.id,
             });
             if (confirmError) {
@@ -213,17 +229,9 @@ export async function GET(req) {
             }
 
           } else if (matchingPI.status === "canceled" || matchingPI.status === "requires_payment_method") {
-            // PI failed/cancelled — link and release reservations
-            await supabase
-              .from("orders")
-              .update({
-                payment_intent_id: matchingPI.id,
-                status: "PAYMENT_PROCESSING",
-                payment_processing_started_at: new Date().toISOString(),
-              })
-              .eq("id", order.order_id);
-
-            const { error: releaseError } = await supabase.rpc("release_product_reservations_by_payment_intent", {
+            // PI failed/cancelled — link and release reservations atomically
+            const { error: releaseError } = await supabase.rpc("link_payment_intent_and_release", {
+              p_order_id: order.order_id,
               p_payment_intent_id: matchingPI.id,
             });
             if (releaseError) {
@@ -235,19 +243,18 @@ export async function GET(req) {
             }
 
           } else if (matchingPI.status === "requires_action" || matchingPI.status === "processing") {
-            // PI still active — link and transition to PAYMENT_PROCESSING
-            // Webhook will handle final state
-            await supabase
-              .from("orders")
-              .update({
-                payment_intent_id: matchingPI.id,
-                status: "PAYMENT_PROCESSING",
-                payment_processing_started_at: new Date().toISOString(),
-              })
-              .eq("id", order.order_id);
-
-            console.log(`[Cron] Recovery: Order ${order.order_id} linked to PI ${matchingPI.id} (status=${matchingPI.status})`);
-            results.recovered = (results.recovered || 0) + 1;
+            // PI still active — link atomically, webhook will handle final state
+            const { error: linkError } = await supabase.rpc("link_payment_intent_to_order", {
+              p_order_id: order.order_id,
+              p_payment_intent_id: matchingPI.id,
+            });
+            if (linkError) {
+              console.error(`[Cron] Recovery: Link failed for order ${order.order_id}:`, linkError.message);
+              results.errors.push({ order_id: order.order_id, action: "recovery_link", error: linkError.message });
+            } else {
+              console.log(`[Cron] Recovery: Order ${order.order_id} linked to PI ${matchingPI.id} (status=${matchingPI.status})`);
+              results.recovered = (results.recovered || 0) + 1;
+            }
 
           } else {
             // Unknown PI status — log and skip

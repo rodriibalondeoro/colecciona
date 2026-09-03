@@ -631,6 +631,123 @@ BEGIN
 END;
 $$;
 
+-- Link PaymentIntent to order and confirm payment (atomic, crash recovery)
+-- PROTOCOL: FOR UPDATE on order → validate PENDING → link PI → confirm payment
+-- This prevents races between cron recovery and webhook confirmation.
+-- If another caller already linked/confirmed, FOR UPDATE waits then re-reads.
+CREATE OR REPLACE FUNCTION link_payment_intent_and_confirm(
+  p_order_id UUID,
+  p_payment_intent_id TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+BEGIN
+  -- Lock order (prevents concurrent recovery/webhook)
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Idempotent: already confirmed
+  IF v_order.status = 'PAID' THEN
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'message', 'Already confirmed');
+  END IF;
+
+  -- Must be PENDING to link (payment_intent_id should be NULL)
+  IF v_order.status <> 'PENDING' THEN
+    RAISE EXCEPTION 'Order % is not PENDING (current: %)', p_order_id, v_order.status;
+  END IF;
+
+  -- Link PI to order
+  UPDATE orders
+  SET payment_intent_id = p_payment_intent_id,
+      status = 'PAYMENT_PROCESSING',
+      payment_processing_started_at = now()
+  WHERE id = p_order_id;
+
+  -- Delegate to canonical confirm_payment
+  RETURN confirm_payment(p_order_id);
+END;
+$$;
+
+-- Link PaymentIntent to order and release reservations (atomic, crash recovery)
+-- PROTOCOL: FOR UPDATE on order → validate PENDING → link PI → release products
+-- Used when PI is already failed/cancelled in Stripe during crash recovery.
+CREATE OR REPLACE FUNCTION link_payment_intent_and_release(
+  p_order_id UUID,
+  p_payment_intent_id TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+BEGIN
+  -- Lock order (prevents concurrent recovery/webhook)
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Idempotent: already cancelled
+  IF v_order.status = 'CANCELLED' THEN
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', 'CANCELLED', 'message', 'Already cancelled');
+  END IF;
+
+  -- Must be PENDING to link
+  IF v_order.status <> 'PENDING' THEN
+    RAISE EXCEPTION 'Order % is not PENDING (current: %)', p_order_id, v_order.status;
+  END IF;
+
+  -- Link PI to order
+  UPDATE orders
+  SET payment_intent_id = p_payment_intent_id,
+      status = 'PAYMENT_PROCESSING',
+      payment_processing_started_at = now()
+  WHERE id = p_order_id;
+
+  -- Delegate to canonical release function
+  RETURN release_product_reservations_by_payment_intent(p_payment_intent_id);
+END;
+$$;
+
+-- Link PaymentIntent to order without state change (atomic, crash recovery)
+-- PROTOCOL: FOR UPDATE on order → validate PENDING → link PI only
+-- Used when PI is still active (requires_action/processing) — webhook handles final state.
+CREATE OR REPLACE FUNCTION link_payment_intent_to_order(
+  p_order_id UUID,
+  p_payment_intent_id TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+BEGIN
+  -- Lock order (prevents concurrent recovery/webhook)
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Idempotent: already linked
+  IF v_order.payment_intent_id = p_payment_intent_id THEN
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'message', 'Already linked');
+  END IF;
+
+  -- Must be PENDING to link
+  IF v_order.status <> 'PENDING' THEN
+    RAISE EXCEPTION 'Order % is not PENDING (current: %)', p_order_id, v_order.status;
+  END IF;
+
+  -- Link PI to order
+  UPDATE orders
+  SET payment_intent_id = p_payment_intent_id,
+      status = 'PAYMENT_PROCESSING',
+      payment_processing_started_at = now()
+  WHERE id = p_order_id;
+
+  RETURN jsonb_build_object('order_id', p_order_id, 'payment_intent_id', p_payment_intent_id, 'status', 'PAYMENT_PROCESSING');
+END;
+$$;
+
 -- Confirm order payment: atomic transition ORDER → PAID + PRODUCTS → SOLD
 -- Delegates to canonical confirm_payment()
 CREATE OR REPLACE FUNCTION confirm_order_payment(p_order_id UUID)
@@ -2343,6 +2460,18 @@ REVOKE ALL ON FUNCTION cleanup_stale_payment_processing() FROM PUBLIC;
 -- cleanup_orphaned_pending_orders: NOT CLIENT-CALLABLE (cron/service_role)
 REVOKE ALL ON FUNCTION cleanup_orphaned_pending_orders() FROM PUBLIC;
 -- No GRANT: NOT CLIENT-CALLABLE — only backend (cron/admin)
+
+-- link_payment_intent_and_confirm: NOT CLIENT-CALLABLE (cron recovery)
+REVOKE ALL ON FUNCTION link_payment_intent_and_confirm(UUID, TEXT) FROM PUBLIC;
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron recovery)
+
+-- link_payment_intent_and_release: NOT CLIENT-CALLABLE (cron recovery)
+REVOKE ALL ON FUNCTION link_payment_intent_and_release(UUID, TEXT) FROM PUBLIC;
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron recovery)
+
+-- link_payment_intent_to_order: NOT CLIENT-CALLABLE (cron recovery)
+REVOKE ALL ON FUNCTION link_payment_intent_to_order(UUID, TEXT) FROM PUBLIC;
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron recovery)
 
 -- mark_order_preparing: authenticated seller only
 REVOKE ALL ON FUNCTION mark_order_preparing(UUID) FROM PUBLIC;
