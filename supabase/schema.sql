@@ -1361,9 +1361,16 @@ BEGIN
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
 
-  -- Idempotency: if already resolved (not REFUND_PENDING), return no-op
+  -- FAIL-CLOSED: NEVER restore from REFUNDED.
+  -- A delayed refund.failed/canceled webhook arriving AFTER refund succeeded
+  -- must NOT revert REFUNDED → previous status.
+  IF v_order.status = 'REFUNDED' THEN
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', 'REFUNDED', 'message', 'Already refunded — no recovery');
+  END IF;
+
+  -- IDEMPOTENT: only act on REFUND_PENDING. Any other state (already restored) → no-op.
   IF v_order.status <> 'REFUND_PENDING' THEN
-    RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'message', 'Already resolved');
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'message', 'No refund recovery required');
   END IF;
 
   -- Revert to previous status (from begin_refund), fallback to DISPUTED
