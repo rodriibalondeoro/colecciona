@@ -48,10 +48,9 @@ export async function POST(req) {
       return NextResponse.json({ error: "Order not found for this PaymentIntent" }, { status: 404 });
     }
 
-    // 2. Verify user is a participant (buyer or seller)
-    const isParticipant = order.buyer_id === user.id || order.seller_id === user.id;
-    if (!isParticipant) {
-      return NextResponse.json({ error: "Not authorized to capture this payment" }, { status: 403 });
+    // 2. Verify user is the SELLER (only seller captures when shipping)
+    if (order.seller_id !== user.id) {
+      return NextResponse.json({ error: "Only the seller can capture this payment" }, { status: 403 });
     }
 
     // 3. Verify order is in PAYMENT_PROCESSING state

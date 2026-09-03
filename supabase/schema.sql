@@ -74,12 +74,13 @@
 -- CAPTURE-PAYMENT AUTHORIZATION CHAIN:
 --   1. User authenticated (verifyAuth)
 --   2. Find order by payment_intent_id
---   3. Verify user is participant (buyer or seller)
+--   3. Verify user is the SELLER (only seller captures when shipping)
 --   4. Verify order status = PAYMENT_PROCESSING
 --   5. Verify PI status = requires_capture (via Stripe API)
 --   6. Call stripe.paymentIntents.capture()
 --   7. Call mark_products_sold_by_payment_intent() → ORDER=PAID, PRODUCTS=SOLD
 --   Never: client sends paymentIntentId → server blindly captures ❌
+--   Never: buyer captures → only seller captures ❌
 --
 -- STRIPE WEBHOOK EVENT TABLE (explicit, tested):
 --   Event                         | Handler                          | Action
