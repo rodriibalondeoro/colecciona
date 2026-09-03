@@ -114,18 +114,29 @@ export async function POST(req) {
         .eq("payment_intent_id", piId)
         .single();
 
-      if (orderError || !order) {
-        console.error(`[Webhook] No order found for PI ${piId}`);
+      // CRITICAL: DB failure (timeout, connection, Supabase down) → 500 → Stripe retry.
+      // Do NOT treat as "order not found" — the refund already succeeded in Stripe.
+      if (orderError) {
+        console.error(`[Webhook] DB error finding order for PI ${piId}:`, orderError.message);
+        criticalError = orderError.message;
+        break;
+      }
+
+      // Identity inconsistency: a marketplace PI should always have an order.
+      // Treat as critical so Stripe retries (avoid silent financial discrepancy).
+      if (!order) {
+        console.error(`[Webhook] No order found for PI ${piId} — identity inconsistency`);
+        criticalError = `No order found for PI ${piId}`;
         break;
       }
 
       // CRITICAL: Only mark REFUNDED if this is a FULL refund
-      // charge.amount_refunded is in cents, order.total is in euros
-      const amountRefundedEuros = charge.amount_refunded / 100;
-      const isFullRefund = Math.abs(amountRefundedEuros - order.total) < 0.01;
+      // Compare integer cents (Stripe amount_refunded is in cents; order.total is in euros)
+      const expectedAmountCents = Math.round(Number(order.total) * 100);
+      const isFullRefund = charge.amount_refunded === expectedAmountCents;
 
       if (!isFullRefund) {
-        console.log(`[Webhook] Partial refund: ${amountRefundedEuros}€ of ${order.total}€ — NOT marking REFUNDED`);
+        console.log(`[Webhook] Partial refund: ${charge.amount_refunded} cents of ${expectedAmountCents} cents — NOT marking REFUNDED`);
         // Log partial refund for admin visibility, but do NOT change order status
         break;
       }
