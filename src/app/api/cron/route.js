@@ -320,10 +320,19 @@ export async function GET(req) {
           }
 
           // DETERMINISTIC match: use metadata.order_id to identify the exact refund.
-          // Avoids assuming the "latest" refund belongs to this REFUND_PENDING state.
+          // NO fallback: if no deterministic match, KEEP REFUND_PENDING (fail-closed).
           const matchingRefund = refunds.data.find(
-            (r) => r.metadata && r.metadata.order_id === order.order_id
-          ) || refunds.data[0]; // fallback: oldest/primary if no metadata (legacy refunds)
+            (r) => r.metadata?.order_id === order.order_id
+          );
+
+          if (!matchingRefund) {
+            console.warn("[Cron] Refund reconcile: no deterministic refund match", {
+              order_id: order.order_id,
+              payment_intent_id: order.payment_intent_id,
+            });
+            results.kept++;
+            continue;
+          }
 
           if (matchingRefund.status === "succeeded") {
             const { error: recError } = await supabase.rpc("reconcile_refund", {
