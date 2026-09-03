@@ -657,9 +657,26 @@ CREATE OR REPLACE FUNCTION clear_capture_in_progress(p_order_id UUID)
 RETURNS VOID
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
+DECLARE
+  v_order RECORD;
 BEGIN
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can clear capture lock'; END IF;
 
+  -- Lock order atomically
+  SELECT id, status, capture_in_progress
+  INTO v_order
+  FROM orders WHERE id = p_order_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order % not found', p_order_id;
+  END IF;
+
+  -- Only CAPTURING orders can have their lock cleared
+  IF v_order.status <> 'CAPTURING' THEN
+    RAISE EXCEPTION 'Cannot clear capture lock for order in status %', v_order.status;
+  END IF;
+
+  -- All validations passed — clear the lock
   UPDATE orders
   SET capture_in_progress = FALSE, capture_started_at = NULL
   WHERE id = p_order_id
@@ -2803,3 +2820,9 @@ GRANT EXECUTE ON FUNCTION confirm_order_delivery(UUID) TO authenticated;
 -- complete_order: authenticated participant only
 REVOKE ALL ON FUNCTION complete_order(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION complete_order(UUID) TO authenticated;
+
+-- begin_capture_order: NOT CLIENT-CALLABLE (service_role/cron only)
+REVOKE ALL ON FUNCTION begin_capture_order(TEXT) FROM PUBLIC;
+
+-- clear_capture_in_progress: NOT CLIENT-CALLABLE (service_role/cron only)
+REVOKE ALL ON FUNCTION clear_capture_in_progress(UUID) FROM PUBLIC;
