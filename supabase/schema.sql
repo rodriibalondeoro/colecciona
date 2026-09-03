@@ -54,6 +54,22 @@
 --   Checkout uses idempotencyKey: `checkout:${orderId}` to prevent duplicate PI creation.
 --   This ensures: 1 ORDER → at most 1 PI created (even across retries).
 --
+-- CAPTURE_METHOD: MANUAL — Financial Model:
+--   With capture_method: "manual", the Stripe PI lifecycle is:
+--     PI created → requires_payment_method
+--     User enters card → requires_confirmation
+--     PI confirmed → requires_capture (funds AUTHORIZED/HELD, NOT captured)
+--     capture() called → succeeded (funds CAPTURED/transferred)
+--     payment_intent.succeeded fires (AFTER capture, NOT after authorization)
+--   Our system ONLY marks ORDER=PAID and PRODUCTS=SOLD after explicit capture().
+--   This is enforced by 3 paths, all requiring capture first:
+--     1. capture-payment route: calls stripe.paymentIntents.capture() → then confirm
+--     2. payment_intent.succeeded webhook: fires only after capture()
+--     3. payment_intent.captured webhook: fires only after capture()
+--   All 3 paths are idempotent (confirm_payment checks PAID status).
+--   If authorization expires without capture: PI → requires_payment_method/canceled
+--     → payment_intent.payment_failed/canceled fires → release reservations
+--
 -- FINANCIAL DISCREPANCY SCENARIO (requires manual investigation):
 --   If release is called after Stripe actually charged:
 --     CUSTOMER → PAID 💰
