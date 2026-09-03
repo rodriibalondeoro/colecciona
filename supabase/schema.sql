@@ -2,6 +2,47 @@
 -- COLECCIONA — Definitive Production Schema
 -- Single source of truth. Run on clean Supabase with 000_clean_slate.sql first.
 -- ============================================================================
+--
+-- MASTER INVARIANT: Product reservation lifecycle
+-- Once a product enters RESERVED, it can only terminate in one of two ways:
+--
+--   RESERVED → SOLD
+--     ORDER → PAID
+--     OFFER → ACCEPTED
+--
+--   RESERVED → ACTIVE
+--     OFFER → EXPIRED
+--     ORDER → CANCELLED (if exists)
+--
+-- These transitions are ATOMIC within a single transaction:
+--   PRODUCT → ACTIVE + OFFER → EXPIRED + ORDER → CANCELLED
+--   (never observable in an intermediate inconsistent state from outside)
+--
+-- NEVER:
+--   PRODUCT ACTIVE + OFFER ACCEPTED
+--   PRODUCT SOLD + ORDER CANCELLED
+--   RESERVED → ACTIVE → SOLD (impossible sequence)
+--   RESERVED → SOLD → ACTIVE (impossible sequence)
+--
+-- LOCKING CONVENTION (global, all functions):
+--   ORDER → PRODUCTS (ORDER BY id) → OFFERS
+--   (ORDER lock only when an existing order must be locked)
+--
+-- EXACTLY-ONCE SEMANTICS:
+--   All release/cancel functions use FOR UPDATE + ROW_COUNT verification.
+--   If any step fails, RAISE EXCEPTION → ROLLBACK everything.
+--   Cron functions skip silently for already-processed items.
+--   Webhook functions are idempotent (confirm_payment returns "Already confirmed").
+--
+-- STRIPE WEBHOOK ORDERING:
+--   Webhooks may arrive out of order. The SQL layer enforces correctness:
+--   - payment_intent.succeeded after payment_failed: ORDER already CANCELLED,
+--     confirm_payment sees status≠PAYMENT_PROCESSING → logged error, no crash.
+--   - payment_failed after payment_intent.succeeded: ORDER already PAID,
+--     release sees status=PAID → "No reservations to release".
+--   - Webhook before order persists (PAYMENT_PROCESSING not yet set):
+--     confirm_payment fails → Stripe retries → eventually succeeds.
+-- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -453,6 +494,8 @@ END;
 $$;
 
 -- Mark products as SOLD by payment_intent_id (called by Stripe webhook)
+-- IDEMPOTENT: If order already PAID, returns success without error.
+-- If order not in PAYMENT_PROCESSING, raises exception (logged by webhook handler, not retried).
 -- Same guarantees as confirm_order_payment(): validates reserved_by, reserved_until, count
 CREATE OR REPLACE FUNCTION mark_products_sold_by_payment_intent(p_payment_intent_id TEXT)
 RETURNS JSONB
@@ -471,8 +514,9 @@ END;
 $$;
 
 -- Release product reservations by payment_intent_id (called on payment failure)
--- Validates: order is PAYMENT_PROCESSING, releases only products reserved by buyer
--- Verifies released_count = expected_count before cancelling (same as cancel_order/rollback)
+-- IDEMPOTENT: If order not in PAYMENT_PROCESSING/PENDING, returns "No reservations to release".
+-- Validates: releases only products reserved by buyer, verifies released_count = expected_count.
+-- Expires accepted offers for released products (maintains offer/product state coherence).
 CREATE OR REPLACE FUNCTION release_product_reservations_by_payment_intent(p_payment_intent_id TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public

@@ -38,6 +38,10 @@ export async function POST(req) {
     case "payment_intent.succeeded": {
       const pi = event.data.object;
       console.log(`[Webhook] Payment succeeded: ${pi.id}`);
+      // IDEMPOTENT: confirm_payment returns "Already confirmed" if order already PAID.
+      // RACE WINDOW: If webhook arrives before order status is updated to PAYMENT_PROCESSING
+      // (between PI creation and order update), confirm_payment will fail with
+      // "not PAYMENT_PROCESSING". Stripe retries webhooks (up to 3 days), so this is safe.
       const { data, error } = await supabase.rpc("mark_products_sold_by_payment_intent", {
         p_payment_intent_id: pi.id,
       });
@@ -58,6 +62,8 @@ export async function POST(req) {
     case "payment_intent.payment_failed": {
       const pi = event.data.object;
       console.log(`[Webhook] Payment failed: ${pi.id}`);
+      // IDEMPOTENT: release returns "No reservations" if order already CANCELLED/PAID.
+      // If succeeded webhook arrived first, order is PAID → this is a no-op.
       const { data, error } = await supabase.rpc("release_product_reservations_by_payment_intent", {
         p_payment_intent_id: pi.id,
       });

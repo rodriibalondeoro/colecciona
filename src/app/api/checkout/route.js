@@ -80,6 +80,10 @@ export async function POST(req) {
     }
 
     // 4. Link payment intent to order
+    // RACE WINDOW: Between PI creation (step 3) and this update, a webhook could arrive
+    // with order still in PENDING status. confirm_payment would fail ("not PAYMENT_PROCESSING").
+    // This is safe: Stripe retries webhooks with exponential backoff (up to 3 days).
+    // By the next retry, order will be in PAYMENT_PROCESSING.
     await supabase
       .from("orders")
       .update({
