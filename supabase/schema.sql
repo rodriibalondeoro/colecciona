@@ -678,9 +678,12 @@ BEGIN
     RAISE EXCEPTION 'Cannot clear capture lock for order in status %', v_order.status;
   END IF;
 
-  -- All validations passed — clear the lock
+  -- All validations passed — clear the lock and reset to PAYMENT_PROCESSING
+  -- This allows retry: begin_capture_order() only accepts PAYMENT_PROCESSING
   UPDATE orders
-  SET capture_in_progress = FALSE, capture_started_at = NULL
+  SET status = 'PAYMENT_PROCESSING',
+      capture_in_progress = FALSE,
+      capture_started_at = NULL
   WHERE id = p_order_id
     AND capture_in_progress = TRUE;
 END;
@@ -1656,6 +1659,11 @@ BEGIN
 
       -- Capture flow: service_role (capture route) sets PAYMENT_PROCESSING→CAPTURING
       WHEN OLD.status = 'PAYMENT_PROCESSING' AND NEW.status = 'CAPTURING'
+        AND auth.uid() IS NULL THEN true
+
+      -- Capture reset: service_role (clear_capture) sets CAPTURING→PAYMENT_PROCESSING
+      -- Allows retry after capture failure before Stripe
+      WHEN OLD.status = 'CAPTURING' AND NEW.status = 'PAYMENT_PROCESSING'
         AND auth.uid() IS NULL THEN true
 
       -- Payment confirmation: ONLY via service_role (Stripe webhook/cron)
