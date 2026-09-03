@@ -1322,7 +1322,23 @@ BEGIN
       RAISE EXCEPTION 'All products must be from the same seller for a single order';
     END IF;
 
-    v_subtotal := v_subtotal + v_product.price;
+    -- CRITICAL: Use accepted offer price if exists, otherwise use product price
+    DECLARE
+      v_offer_amount NUMERIC;
+    BEGIN
+      SELECT amount INTO v_offer_amount
+      FROM offers
+      WHERE product_id = v_product.id
+        AND buyer_id = auth.uid()
+        AND status = 'accepted'
+      LIMIT 1;
+
+      IF FOUND AND v_offer_amount IS NOT NULL THEN
+        v_subtotal := v_subtotal + v_offer_amount;
+      ELSE
+        v_subtotal := v_subtotal + v_product.price;
+      END IF;
+    END;
   END LOOP;
 
   -- Verify ALL requested products were found
@@ -1355,9 +1371,17 @@ BEGIN
     p_shipping_method, p_shipping_address, 'PENDING'
   ) RETURNING id INTO v_order_id;
 
-  -- Create order items (1 per product)
+  -- Create order items (1 per product, using accepted offer price if exists)
   INSERT INTO order_items(order_id, product_id, price)
-  SELECT v_order_id, p.id, p.price
+  SELECT v_order_id, p.id,
+    COALESCE(
+      (SELECT o.amount FROM offers o
+       WHERE o.product_id = p.id
+         AND o.buyer_id = auth.uid()
+         AND o.status = 'accepted'
+       LIMIT 1),
+      p.price
+    )
   FROM products p
   WHERE p.id = ANY(p_product_ids);
 
@@ -2285,10 +2309,10 @@ $$;
 -- LOCKING ORDER: PRODUCT → OFFER (no existing ORDER in this flow)
 -- This is compatible with global convention (orders → products → offers)
 -- and prevents deadlock with release_expired_reservations (PRODUCT → OFFER via UPDATE).
--- MULTIPLE OFFERS POLICY: Other pending offers for the same product remain PENDING.
--- This is intentional: if the accepted reservation expires (PRODUCT → ACTIVE), the seller
--- can subsequently accept another pending offer. The rejected offers are only those
--- explicitly rejected by the seller during this acceptance.
+-- MULTIPLE OFFERS POLICY: Other pending offers for the same product are REJECTED.
+-- This is intentional: when an offer is accepted and the product is reserved,
+-- all other pending offers for that product are rejected atomically in the same transaction.
+-- If the accepted reservation expires (PRODUCT → ACTIVE), new offers can be made.
 CREATE OR REPLACE FUNCTION accept_offer(p_offer_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
