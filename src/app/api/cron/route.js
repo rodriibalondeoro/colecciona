@@ -310,7 +310,7 @@ export async function GET(req) {
           // Query Stripe for refunds on this PaymentIntent
           const refunds = await stripe.refunds.list({
             payment_intent: order.payment_intent_id,
-            limit: 5,
+            limit: 10,
           });
 
           if (!refunds.data || refunds.data.length === 0) {
@@ -319,36 +319,39 @@ export async function GET(req) {
             continue;
           }
 
-          // Use the most recent refund as the active one
-          const latestRefund = refunds.data[0];
+          // DETERMINISTIC match: use metadata.order_id to identify the exact refund.
+          // Avoids assuming the "latest" refund belongs to this REFUND_PENDING state.
+          const matchingRefund = refunds.data.find(
+            (r) => r.metadata && r.metadata.order_id === order.order_id
+          ) || refunds.data[0]; // fallback: oldest/primary if no metadata (legacy refunds)
 
-          if (latestRefund.status === "succeeded") {
+          if (matchingRefund.status === "succeeded") {
             const { error: recError } = await supabase.rpc("reconcile_refund", {
               p_order_id: order.order_id,
-              p_refund_id: latestRefund.id,
+              p_refund_id: matchingRefund.id,
               p_success: true,
             });
             if (recError) {
               results.errors.push({ order_id: order.order_id, action: "refund_reconcile", error: recError.message });
             } else {
-              console.log(`[Cron] Refund reconcile: order ${order.order_id} reconciled → REFUNDED (${latestRefund.id})`);
+              console.log(`[Cron] Refund reconcile: order ${order.order_id} reconciled → REFUNDED (${matchingRefund.id})`);
               results.confirmed++;
             }
-          } else if (latestRefund.status === "failed" || latestRefund.status === "canceled") {
+          } else if (matchingRefund.status === "failed" || matchingRefund.status === "canceled") {
             const { error: recError } = await supabase.rpc("reconcile_refund", {
               p_order_id: order.order_id,
-              p_refund_id: latestRefund.id,
+              p_refund_id: matchingRefund.id,
               p_success: false,
             });
             if (recError) {
               results.errors.push({ order_id: order.order_id, action: "refund_reconcile", error: recError.message });
             } else {
-              console.log(`[Cron] Refund reconcile: order ${order.order_id} reverted (refund ${latestRefund.status})`);
+              console.log(`[Cron] Refund reconcile: order ${order.order_id} reverted (refund ${matchingRefund.status})`);
               results.released++;
             }
           } else {
             // pending/requires_action → outcome uncertain → keep REFUND_PENDING
-            console.log(`[Cron] Refund reconcile: order ${order.order_id} refund status=${latestRefund.status} — keeping REFUND_PENDING`);
+            console.log(`[Cron] Refund reconcile: order ${order.order_id} refund status=${matchingRefund.status} — keeping REFUND_PENDING`);
             results.kept++;
           }
         } catch (recErr) {

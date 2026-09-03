@@ -90,6 +90,7 @@ export async function POST(req) {
         {
           payment_intent: order.payment_intent_id,
           reason: reason || "requested_by_customer",
+          metadata: { order_id: orderId },
         },
         {
           idempotencyKey: `refund:${orderId}`,
