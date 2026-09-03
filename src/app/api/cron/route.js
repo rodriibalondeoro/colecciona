@@ -157,6 +157,25 @@ export async function GET(req) {
       }
     }
 
+    // 3. RECOVERY: Find orphaned PENDING orders without payment_intent_id
+    // Handles server crash between PI creation and order update.
+    // Strategy: These orders have a PI in Stripe but payment_intent_id = NULL in DB.
+    // We can't link them automatically (don't know the PI id), so we let them be cancelled
+    // by cleanup_abandoned_pending_orders after 30 min. The PI will expire in Stripe (7 days).
+    // This is acceptable: user retries checkout, products are released.
+    const { data: orphanedOrders, error: orphanError } = await supabase
+      .rpc("cleanup_orphaned_pending_orders");
+
+    if (orphanError) {
+      console.error("[Cron] Error fetching orphaned orders:", orphanError.message);
+    } else if (orphanedOrders && orphanedOrders.length > 0) {
+      console.log(`[Cron] Found ${orphanedOrders.length} orphaned PENDING orders (no payment_intent_id)`);
+      // Log for monitoring — these will be cancelled by cleanup_abandoned_pending_orders
+      for (const order of orphanedOrders) {
+        console.log(`[Cron] Orphaned order ${order.order_id} (${order.minutes_old?.toFixed(0)} min old) — will be cancelled if no PI linked`);
+      }
+    }
+
     return NextResponse.json({ message: "Cron completed", results });
   } catch (err) {
     console.error("[Cron] Fatal error:", err);

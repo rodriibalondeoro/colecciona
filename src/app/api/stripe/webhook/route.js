@@ -34,6 +34,10 @@ export async function POST(req) {
 
   const supabase = createClient(url, key);
 
+  // Track errors: if a critical RPC fails, return 500 so Stripe retries.
+  // Stripe retries with exponential backoff up to 3 days.
+  let criticalError = null;
+
   switch (event.type) {
     case "payment_intent.succeeded": {
       const pi = event.data.object;
@@ -41,12 +45,16 @@ export async function POST(req) {
       // IDEMPOTENT: confirm_payment returns "Already confirmed" if order already PAID.
       // RACE WINDOW: If webhook arrives before order status is updated to PAYMENT_PROCESSING
       // (between PI creation and order update), confirm_payment will fail with
-      // "not PAYMENT_PROCESSING". Stripe retries webhooks (up to 3 days), so this is safe.
+      // "not PAYMENT_PROCESSING". We return 500 → Stripe retries → eventually succeeds.
       const { data, error } = await supabase.rpc("mark_products_sold_by_payment_intent", {
         p_payment_intent_id: pi.id,
       });
-      if (error) console.error("[Webhook] Error marking products sold:", error.message);
-      else console.log("[Webhook] Order confirmed:", data);
+      if (error) {
+        console.error("[Webhook] Error marking products sold:", error.message);
+        criticalError = error.message;
+      } else {
+        console.log("[Webhook] Order confirmed:", data);
+      }
       break;
     }
     case "payment_intent.captured": {
@@ -55,8 +63,12 @@ export async function POST(req) {
       const { data, error } = await supabase.rpc("mark_products_sold_by_payment_intent", {
         p_payment_intent_id: pi.id,
       });
-      if (error) console.error("[Webhook] Error capturing payment:", error.message);
-      else console.log("[Webhook] Payment captured:", data);
+      if (error) {
+        console.error("[Webhook] Error capturing payment:", error.message);
+        criticalError = error.message;
+      } else {
+        console.log("[Webhook] Payment captured:", data);
+      }
       break;
     }
     case "payment_intent.payment_failed": {
@@ -67,8 +79,12 @@ export async function POST(req) {
       const { data, error } = await supabase.rpc("release_product_reservations_by_payment_intent", {
         p_payment_intent_id: pi.id,
       });
-      if (error) console.error("[Webhook] Error releasing reservations:", error.message);
-      else console.log("[Webhook] Reservations released:", data);
+      if (error) {
+        console.error("[Webhook] Error releasing reservations:", error.message);
+        criticalError = error.message;
+      } else {
+        console.log("[Webhook] Reservations released:", data);
+      }
       break;
     }
     case "charge.succeeded":
@@ -77,12 +93,13 @@ export async function POST(req) {
       break;
 
     // --- Premium Subscription Events ---
+    // Non-critical: log errors but don't block webhook response
     case "customer.subscription.created": {
       const sub = event.data.object;
       const userId = sub.metadata?.user_id;
       console.log(`[Webhook] Subscription created: ${sub.id} for user ${userId}`);
       if (userId) {
-        await supabase.from("subscriptions").upsert({
+        const { error } = await supabase.from("subscriptions").upsert({
           user_id: userId,
           stripe_subscription_id: sub.id,
           stripe_customer_id: sub.customer,
@@ -92,6 +109,7 @@ export async function POST(req) {
           current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
           current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
         }, { onConflict: "stripe_subscription_id" });
+        if (error) console.error("[Webhook] Subscription upsert error:", error.message);
       }
       break;
     }
@@ -100,11 +118,12 @@ export async function POST(req) {
       const userId = sub.metadata?.user_id;
       console.log(`[Webhook] Subscription updated: ${sub.id} status=${sub.status}`);
       if (userId) {
-        await supabase.from("subscriptions").update({
+        const { error } = await supabase.from("subscriptions").update({
           status: sub.status,
           current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
           cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
         }).eq("stripe_subscription_id", sub.id);
+        if (error) console.error("[Webhook] Subscription update error:", error.message);
       }
       break;
     }
@@ -113,14 +132,25 @@ export async function POST(req) {
       const userId = sub.metadata?.user_id;
       console.log(`[Webhook] Subscription deleted: ${sub.id}`);
       if (userId) {
-        await supabase.from("subscriptions").update({
+        const { error } = await supabase.from("subscriptions").update({
           status: "canceled",
         }).eq("stripe_subscription_id", sub.id);
+        if (error) console.error("[Webhook] Subscription delete error:", error.message);
       }
       break;
     }
     default:
       console.log(`[Webhook] Evento no manejado: ${event.type}`);
+  }
+
+  // CRITICAL: Return non-2xx on RPC failure so Stripe retries.
+  // Stripe retries with exponential backoff (up to 3 days).
+  // This ensures transient errors (race conditions, DB locks) are recovered.
+  if (criticalError) {
+    return NextResponse.json(
+      { error: "Processing failed, will retry", details: criticalError },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json({ received: true });

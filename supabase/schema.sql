@@ -604,6 +604,32 @@ BEGIN
 END;
 $$;
 
+-- Find orphaned PENDING orders without payment_intent_id (call via cron, e.g. every 5 min)
+-- RECOVERY: Handles server crash between PI creation and order update.
+-- These orders have a PaymentIntent in Stripe but payment_intent_id = NULL in DB.
+-- Returns orders for the caller to check against Stripe and either link or cancel.
+CREATE OR REPLACE FUNCTION cleanup_orphaned_pending_orders()
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_orphaned_orders JSONB;
+BEGIN
+  SELECT jsonb_agg(jsonb_build_object(
+    'order_id', o.id,
+    'buyer_id', o.buyer_id,
+    'created_at', o.created_at,
+    'minutes_old', EXTRACT(EPOCH FROM (now() - o.created_at)) / 60
+  )) INTO v_orphaned_orders
+  FROM orders o
+  WHERE o.status = 'PENDING'
+    AND o.payment_intent_id IS NULL
+    AND o.created_at < now() - interval '5 minutes';
+
+  RETURN COALESCE(v_orphaned_orders, '[]'::jsonb);
+END;
+$$;
+
 -- Confirm order payment: atomic transition ORDER → PAID + PRODUCTS → SOLD
 -- Delegates to canonical confirm_payment()
 CREATE OR REPLACE FUNCTION confirm_order_payment(p_order_id UUID)
@@ -2311,6 +2337,10 @@ REVOKE ALL ON FUNCTION release_product_reservations_by_payment_intent(TEXT) FROM
 
 -- cleanup_stale_payment_processing: NOT CLIENT-CALLABLE (cron/service_role)
 REVOKE ALL ON FUNCTION cleanup_stale_payment_processing() FROM PUBLIC;
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron/admin)
+
+-- cleanup_orphaned_pending_orders: NOT CLIENT-CALLABLE (cron/service_role)
+REVOKE ALL ON FUNCTION cleanup_orphaned_pending_orders() FROM PUBLIC;
 -- No GRANT: NOT CLIENT-CALLABLE — only backend (cron/admin)
 
 -- mark_order_preparing: authenticated seller only
