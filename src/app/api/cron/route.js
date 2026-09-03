@@ -157,6 +157,23 @@ export async function GET(req) {
       }
     }
 
+    // 2.5. Reset stale capture_status = 'capturing' (> 5 minutes old)
+    // Server crash recovery: if capture process crashed after begin_capture_order()
+    // but before complete_capture_order(), the order stays in 'capturing' state.
+    // Reset to 'idle' so capture can be retried.
+    const { data: resetCount, error: resetError } = await supabase
+      .from("orders")
+      .update({ capture_status: "idle" })
+      .eq("capture_status", "capturing")
+      .lt("payment_processing_started_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+      .select("id");
+
+    if (resetError) {
+      console.error("[Cron] Error resetting stale capture_status:", resetError.message);
+    } else if (resetCount && resetCount.length > 0) {
+      console.log(`[Cron] Reset ${resetCount.length} stale capture_status from 'capturing' to 'idle'`);
+    }
+
     // 3. RECOVERY: Find orphaned PENDING orders without payment_intent_id
     // ALWAYS runs — even if no stale PAYMENT_PROCESSING orders exist.
     // Handles server crash between PI creation and order update.
