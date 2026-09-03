@@ -52,7 +52,7 @@ export async function GET(req) {
 
     // Process stale orders if any exist (don't return early — orphan recovery must always run)
     if (staleOrders && staleOrders.length > 0) {
-      console.log(`[Cron] Found ${staleOrders.length} stale PAYMENT_PROCESSING orders`);
+      console.log(`[Cron] Found ${staleOrders.length} stale PAYMENT_PROCESSING/CAPTURING orders`);
 
       // 2. Check each with Stripe
       for (const order of staleOrders) {
@@ -84,6 +84,23 @@ export async function GET(req) {
               results.errors.push({ order_id: order.order_id, action: "release", error: releaseError.message });
             } else {
               results.released++;
+            }
+
+          } else if (pi.status === "requires_capture" || pi.status === "requires_confirmation") {
+            // PI still awaiting action — if CAPTURING stale, clear capture lock to allow retry
+            if (order.status === "CAPTURING" && order.capture_in_progress) {
+              console.log(`[Cron] PI ${pi.id} ${pi.status} — clearing stale CAPTURING lock for order ${order.order_id}`);
+              const { error: clearError } = await supabase.rpc("clear_capture_in_progress", {
+                p_order_id: order.order_id,
+              });
+              if (clearError) {
+                results.errors.push({ order_id: order.order_id, action: "clear_lock", error: clearError.message });
+              } else {
+                results.kept++;
+              }
+            } else {
+              console.log(`[Cron] PI ${pi.id} status=${pi.status} (${hoursStale.toFixed(1)}h) — keeping order ${order.order_id}`);
+              results.kept++;
             }
 
           } else if (pi.status === "requires_action" && hoursStale > REQUIRES_ACTION_MAX_HOURS) {
@@ -155,23 +172,6 @@ export async function GET(req) {
           results.errors.push({ order_id: order.order_id, action: "stripe_query", error: stripeError.message });
         }
       }
-    }
-
-    // 2.5. Reset stale capture_status = 'capturing' (> 5 minutes old)
-    // Server crash recovery: if capture process crashed after begin_capture_order()
-    // but before complete_capture_order(), the order stays in 'capturing' state.
-    // Reset to 'idle' so capture can be retried.
-    const { data: resetCount, error: resetError } = await supabase
-      .from("orders")
-      .update({ capture_status: "idle" })
-      .eq("capture_status", "capturing")
-      .lt("payment_processing_started_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
-      .select("id");
-
-    if (resetError) {
-      console.error("[Cron] Error resetting stale capture_status:", resetError.message);
-    } else if (resetCount && resetCount.length > 0) {
-      console.log(`[Cron] Reset ${resetCount.length} stale capture_status from 'capturing' to 'idle'`);
     }
 
     // 3. RECOVERY: Find orphaned PENDING orders without payment_intent_id

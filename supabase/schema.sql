@@ -751,13 +751,24 @@ BEGIN
     'order_id', o.id,
     'payment_intent_id', o.payment_intent_id,
     'buyer_id', o.buyer_id,
+    'status', o.status,
     'created_at', o.created_at,
     'processing_started_at', o.payment_processing_started_at,
-    'hours_stale', EXTRACT(EPOCH FROM (now() - COALESCE(o.payment_processing_started_at, o.created_at))) / 3600
+    'capture_in_progress', o.capture_in_progress,
+    'capture_started_at', o.capture_started_at,
+    'hours_stale', EXTRACT(EPOCH FROM (now() - COALESCE(
+      CASE WHEN o.status = 'CAPTURING' THEN o.capture_started_at ELSE NULL END,
+      o.payment_processing_started_at,
+      o.created_at
+    ))) / 3600
   )) INTO v_stale_orders
   FROM orders o
-  WHERE o.status = 'PAYMENT_PROCESSING'
-    AND COALESCE(o.payment_processing_started_at, o.created_at) < now() - interval '1 hour';
+  WHERE o.status IN ('PAYMENT_PROCESSING', 'CAPTURING')
+    AND COALESCE(
+      CASE WHEN o.status = 'CAPTURING' THEN o.capture_started_at ELSE NULL END,
+      o.payment_processing_started_at,
+      o.created_at
+    ) < now() - interval '1 hour';
 
   RETURN COALESCE(v_stale_orders, '[]'::jsonb);
 END;
