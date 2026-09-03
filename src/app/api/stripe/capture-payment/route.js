@@ -32,10 +32,11 @@ export async function POST(req) {
 
     // AUTHORIZATION CHAIN:
     // 1. Find order by payment_intent_id
-    // 2. Verify user is a participant (buyer or seller)
+    // 2. Verify user is the SELLER (only seller captures when shipping)
     // 3. Verify order is in PAYMENT_PROCESSING state
     // 4. Verify PI status is requires_capture via Stripe
-    // 5. Only then capture
+    // 5. Capture with idempotency key (prevents duplicate capture on retry)
+    // 6. Confirm via RPC (idempotent — webhook/cron recover if this fails)
 
     // 1. Find order
     const { data: order, error: orderError } = await supabase
@@ -64,8 +65,12 @@ export async function POST(req) {
       return NextResponse.json({ error: `PaymentIntent status is ${pi.status}, expected requires_capture` }, { status: 400 });
     }
 
-    // 5. Capture
-    const paymentIntent = await stripe.paymentIntents.capture(paymentIntentId);
+    // 5. Capture with idempotency key (prevents duplicate capture on retry/timeout)
+    const paymentIntent = await stripe.paymentIntents.capture(
+      paymentIntentId,
+      {},
+      { idempotencyKey: `capture:${paymentIntentId}` }
+    );
 
     // 6. Atomic: order→PAID + products→SOLD via single RPC
     const { data, error: rpcError } = await supabase.rpc("mark_products_sold_by_payment_intent", {
@@ -74,7 +79,12 @@ export async function POST(req) {
 
     if (rpcError) {
       console.error("[Capture] RPC error:", rpcError.message);
-      return NextResponse.json({ error: rpcError.message }, { status: 500 });
+      // Stripe already captured — webhook/cron will recover.
+      // Do NOT expose internal error details to client.
+      return NextResponse.json(
+        { error: "Payment captured but order confirmation is pending" },
+        { status: 500 }
+      );
     }
 
     // 7. Notify seller
