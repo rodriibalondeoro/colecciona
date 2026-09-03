@@ -51,7 +51,8 @@ export async function POST(req) {
     }
 
     // 3. Verify order is in refundable state
-    if (!["PAID", "PREPARING", "SHIPPED", "DELIVERED"].includes(order.status)) {
+    // DISPUTED included: seller can resolve a dispute by refunding the buyer
+    if (!["PAID", "PREPARING", "SHIPPED", "DELIVERED", "DISPUTED"].includes(order.status)) {
       return NextResponse.json(
         { error: "Unable to initiate refund for this order" },
         { status: 400 }
@@ -81,7 +82,23 @@ export async function POST(req) {
 
     console.log(`[Refund] Created refund ${refund.id} for order ${orderId}`);
 
-    // 6. Do NOT update order status here — wait for webhook confirmation
+    // 6. Persist refund evidence (pending state — webhook updates to succeeded)
+    const { error: persistError } = await supabase.from("refunds").insert({
+      order_id: orderId,
+      payment_intent_id: order.payment_intent_id,
+      stripe_refund_id: refund.id,
+      amount_cents: refund.amount,
+      status: refund.status || "pending",
+      is_full_refund: true, // seller-initiated refunds are full refunds
+      reason: reason || "requested_by_customer",
+    });
+
+    if (persistError) {
+      console.error(`[Refund] Failed to persist refund for order ${orderId}:`, persistError.message);
+      // Refund created in Stripe but evidence not persisted — log, webhook will persist again
+    }
+
+    // 7. Do NOT update order status here — wait for webhook confirmation
     // The charge.refunded webhook will call mark_order_refunded()
 
     return NextResponse.json({

@@ -1983,7 +1983,27 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 
 -- ============================================================================
--- 12. FOLLOWS — social graph
+-- 12. REFUNDS — Stripe refund evidence (financial source of truth)
+-- ============================================================================
+-- Persists every refund (full AND partial) as an auditable record.
+-- Prevents partial refunds from existing only in ephemeral logs.
+CREATE TABLE IF NOT EXISTS refunds (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  payment_intent_id TEXT,
+  charge_id TEXT,
+  stripe_refund_id TEXT UNIQUE,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed','canceled')),
+  is_full_refund BOOLEAN DEFAULT false NOT NULL,
+  reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_refunds_order ON refunds(order_id);
+CREATE INDEX IF NOT EXISTS idx_refunds_pi ON refunds(payment_intent_id);
+
+-- ============================================================================
+-- 13. FOLLOWS — social graph
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS follows (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -2092,6 +2112,17 @@ CREATE POLICY "order_items_select_participant" ON order_items FOR SELECT USING (
   )
 );
 -- NO INSERT/UPDATE/DELETE: order_items created via create_checkout_order() RPC only
+
+ALTER TABLE refunds ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "refunds_select_participant" ON refunds;
+CREATE POLICY "refunds_select_participant" ON refunds FOR SELECT USING (
+  EXISTS (
+    SELECT 1 FROM orders o
+    WHERE o.id = refunds.order_id
+      AND (auth.uid() = o.buyer_id OR auth.uid() = o.seller_id)
+  )
+);
+-- NO INSERT/UPDATE/DELETE: refunds written via /api/refund and webhook (service_role) only
 
 ALTER TABLE collections ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "collections_owner_all" ON collections;

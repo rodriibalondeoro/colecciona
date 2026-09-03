@@ -135,9 +135,28 @@ export async function POST(req) {
       const expectedAmountCents = Math.round(Number(order.total) * 100);
       const isFullRefund = charge.amount_refunded === expectedAmountCents;
 
+      // Persist refund evidence (full AND partial) — financial source of truth
+      const { error: persistError } = await supabase.from("refunds").insert({
+        order_id: order.id,
+        payment_intent_id: piId,
+        charge_id: charge.id,
+        stripe_refund_id: event.data.object.refund || null,
+        amount_cents: charge.amount_refunded,
+        status: "succeeded",
+        is_full_refund: isFullRefund,
+        reason: "stripe_webhook",
+      });
+
+      if (persistError) {
+        // Refund happened but we failed to persist evidence — critical
+        console.error(`[Webhook] Failed to persist refund evidence for order ${order.id}:`, persistError.message);
+        criticalError = persistError.message;
+        break;
+      }
+
       if (!isFullRefund) {
-        console.log(`[Webhook] Partial refund: ${charge.amount_refunded} cents of ${expectedAmountCents} cents — NOT marking REFUNDED`);
-        // Log partial refund for admin visibility, but do NOT change order status
+        console.log(`[Webhook] Partial refund: ${charge.amount_refunded} cents of ${expectedAmountCents} cents — persisted, order remains ${order.status}`);
+        // Partial refund: order stays in current state, evidence persisted for admin
         break;
       }
 
