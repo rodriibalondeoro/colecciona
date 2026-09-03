@@ -295,6 +295,69 @@ export async function GET(req) {
       }
     }
 
+    // 4. REFUND RECONCILIATION: find REFUND_PENDING orders with NULL active_stripe_refund_id
+    // Handles crash between Stripe Refund.create() and bind_active_refund().
+    const { data: unboundOrders, error: unboundError } = await supabase
+      .rpc("cleanup_unbound_refund_orders");
+
+    if (unboundError) {
+      console.error("[Cron] Error fetching unbound refund orders:", unboundError.message);
+    } else if (unboundOrders && unboundOrders.length > 0) {
+      console.log(`[Cron] Found ${unboundOrders.length} unbound REFUND_PENDING orders — reconciling`);
+
+      for (const order of unboundOrders) {
+        try {
+          // Query Stripe for refunds on this PaymentIntent
+          const refunds = await stripe.refunds.list({
+            payment_intent: order.payment_intent_id,
+            limit: 5,
+          });
+
+          if (!refunds.data || refunds.data.length === 0) {
+            console.log(`[Cron] Refund reconcile: no refunds found for order ${order.order_id} — keeping REFUND_PENDING`);
+            results.kept++;
+            continue;
+          }
+
+          // Use the most recent refund as the active one
+          const latestRefund = refunds.data[0];
+
+          if (latestRefund.status === "succeeded") {
+            const { error: recError } = await supabase.rpc("reconcile_refund", {
+              p_order_id: order.order_id,
+              p_refund_id: latestRefund.id,
+              p_success: true,
+            });
+            if (recError) {
+              results.errors.push({ order_id: order.order_id, action: "refund_reconcile", error: recError.message });
+            } else {
+              console.log(`[Cron] Refund reconcile: order ${order.order_id} reconciled → REFUNDED (${latestRefund.id})`);
+              results.confirmed++;
+            }
+          } else if (latestRefund.status === "failed" || latestRefund.status === "canceled") {
+            const { error: recError } = await supabase.rpc("reconcile_refund", {
+              p_order_id: order.order_id,
+              p_refund_id: latestRefund.id,
+              p_success: false,
+            });
+            if (recError) {
+              results.errors.push({ order_id: order.order_id, action: "refund_reconcile", error: recError.message });
+            } else {
+              console.log(`[Cron] Refund reconcile: order ${order.order_id} reverted (refund ${latestRefund.status})`);
+              results.released++;
+            }
+          } else {
+            // pending/requires_action → outcome uncertain → keep REFUND_PENDING
+            console.log(`[Cron] Refund reconcile: order ${order.order_id} refund status=${latestRefund.status} — keeping REFUND_PENDING`);
+            results.kept++;
+          }
+        } catch (recErr) {
+          console.error(`[Cron] Refund reconcile error for order ${order.order_id}:`, recErr.message);
+          results.errors.push({ order_id: order.order_id, action: "refund_reconcile", error: recErr.message });
+        }
+      }
+    }
+
     return NextResponse.json({ message: "Cron completed", results });
   } catch (err) {
     console.error("[Cron] Fatal error:", err);

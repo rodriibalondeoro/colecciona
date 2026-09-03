@@ -787,6 +787,37 @@ BEGIN
 END;
 $$;
 
+-- Find REFUND_PENDING orders with no active_stripe_refund_id (call via cron)
+-- RECOVERY: Handles crash between Stripe Refund.create() and bind_active_refund().
+-- These orders are in REFUND_PENDING but the refund identity was never bound.
+-- The cron queries Stripe to find the refund and reconcile.
+CREATE OR REPLACE FUNCTION cleanup_unbound_refund_orders()
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_unbound_orders JSONB;
+BEGIN
+  SELECT jsonb_agg(jsonb_build_object(
+    'order_id', o.id,
+    'payment_intent_id', o.payment_intent_id,
+    'buyer_id', o.buyer_id,
+    'status', o.status,
+    'created_at', o.created_at,
+    'minutes_old', EXTRACT(EPOCH FROM (now() - COALESCE(
+      o.confirmed_at,
+      o.completed_at,
+      o.created_at
+    ))) / 60
+  )) INTO v_unbound_orders
+  FROM orders o
+  WHERE o.status = 'REFUND_PENDING'
+    AND o.active_stripe_refund_id IS NULL;
+
+  RETURN COALESCE(v_unbound_orders, '[]'::jsonb);
+END;
+$$;
+
 -- Find orphaned PENDING orders without payment_intent_id (call via cron, e.g. every 5 min)
 -- RECOVERY: Handles server crash between PI creation and order update.
 -- These orders have a PaymentIntent in Stripe but payment_intent_id = NULL in DB.
@@ -1477,6 +1508,55 @@ BEGIN
   SET active_stripe_refund_id = p_refund_id
   WHERE id = p_order_id
     AND status = 'REFUND_PENDING';
+END;
+$$;
+
+-- Reconcile an unbound refund: atomically bind + resolve.
+-- Called by cron for REFUND_PENDING orders with NULL active_stripe_refund_id.
+-- p_success BOOLEAN: TRUE → bind + mark REFUNDED; FALSE → bind + revert to previous.
+CREATE OR REPLACE FUNCTION reconcile_refund(p_order_id UUID, p_refund_id TEXT, p_success BOOLEAN)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_order RECORD;
+  v_previous_status TEXT;
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can reconcile refund'; END IF;
+
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
+
+  -- Only unbound REFUND_PENDING orders can be reconciled
+  IF v_order.status <> 'REFUND_PENDING' THEN
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'message', 'No reconciliation required');
+  END IF;
+
+  IF v_order.active_stripe_refund_id IS NOT NULL THEN
+    -- Already bound — must match, else stale
+    IF v_order.active_stripe_refund_id <> p_refund_id THEN
+      RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'message', 'Already bound to different refund');
+    END IF;
+  END IF;
+
+  IF p_success THEN
+    -- Refund succeeded → REFUNDED
+    UPDATE orders
+    SET status = 'REFUNDED',
+        refund_previous_status = NULL,
+        active_stripe_refund_id = NULL
+    WHERE id = p_order_id;
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', 'REFUNDED', 'message', 'Reconciled: refund succeeded');
+  ELSE
+    -- Refund failed/canceled → revert to previous
+    v_previous_status := COALESCE(NULLIF(v_order.refund_previous_status, ''), 'DISPUTED');
+    UPDATE orders
+    SET status = v_previous_status,
+        refund_previous_status = NULL,
+        active_stripe_refund_id = NULL
+    WHERE id = p_order_id;
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', v_previous_status, 'message', 'Reconciled: refund failed, reverted');
+  END IF;
 END;
 $$;
 
@@ -3029,6 +3109,14 @@ REVOKE ALL ON FUNCTION release_product_reservations_by_payment_intent(TEXT) FROM
 -- cleanup_stale_payment_processing: NOT CLIENT-CALLABLE (cron/service_role)
 REVOKE ALL ON FUNCTION cleanup_stale_payment_processing() FROM PUBLIC;
 -- No GRANT: NOT CLIENT-CALLABLE — only backend (cron/admin)
+
+-- cleanup_unbound_refund_orders: NOT CLIENT-CALLABLE (cron/service_role)
+REVOKE ALL ON FUNCTION cleanup_unbound_refund_orders() FROM PUBLIC;
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron/admin)
+
+-- reconcile_refund: NOT CLIENT-CALLABLE (cron recovery)
+REVOKE ALL ON FUNCTION reconcile_refund(UUID, TEXT, BOOLEAN) FROM PUBLIC;
+-- No GRANT: NOT CLIENT-CALLABLE — only backend (cron recovery)
 
 -- cleanup_orphaned_pending_orders: NOT CLIENT-CALLABLE (cron/service_role)
 REVOKE ALL ON FUNCTION cleanup_orphaned_pending_orders() FROM PUBLIC;
