@@ -42,6 +42,26 @@
 --     release sees status=PAID → "No reservations to release".
 --   - Webhook before order persists (PAYMENT_PROCESSING not yet set):
 --     confirm_payment fails → Stripe retries → eventually succeeds.
+--
+-- IDENTITY CONTRACT (4 layers of defense):
+--   LAYER 1 — Stripe: PI.metadata.orderId = ORDER.id
+--   LAYER 2 — Backend: verify PI.metadata.orderId === ORDER.id
+--   LAYER 3 — SQL RPC: ORDER.payment_intent_id: NULL→link / SAME→idempotent / DIFFERENT→MISMATCH
+--   LAYER 4 — Database: UNIQUE(payment_intent_id)
+--   Result: 1 ORDER ↔ 1 PAYMENT INTENT
+--
+-- STRIPE IDEMPOTENCY:
+--   Checkout uses idempotencyKey: `checkout:${orderId}` to prevent duplicate PI creation.
+--   This ensures: 1 ORDER → at most 1 PI created (even across retries).
+--
+-- FINANCIAL DISCREPANCY SCENARIO (requires manual investigation):
+--   If release is called after Stripe actually charged:
+--     CUSTOMER → PAID 💰
+--     ORDER → CANCELLED ❌
+--   This creates a financial discrepancy. The system is designed to prefer
+--   NOT releasing (fail-closed) when uncertain. But if a release happens
+--   after a late succeeded webhook, manual investigation or refund workflow
+--   is required. The cron verifies PI status against Stripe before releasing.
 -- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

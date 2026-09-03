@@ -63,15 +63,23 @@ export async function POST(req) {
     const totalCents = Math.round(orderResult.total * 100);
 
     // 3. Create Stripe PaymentIntent
+    // IDEMPOTENCY KEY: Prevents duplicate PI creation on retry/double-click/network retry.
+    // Stripe returns the SAME PaymentIntent if idempotencyKey matches within 24 hours.
+    // This ensures: 1 ORDER → at most 1 PI created (even across retries).
     let paymentIntent;
     try {
-      paymentIntent = await stripe.paymentIntents.create({
-        amount: totalCents,
-        currency: "eur",
-        payment_method_types: ["card"],
-        capture_method: "manual",
-        metadata: { orderId, buyerId: user.id, productIds: uniqueIds.join(",") },
-      });
+      paymentIntent = await stripe.paymentIntents.create(
+        {
+          amount: totalCents,
+          currency: "eur",
+          payment_method_types: ["card"],
+          capture_method: "manual",
+          metadata: { orderId, buyerId: user.id, productIds: uniqueIds.join(",") },
+        },
+        {
+          idempotencyKey: `checkout:${orderId}`,
+        }
+      );
     } catch (stripeError) {
       console.error("[Checkout] Stripe error:", stripeError);
       // Rollback via RPC — releases products + cancels order
