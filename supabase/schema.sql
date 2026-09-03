@@ -595,129 +595,73 @@ BEGIN
 END;
 $$;
 
--- Begin capture: atomically lock order via capture_status and verify it's capturable
+-- Begin capture: atomically lock order and verify it's capturable
 -- Returns order details if successful, raises exception if not.
 -- Used by capture-payment route to serialize concurrent capture attempts.
--- capture_status provides END-TO-END lock that persists across the Stripe capture() call.
--- Only one request can set capture_status = 'capturing' at a time (atomic UPDATE).
--- Cron resets stale 'capturing' after 5 minutes (server crash recovery).
+-- The FOR UPDATE ensures only one capture can proceed at a time.
 CREATE OR REPLACE FUNCTION begin_capture_order(p_payment_intent_id TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
   v_order RECORD;
-  v_updated_count INTEGER;
+  v_capture_timeout INTERVAL := INTERVAL '5 minutes';
 BEGIN
   IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can begin capture'; END IF;
 
-  -- CRITICAL: Atomic UPDATE with WHERE clause provides end-to-end lock.
-  -- Only one request can transition capture_status from 'idle' to 'capturing'.
-  -- If another request is already capturing, this UPDATE affects 0 rows.
-  UPDATE orders
-  SET capture_status = 'capturing'
-  WHERE payment_intent_id = p_payment_intent_id
-    AND status = 'PAYMENT_PROCESSING'
-    AND capture_status = 'idle';
-
-  GET DIAGNOSTICS v_updated_count = ROW_COUNT;
-
-  IF v_updated_count = 0 THEN
-    -- Check why: order not found, wrong status, or already being captured
-    SELECT id, buyer_id, seller_id, status, payment_intent_id, capture_status
-    INTO v_order
-    FROM orders
-    WHERE payment_intent_id = p_payment_intent_id;
-
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'Order with payment_intent % not found', p_payment_intent_id;
-    END IF;
-
-    IF v_order.status <> 'PAYMENT_PROCESSING' THEN
-      RAISE EXCEPTION 'Cannot capture order in status %', v_order.status;
-    END IF;
-
-    IF v_order.capture_status = 'capturing' THEN
-      RAISE EXCEPTION 'Order is already being captured by another request';
-    END IF;
-
-    RAISE EXCEPTION 'Cannot capture order (capture_status: %)', v_order.capture_status;
-  END IF;
-
-  -- Lock acquired: capture_status = 'capturing' (persists across Stripe call)
-  SELECT id, buyer_id, seller_id, status, payment_intent_id
+  -- Lock order atomically (serializes concurrent captures)
+  SELECT id, buyer_id, seller_id, status, payment_intent_id, capture_in_progress, payment_processing_started_at
   INTO v_order
   FROM orders
-  WHERE payment_intent_id = p_payment_intent_id;
+  WHERE payment_intent_id = p_payment_intent_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order with payment_intent % not found', p_payment_intent_id;
+  END IF;
+
+  -- Only PAYMENT_PROCESSING orders can be captured
+  IF v_order.status <> 'PAYMENT_PROCESSING' THEN
+    RAISE EXCEPTION 'Cannot capture order in status %', v_order.status;
+  END IF;
+
+  -- End-to-end serialization: check capture_in_progress flag
+  IF v_order.capture_in_progress THEN
+    -- Stale lock protection: if capture_in_progress for >5 minutes, assume stuck and allow new capture
+    IF v_order.payment_processing_started_at IS NOT NULL
+       AND v_order.payment_processing_started_at > now() - v_capture_timeout THEN
+      RAISE EXCEPTION 'Capture already in progress for order %', v_order.id;
+    END IF;
+    -- Stale lock detected — reset and allow new capture
+  END IF;
+
+  -- Set capture_in_progress = TRUE (persists across RPC calls)
+  UPDATE orders SET capture_in_progress = TRUE WHERE id = v_order.id;
 
   RETURN jsonb_build_object(
     'order_id', v_order.id,
     'buyer_id', v_order.buyer_id,
     'seller_id', v_order.seller_id,
     'status', v_order.status,
-    'capture_status', 'capturing',
-    'message', 'Order locked for capture (persistent)'
+    'capture_in_progress', TRUE,
+    'message', 'Order locked for capture'
   );
 END;
 $$;
 
--- Complete capture: reset capture_status after successful capture
--- Called by capture-payment route after confirm_payment() succeeds.
--- Sets capture_status = 'captured' (terminal state for this flow).
-CREATE OR REPLACE FUNCTION complete_capture_order(p_payment_intent_id TEXT)
-RETURNS JSONB
+-- Clear capture_in_progress flag (called on capture failure/cancellation)
+-- Used by capture-payment route to release the capture lock on error.
+CREATE OR REPLACE FUNCTION clear_capture_in_progress(p_order_id UUID)
+RETURNS VOID
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
-DECLARE
-  v_updated_count INTEGER;
 BEGIN
-  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can complete capture'; END IF;
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can clear capture lock'; END IF;
 
   UPDATE orders
-  SET capture_status = 'captured'
-  WHERE payment_intent_id = p_payment_intent_id
-    AND capture_status = 'capturing';
-
-  GET DIAGNOSTICS v_updated_count = ROW_COUNT;
-
-  IF v_updated_count = 0 THEN
-    RAISE EXCEPTION 'No capturing order found for payment_intent %', p_payment_intent_id;
-  END IF;
-
-  RETURN jsonb_build_object(
-    'status', 'captured',
-    'message', 'Capture completed'
-  );
-END;
-$$;
-
--- Reset capture: reset capture_status back to 'idle' after capture failure
--- Called by capture-payment route if Stripe capture() or confirm_payment() fails.
--- Allows retry of capture attempt.
-CREATE OR REPLACE FUNCTION reset_capture_order(p_payment_intent_id TEXT)
-RETURNS JSONB
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
-AS $$
-DECLARE
-  v_updated_count INTEGER;
-BEGIN
-  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can reset capture'; END IF;
-
-  UPDATE orders
-  SET capture_status = 'idle'
-  WHERE payment_intent_id = p_payment_intent_id
-    AND capture_status = 'capturing';
-
-  GET DIAGNOSTICS v_updated_count = ROW_COUNT;
-
-  IF v_updated_count = 0 THEN
-    RAISE EXCEPTION 'No capturing order found for payment_intent %', p_payment_intent_id;
-  END IF;
-
-  RETURN jsonb_build_object(
-    'status', 'idle',
-    'message', 'Capture reset'
-  );
+  SET capture_in_progress = FALSE
+  WHERE id = p_order_id
+    AND capture_in_progress = TRUE;
 END;
 $$;
 
@@ -1030,8 +974,8 @@ BEGIN
     RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'message', 'Already confirmed');
   END IF;
 
-  IF v_order.status <> 'PAYMENT_PROCESSING' THEN
-    RAISE EXCEPTION 'Order % is not PAYMENT_PROCESSING (current: %)', p_order_id, v_order.status;
+  IF v_order.status NOT IN ('PAYMENT_PROCESSING', 'CAPTURING') THEN
+    RAISE EXCEPTION 'Order % is not capturable (current: %)', p_order_id, v_order.status;
   END IF;
 
   -- 2. Collect product IDs
@@ -1068,7 +1012,7 @@ BEGIN
   END IF;
 
   -- 5. All validations passed — now mutate atomically
-  UPDATE orders SET status = 'PAID', confirmed_at = now() WHERE id = p_order_id;
+  UPDATE orders SET status = 'PAID', confirmed_at = now(), capture_in_progress = FALSE WHERE id = p_order_id;
 
   UPDATE products
   SET status = 'SOLD', sold_at = now(), reserved_by = NULL, reserved_until = NULL
@@ -1507,18 +1451,12 @@ CREATE TABLE IF NOT EXISTS orders (
   shipping_method TEXT NOT NULL CHECK (shipping_method IN ('standard', 'tracked')),
   tracking_number TEXT,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
-    status IN ('PENDING','PAYMENT_PROCESSING','PAID','PREPARING','SHIPPED','DELIVERED','COMPLETED','CANCELLED','REFUNDED','DISPUTED')
-  ),
-  -- CRITICAL: capture_status provides end-to-end serialization for capture flow.
-  -- begin_capture_order() sets 'capturing' atomically (only one request wins).
-  -- capture-payment route resets to 'idle' on success/failure.
-  -- Cron resets stale 'capturing' after 5 minutes (server crash recovery).
-  capture_status TEXT NOT NULL DEFAULT 'idle' CHECK (
-    capture_status IN ('idle','capturing','captured')
+    status IN ('PENDING','PAYMENT_PROCESSING','CAPTURING','PAID','PREPARING','SHIPPED','DELIVERED','COMPLETED','CANCELLED','REFUNDED','DISPUTED')
   ),
   shipping_address TEXT NOT NULL CHECK (length(shipping_address) <= 500),
   payment_intent_id TEXT,
   payment_processing_started_at TIMESTAMPTZ,
+  capture_in_progress BOOLEAN DEFAULT FALSE NOT NULL,  -- End-to-end capture serialization
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
   confirmed_at TIMESTAMPTZ,
   shipped_at TIMESTAMPTZ,
@@ -1557,12 +1495,6 @@ BEGIN
   IF OLD.total IS DISTINCT FROM NEW.total THEN RAISE EXCEPTION 'Cannot change total'; END IF;
   IF OLD.shipping_method IS DISTINCT FROM NEW.shipping_method THEN RAISE EXCEPTION 'Cannot change shipping_method'; END IF;
   IF OLD.shipping_address IS DISTINCT FROM NEW.shipping_address THEN RAISE EXCEPTION 'Cannot change shipping_address'; END IF;
-
-  -- capture_status: allowed to change (used for end-to-end capture serialization)
-  -- begin_capture_order(): idle → capturing
-  -- complete_capture_order(): capturing → captured
-  -- reset_capture_order(): capturing → idle
-  -- cron: stale capturing → idle (crash recovery)
 
   -- payment_intent_id: only assignable during PENDING→PAYMENT_PROCESSING
   -- and only when payment_processing_started_at is also set atomically
@@ -1603,6 +1535,15 @@ BEGIN
     -- First assignment: must happen during PENDING→PAYMENT_PROCESSING only
     IF NOT (OLD.status = 'PENDING' AND NEW.status = 'PAYMENT_PROCESSING') THEN
       RAISE EXCEPTION 'payment_processing_started_at can only be assigned during PENDING→PAYMENT_PROCESSING';
+    END IF;
+  END IF;
+
+  -- capture_in_progress: mutable only during capture flow (system-level control)
+  -- Allows begin_capture_order() to set TRUE and capture route to set FALSE
+  IF OLD.capture_in_progress IS DISTINCT FROM NEW.capture_in_progress THEN
+    -- Can only change if status is PAYMENT_PROCESSING or CAPTURING
+    IF NEW.status NOT IN ('PAYMENT_PROCESSING', 'CAPTURING') THEN
+      RAISE EXCEPTION 'capture_in_progress can only be changed during capture flow';
     END IF;
   END IF;
 
