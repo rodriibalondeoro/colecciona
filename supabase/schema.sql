@@ -1568,7 +1568,7 @@ BEGIN
   WHERE id = COALESCE(NEW.collection_id, OLD.collection_id);
   RETURN COALESCE(NEW, OLD);
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 DROP TRIGGER IF EXISTS trg_update_collection_totals ON collection_items;
 CREATE TRIGGER trg_update_collection_totals
