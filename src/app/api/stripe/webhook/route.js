@@ -22,9 +22,15 @@ export async function POST(req) {
     return NextResponse.json({ error: "Webhook not configured" }, { status: 500 });
   }
 
+  const stripe = getStripe();
+  if (!stripe) {
+    console.error("[Webhook] Stripe not configured");
+    return NextResponse.json({ error: "Webhook unavailable" }, { status: 503 });
+  }
+
   let event;
   try {
-    event = getStripe().webhooks.constructEvent(body, sig, webhookSecret);
+    event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
   } catch (err) {
     console.error("[Webhook] Firma inválida:", err.message);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
@@ -84,6 +90,23 @@ export async function POST(req) {
         criticalError = error.message;
       } else {
         console.log("[Webhook] Reservations released:", data);
+      }
+      break;
+    }
+    case "payment_intent.canceled": {
+      const pi = event.data.object;
+      console.log(`[Webhook] Payment canceled: ${pi.id}`);
+      // IDEMPOTENT: release returns "No reservations" if order already CANCELLED/PAID.
+      // Handles: explicit cancel, Stripe auto-cancel, merchant cancel.
+      // Consistent with payment_intent.canceled policy — releases reservations immediately.
+      const { data, error } = await supabase.rpc("release_product_reservations_by_payment_intent", {
+        p_payment_intent_id: pi.id,
+      });
+      if (error) {
+        console.error("[Webhook] Error releasing reservations on cancel:", error.message);
+        criticalError = error.message;
+      } else {
+        console.log("[Webhook] Reservations released on cancel:", data);
       }
       break;
     }

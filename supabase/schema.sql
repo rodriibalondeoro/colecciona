@@ -1179,6 +1179,11 @@ BEGIN
     RAISE EXCEPTION 'Invalid shipping method: %. Must be standard or tracked', p_shipping_method;
   END IF;
 
+  -- Validate shipping address: max 500 chars, reject if suspiciously long
+  IF length(p_shipping_address) > 500 THEN
+    RAISE EXCEPTION 'Shipping address too long (max 500 characters)';
+  END IF;
+
   -- Lock and validate all products (FOR UPDATE prevents race conditions)
   -- ORDER BY id ensures deterministic locking order (global convention: orders → products by id)
   FOR v_product IN
@@ -1285,7 +1290,7 @@ CREATE TABLE IF NOT EXISTS orders (
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
     status IN ('PENDING','PAYMENT_PROCESSING','PAID','PREPARING','SHIPPED','DELIVERED','COMPLETED','CANCELLED','REFUNDED','DISPUTED')
   ),
-  shipping_address TEXT NOT NULL,
+  shipping_address TEXT NOT NULL CHECK (length(shipping_address) <= 500),
   payment_intent_id TEXT,
   payment_processing_started_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
