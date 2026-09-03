@@ -1320,9 +1320,12 @@ BEGIN
     RETURN jsonb_build_object('order_id', p_order_id, 'status', 'REFUNDED', 'message', 'Already refunded');
   END IF;
 
-  -- IDENTITY CHECK: if an active refund is bound and differs, this is a stale webhook
-  IF p_refund_id IS NOT NULL
-     AND v_order.active_stripe_refund_id IS NOT NULL
+  -- IDENTITY CHECK for succeeded refund:
+  --   active is NULL    → refund never bound (crash before bind) → RECONCILE: bind it.
+  --                       A succeeded refund is financially complete, so binding is safe.
+  --   active = refund_id→ match → proceed
+  --   active != refund_id → stale webhook → no-op
+  IF v_order.active_stripe_refund_id IS NOT NULL
      AND v_order.active_stripe_refund_id <> p_refund_id THEN
     RETURN jsonb_build_object(
       'order_id', p_order_id,
@@ -1385,11 +1388,20 @@ BEGIN
     RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'message', 'No refund recovery required');
   END IF;
 
-  -- IDENTITY CHECK: only revert if this refund is the active one.
-  -- A delayed old webhook (different refund.id) must NOT cancel the current refund.
-  IF p_refund_id IS NOT NULL
-     AND v_order.active_stripe_refund_id IS NOT NULL
-     AND v_order.active_stripe_refund_id <> p_refund_id THEN
+  -- IDENTITY CHECK (fail-closed): only revert for the ACTIVE refund.
+  -- Cases:
+  --   active IS NULL     → refund was never bound (crash before bind) → DO NOT revert
+  --   active = refund_id → match → revert
+  --   active != refund_id→ stale webhook → no-op
+  IF v_order.active_stripe_refund_id IS NULL THEN
+    RETURN jsonb_build_object(
+      'order_id', p_order_id,
+      'status', v_order.status,
+      'message', 'Refund not bound — cannot verify identity, requiring reconciliation'
+    );
+  END IF;
+
+  IF v_order.active_stripe_refund_id <> p_refund_id THEN
     RETURN jsonb_build_object(
       'order_id', p_order_id,
       'status', v_order.status,
