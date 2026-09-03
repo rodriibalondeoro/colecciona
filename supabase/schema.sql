@@ -1303,7 +1303,7 @@ $$;
 -- Mark order as refunded: ONLY called after Stripe confirms refund succeeded
 -- Called by webhook handler for charge.refunded event
 -- This is the ONLY way to transition to REFUNDED status
-CREATE OR REPLACE FUNCTION mark_order_refunded(p_order_id UUID)
+CREATE OR REPLACE FUNCTION mark_order_refunded(p_order_id UUID, p_refund_id TEXT DEFAULT NULL)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
@@ -1320,14 +1320,27 @@ BEGIN
     RETURN jsonb_build_object('order_id', p_order_id, 'status', 'REFUNDED', 'message', 'Already refunded');
   END IF;
 
+  -- IDENTITY CHECK: if an active refund is bound and differs, this is a stale webhook
+  IF p_refund_id IS NOT NULL
+     AND v_order.active_stripe_refund_id IS NOT NULL
+     AND v_order.active_stripe_refund_id <> p_refund_id THEN
+    RETURN jsonb_build_object(
+      'order_id', p_order_id,
+      'status', v_order.status,
+      'message', 'Stale refund webhook ignored (active refund differs)'
+    );
+  END IF;
+
   -- Only REFUND_PENDING orders can be marked refunded
-  -- The webhook first transitions to REFUND_PENDING (initiation),
-  -- then confirms with this function → REFUNDED.
   IF v_order.status <> 'REFUND_PENDING' THEN
     RAISE EXCEPTION 'Cannot refund order in status % (expected REFUND_PENDING)', v_order.status;
   END IF;
 
-  UPDATE orders SET status = 'REFUNDED' WHERE id = p_order_id;
+  UPDATE orders
+  SET status = 'REFUNDED',
+      refund_previous_status = NULL,
+      active_stripe_refund_id = NULL
+  WHERE id = p_order_id;
 
   -- Notify buyer
   INSERT INTO notifications (user_id, type, title, message, data, read)
@@ -1347,8 +1360,9 @@ $$;
 
 -- Resolve refund failure: revert REFUND_PENDING → previous status
 -- Called by webhook when Stripe confirms refund failed/canceled.
--- Prevents REFUND_PENDING from being stuck forever.
-CREATE OR REPLACE FUNCTION resolve_refund_failed(p_order_id UUID)
+-- IDENTITY CHECK: only revert if the webhook's refund.id matches the active refund.
+-- Prevents a delayed refund.failed webhook from canceling a NEWER refund's interlock.
+CREATE OR REPLACE FUNCTION resolve_refund_failed(p_order_id UUID, p_refund_id TEXT DEFAULT NULL)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
@@ -1362,15 +1376,25 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
 
   -- FAIL-CLOSED: NEVER restore from REFUNDED.
-  -- A delayed refund.failed/canceled webhook arriving AFTER refund succeeded
-  -- must NOT revert REFUNDED → previous status.
   IF v_order.status = 'REFUNDED' THEN
     RETURN jsonb_build_object('order_id', p_order_id, 'status', 'REFUNDED', 'message', 'Already refunded — no recovery');
   END IF;
 
-  -- IDEMPOTENT: only act on REFUND_PENDING. Any other state (already restored) → no-op.
+  -- IDEMPOTENT: only act on REFUND_PENDING.
   IF v_order.status <> 'REFUND_PENDING' THEN
     RETURN jsonb_build_object('order_id', p_order_id, 'status', v_order.status, 'message', 'No refund recovery required');
+  END IF;
+
+  -- IDENTITY CHECK: only revert if this refund is the active one.
+  -- A delayed old webhook (different refund.id) must NOT cancel the current refund.
+  IF p_refund_id IS NOT NULL
+     AND v_order.active_stripe_refund_id IS NOT NULL
+     AND v_order.active_stripe_refund_id <> p_refund_id THEN
+    RETURN jsonb_build_object(
+      'order_id', p_order_id,
+      'status', v_order.status,
+      'message', 'Stale refund webhook ignored (active refund differs)'
+    );
   END IF;
 
   -- Revert to previous status (from begin_refund), fallback to DISPUTED
@@ -1381,7 +1405,8 @@ BEGIN
 
   UPDATE orders
   SET status = v_previous_status,
-      refund_previous_status = NULL
+      refund_previous_status = NULL,
+      active_stripe_refund_id = NULL
   WHERE id = p_order_id;
 
   RETURN jsonb_build_object('order_id', p_order_id, 'status', v_previous_status, 'message', 'Refund failed — reverted');
@@ -1423,6 +1448,23 @@ BEGIN
     'payment_intent_id', v_order.payment_intent_id,
     'message', 'Refund initiated — awaiting Stripe confirmation'
   );
+END;
+$$;
+
+-- Bind active refund: record which Stripe refund is currently in flight.
+-- Called by /api/refund AFTER Stripe Refund.create() returns refund.id.
+-- Enables ORDER ↔ ACTIVE REFUND identity check in webhook.
+CREATE OR REPLACE FUNCTION bind_active_refund(p_order_id UUID, p_refund_id TEXT)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'Only the system can bind refund'; END IF;
+
+  UPDATE orders
+  SET active_stripe_refund_id = p_refund_id
+  WHERE id = p_order_id
+    AND status = 'REFUND_PENDING';
 END;
 $$;
 
@@ -1611,6 +1653,7 @@ CREATE TABLE IF NOT EXISTS orders (
   capture_in_progress BOOLEAN DEFAULT FALSE NOT NULL,  -- End-to-end capture serialization
   capture_started_at TIMESTAMPTZ,  -- When capture_in_progress was set (for stale lock detection)
   refund_previous_status TEXT,  -- Status before REFUND_PENDING (for refund failure recovery)
+  active_stripe_refund_id TEXT,  -- Stripe refund currently in flight (identity check)
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
   confirmed_at TIMESTAMPTZ,
   shipped_at TIMESTAMPTZ,
@@ -3014,10 +3057,13 @@ REVOKE ALL ON FUNCTION begin_capture_order(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION clear_capture_in_progress(UUID) FROM PUBLIC;
 
 -- mark_order_refunded: NOT CLIENT-CALLABLE (Stripe webhook only)
-REVOKE ALL ON FUNCTION mark_order_refunded(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION mark_order_refunded(UUID, TEXT) FROM PUBLIC;
 
 -- begin_refund: NOT CLIENT-CALLABLE (service_role / refund route only)
 REVOKE ALL ON FUNCTION begin_refund(UUID) FROM PUBLIC;
 
+-- bind_active_refund: NOT CLIENT-CALLABLE (service_role / refund route only)
+REVOKE ALL ON FUNCTION bind_active_refund(UUID, TEXT) FROM PUBLIC;
+
 -- resolve_refund_failed: NOT CLIENT-CALLABLE (Stripe webhook only)
-REVOKE ALL ON FUNCTION resolve_refund_failed(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION resolve_refund_failed(UUID, TEXT) FROM PUBLIC;

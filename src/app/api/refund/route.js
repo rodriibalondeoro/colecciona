@@ -112,6 +112,16 @@ export async function POST(req) {
 
     console.log(`[Refund] Created refund ${refund.id} for order ${orderId}`);
 
+    // 6b. Bind the active refund ID (ORDER ↔ ACTIVE REFUND identity)
+    // Enables webhook identity check: only the current refund's events are honored.
+    const { error: bindError } = await supabase.rpc("bind_active_refund", {
+      p_order_id: orderId,
+      p_refund_id: refund.id,
+    });
+    if (bindError) {
+      console.error(`[Refund] Failed to bind active refund for order ${orderId}:`, bindError.message);
+    }
+
     // 7. Persist refund evidence (pending state — webhook updates to succeeded)
     // is_full_refund set to false here: Stripe is the financial authority.
     const { error: persistError } = await supabase.from("refunds").insert({

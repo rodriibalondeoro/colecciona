@@ -188,9 +188,10 @@ export async function POST(req) {
 
           if (fullRefund) {
             // mark_order_refunded() requires REFUND_PENDING (set by /api/refund).
-            // If status is already REFUND_PENDING, it transitions to REFUNDED.
+            // Pass refund_id for identity check: stale webhooks are ignored.
             const { error: refundError } = await supabase.rpc("mark_order_refunded", {
               p_order_id: order.id,
+              p_refund_id: refundId,
             });
             if (refundError) {
               console.error(`[Webhook] Error marking order ${order.id} refunded:`, refundError.message);
@@ -208,11 +209,12 @@ export async function POST(req) {
       }
 
       // Refund failed/canceled: revert REFUND_PENDING → previous status
-      // Prevents the order from being stuck in REFUND_PENDING forever.
+      // Pass refund_id for identity check: stale webhooks (old refund) are ignored.
       if (refund.status === "failed" || refund.status === "canceled") {
         console.log(`[Webhook] Refund ${refundId} ${refund.status} — reverting order ${order.id} from REFUND_PENDING`);
         const { error: revertError } = await supabase.rpc("resolve_refund_failed", {
           p_order_id: order.id,
+          p_refund_id: refundId,
         });
         if (revertError) {
           console.error(`[Webhook] Error reverting order ${order.id} after refund failure:`, revertError.message);
