@@ -1480,8 +1480,48 @@ CREATE TABLE IF NOT EXISTS order_items (
   UNIQUE(order_id, product_id)
 );
 CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
--- UNIQUE(product_id): a product can only be sold once across ALL orders
-CREATE UNIQUE INDEX IF NOT EXISTS idx_order_items_product ON order_items(product_id);
+-- REMOVED: idx_order_items_product unique index (prevented re-sale after cancellation)
+-- Replaced with trigger-based constraint: only 1 active order per product at a time.
+
+-- Trigger: prevent product from appearing in multiple active orders
+-- A product can be in multiple order_items records, but only ONE can be for a
+-- non-cancelled/refunded/disputed order at a time.
+-- This allows re-sale after cancellation while preventing double-selling.
+CREATE OR REPLACE FUNCTION check_unique_active_product()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_active_count INTEGER;
+  v_new_order_status TEXT;
+BEGIN
+  -- Get the status of the new order
+  SELECT status INTO v_new_order_status
+  FROM orders WHERE id = NEW.order_id;
+
+  -- If the new order is cancelled/refunded/disputed, no constraint needed
+  IF v_new_order_status IN ('CANCELLED', 'REFUNDED', 'DISPUTED') THEN
+    RETURN NEW;
+  END IF;
+
+  -- Count how many active orders already have this product
+  SELECT COUNT(*) INTO v_active_count
+  FROM order_items oi
+  JOIN orders o ON oi.order_id = o.id
+  WHERE oi.product_id = NEW.product_id
+    AND o.id <> NEW.order_id  -- Exclude the current order
+    AND o.status NOT IN ('CANCELLED', 'REFUNDED', 'DISPUTED');
+
+  IF v_active_count > 0 THEN
+    RAISE EXCEPTION 'Product % already exists in an active order. Cannot sell to multiple buyers simultaneously.', NEW.product_id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_check_unique_active_product
+  BEFORE INSERT ON order_items
+  FOR EACH ROW EXECUTE FUNCTION check_unique_active_product();
 
 -- Order state machine: validate transitions + block immutable fields
 CREATE OR REPLACE FUNCTION validate_order_transition()
