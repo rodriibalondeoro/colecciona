@@ -61,14 +61,42 @@
 --     PI confirmed → requires_capture (funds AUTHORIZED/HELD, NOT captured)
 --     capture() called → succeeded (funds CAPTURED/transferred)
 --     payment_intent.succeeded fires (AFTER capture, NOT after authorization)
+--   NOTE: payment_intent.captured does NOT exist as a Stripe event.
+--   A capture arrives as payment_intent.succeeded.
 --   Our system ONLY marks ORDER=PAID and PRODUCTS=SOLD after explicit capture().
---   This is enforced by 3 paths, all requiring capture first:
---     1. capture-payment route: calls stripe.paymentIntents.capture() → then confirm
+--   This is enforced by 2 paths, both requiring capture first:
+--     1. capture-payment route: verifies authorization → calls capture() → then confirm
 --     2. payment_intent.succeeded webhook: fires only after capture()
---     3. payment_intent.captured webhook: fires only after capture()
---   All 3 paths are idempotent (confirm_payment checks PAID status).
+--   Both paths are idempotent (confirm_payment checks PAID status).
 --   If authorization expires without capture: PI → requires_payment_method/canceled
 --     → payment_intent.payment_failed/canceled fires → release reservations
+--
+-- CAPTURE-PAYMENT AUTHORIZATION CHAIN:
+--   1. User authenticated (verifyAuth)
+--   2. Find order by payment_intent_id
+--   3. Verify user is participant (buyer or seller)
+--   4. Verify order status = PAYMENT_PROCESSING
+--   5. Verify PI status = requires_capture (via Stripe API)
+--   6. Call stripe.paymentIntents.capture()
+--   7. Call mark_products_sold_by_payment_intent() → ORDER=PAID, PRODUCTS=SOLD
+--   Never: client sends paymentIntentId → server blindly captures ❌
+--
+-- STRIPE WEBHOOK EVENT TABLE (explicit, tested):
+--   Event                         | Handler                          | Action
+--   ------------------------------|----------------------------------|--------
+--   payment_intent.succeeded      | mark_products_sold_by_payment_   | ORDER→PAID
+--                                 | intent()                         | PRODUCTS→SOLD
+--   payment_intent.payment_failed | release_product_reservations_    | PRODUCTS→ACTIVE
+--                                 | by_payment_intent()              | ORDER→CANCELLED
+--   payment_intent.canceled       | release_product_reservations_    | PRODUCTS→ACTIVE
+--                                 | by_payment_intent()              | ORDER→CANCELLED
+--   charge.succeeded              | (logged only)                    | —
+--   charge.updated                | (logged only)                    | —
+--   payment_intent.captured       | DOES NOT EXIST in Stripe API     | —
+--   (capture arrives as payment_intent.succeeded)
+--   customer.subscription.created | upsert subscription              | —
+--   customer.subscription.updated | update subscription              | —
+--   customer.subscription.deleted | update subscription → canceled   | —
 --
 -- FINANCIAL DISCREPANCY SCENARIO (requires manual investigation):
 --   If release is called after Stripe actually charged:

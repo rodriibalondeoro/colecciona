@@ -49,6 +49,7 @@ export async function POST(req) {
       const pi = event.data.object;
       console.log(`[Webhook] Payment succeeded: ${pi.id}`);
       // IDEMPOTENT: confirm_payment returns "Already confirmed" if order already PAID.
+      // With capture_method: "manual", this fires ONLY after explicit capture().
       // RACE WINDOW: If webhook arrives before order status is updated to PAYMENT_PROCESSING
       // (between PI creation and order update), confirm_payment will fail with
       // "not PAYMENT_PROCESSING". We return 500 → Stripe retries → eventually succeeds.
@@ -60,20 +61,6 @@ export async function POST(req) {
         criticalError = error.message;
       } else {
         console.log("[Webhook] Order confirmed:", data);
-      }
-      break;
-    }
-    case "payment_intent.captured": {
-      const pi = event.data.object;
-      console.log(`[Webhook] Payment captured: ${pi.id}`);
-      const { data, error } = await supabase.rpc("mark_products_sold_by_payment_intent", {
-        p_payment_intent_id: pi.id,
-      });
-      if (error) {
-        console.error("[Webhook] Error capturing payment:", error.message);
-        criticalError = error.message;
-      } else {
-        console.log("[Webhook] Payment captured:", data);
       }
       break;
     }
