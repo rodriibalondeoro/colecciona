@@ -307,24 +307,38 @@ export async function GET(req) {
 
       for (const order of unboundOrders) {
         try {
-          // Query Stripe for refunds on this PaymentIntent
-          const refunds = await stripe.refunds.list({
-            payment_intent: order.payment_intent_id,
-            limit: 10,
-          });
+          // Query Stripe for refunds on this PaymentIntent, PAGINATING until we find
+          // the refund matching metadata.order_id or exhaust all pages.
+          let matchingRefund = null;
+          let hasMore = true;
+          let startingAfter = null;
 
-          if (!refunds.data || refunds.data.length === 0) {
-            console.log(`[Cron] Refund reconcile: no refunds found for order ${order.order_id} — keeping REFUND_PENDING`);
-            results.kept++;
-            continue;
+          while (hasMore && !matchingRefund) {
+            const listParams = {
+              payment_intent: order.payment_intent_id,
+              limit: 100,
+            };
+            if (startingAfter) {
+              listParams.starting_after = startingAfter;
+            }
+
+            const refunds = await stripe.refunds.list(listParams);
+
+            // Search this page for matching metadata.order_id
+            for (const r of refunds.data) {
+              if (r.metadata?.order_id === order.order_id) {
+                matchingRefund = r;
+                break;
+              }
+            }
+
+            hasMore = refunds.has_more;
+            if (hasMore && refunds.data.length > 0) {
+              startingAfter = refunds.data[refunds.data.length - 1].id;
+            }
           }
 
-          // DETERMINISTIC match: use metadata.order_id to identify the exact refund.
-          // NO fallback: if no deterministic match, KEEP REFUND_PENDING (fail-closed).
-          const matchingRefund = refunds.data.find(
-            (r) => r.metadata?.order_id === order.order_id
-          );
-
+          // DETERMINISTIC match required — NO fallback (fail-closed).
           if (!matchingRefund) {
             console.warn("[Cron] Refund reconcile: no deterministic refund match", {
               order_id: order.order_id,
