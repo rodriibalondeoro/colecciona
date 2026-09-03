@@ -241,21 +241,27 @@ export async function POST(req) {
       const sub = event.data.object;
       const userId = sub.metadata?.user_id;
       console.log(`[Webhook] Subscription created: ${sub.id} for user ${userId}`);
-      if (userId) {
-        const { error } = await supabase.from("subscriptions").upsert({
-          user_id: userId,
-          stripe_subscription_id: sub.id,
-          stripe_customer_id: sub.customer,
-          status: sub.status,
-          plan: "premium_monthly",
-          amount: (sub.items?.data?.[0]?.price?.unit_amount || 499) / 100,
-          current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
-          current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
-        }, { onConflict: "stripe_subscription_id" });
-        if (error) {
-          console.error("[Webhook] Subscription upsert error:", error.message);
-          criticalError = error.message;
-        }
+
+      // Identity is critical: without user_id we cannot sync privileges.
+      if (!userId) {
+        console.error("[Webhook] Subscription missing user_id metadata:", sub.id);
+        criticalError = `Subscription ${sub.id} missing user identity`;
+        break;
+      }
+
+      const { error } = await supabase.from("subscriptions").upsert({
+        user_id: userId,
+        stripe_subscription_id: sub.id,
+        stripe_customer_id: sub.customer,
+        status: sub.status,
+        plan: "premium_monthly",
+        amount: (sub.items?.data?.[0]?.price?.unit_amount || 499) / 100,
+        current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
+        current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+      }, { onConflict: "stripe_subscription_id" });
+      if (error) {
+        console.error("[Webhook] Subscription upsert error:", error.message);
+        criticalError = error.message;
       }
       break;
     }
@@ -263,16 +269,21 @@ export async function POST(req) {
       const sub = event.data.object;
       const userId = sub.metadata?.user_id;
       console.log(`[Webhook] Subscription updated: ${sub.id} status=${sub.status}`);
-      if (userId) {
-        const { error } = await supabase.from("subscriptions").update({
-          status: sub.status,
-          current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
-          cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
-        }).eq("stripe_subscription_id", sub.id);
-        if (error) {
-          console.error("[Webhook] Subscription update error:", error.message);
-          criticalError = error.message;
-        }
+
+      if (!userId) {
+        console.error("[Webhook] Subscription missing user_id metadata:", sub.id);
+        criticalError = `Subscription ${sub.id} missing user identity`;
+        break;
+      }
+
+      const { error } = await supabase.from("subscriptions").update({
+        status: sub.status,
+        current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+        cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
+      }).eq("stripe_subscription_id", sub.id);
+      if (error) {
+        console.error("[Webhook] Subscription update error:", error.message);
+        criticalError = error.message;
       }
       break;
     }
@@ -280,14 +291,19 @@ export async function POST(req) {
       const sub = event.data.object;
       const userId = sub.metadata?.user_id;
       console.log(`[Webhook] Subscription deleted: ${sub.id}`);
-      if (userId) {
-        const { error } = await supabase.from("subscriptions").update({
-          status: "canceled",
-        }).eq("stripe_subscription_id", sub.id);
-        if (error) {
-          console.error("[Webhook] Subscription delete error:", error.message);
-          criticalError = error.message;
-        }
+
+      if (!userId) {
+        console.error("[Webhook] Subscription missing user_id metadata:", sub.id);
+        criticalError = `Subscription ${sub.id} missing user identity`;
+        break;
+      }
+
+      const { error } = await supabase.from("subscriptions").update({
+        status: "canceled",
+      }).eq("stripe_subscription_id", sub.id);
+      if (error) {
+        console.error("[Webhook] Subscription delete error:", error.message);
+        criticalError = error.message;
       }
       break;
     }
