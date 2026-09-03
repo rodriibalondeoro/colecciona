@@ -126,7 +126,12 @@ export async function POST(req) {
 
     if (persistError) {
       console.error(`[Refund] Failed to persist refund for order ${orderId}:`, persistError.message);
-      // Refund created in Stripe but evidence not persisted — webhook will persist it
+      // CRITICAL: Stripe already created the refund. Do NOT revert REFUND_PENDING.
+      // Return 500 so the caller knows persistence failed — webhook will recover.
+      return NextResponse.json(
+        { error: "Refund created but confirmation is pending" },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({
