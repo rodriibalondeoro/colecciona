@@ -1683,14 +1683,16 @@ BEGIN
         AND NEW.status = 'CANCELLED'
         AND (auth.uid() = OLD.buyer_id OR auth.uid() = OLD.seller_id) THEN true
 
-      -- Cancellation after Stripe confirms terminal failure: PAID/PREPARING only (service_role)
-      -- PAYMENT_PROCESSING/CAPTURING: must go through release_product_reservations_by_payment_intent()
-      -- which queries Stripe FIRST to confirm PI is terminal (canceled/failed)
-      WHEN OLD.status IN ('PAID','PREPARING')
+      -- Cancellation after Stripe confirms terminal failure: PAYMENT_PROCESSING/CAPTURING only
+      -- Must go through release_product_reservations_by_payment_intent() which queries Stripe FIRST
+      -- CANCELLED = operation cancelled without payment finalized
+      WHEN OLD.status IN ('PAYMENT_PROCESSING','CAPTURING')
         AND NEW.status = 'CANCELLED'
         AND auth.uid() IS NULL THEN true
 
-      -- Refund: ONLY via service_role (Stripe refund / admin)
+      -- Refund: money captured then returned — Stripe refund confirmed
+      -- REFUNDED = money captured and subsequently devuelto
+      -- ONLY via service_role (Stripe refund / admin)
       WHEN OLD.status IN ('PAID','PREPARING','SHIPPED','DELIVERED')
         AND NEW.status = 'REFUNDED'
         AND auth.uid() IS NULL THEN true
