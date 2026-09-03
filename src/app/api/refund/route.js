@@ -97,15 +97,16 @@ export async function POST(req) {
       );
     } catch (stripeErr) {
       console.error("[Refund] Stripe refund create failed:", stripeErr);
-      // Revert REFUND_PENDING back to original status (refund never initiated in Stripe)
-      await supabase
-        .from("orders")
-        .update({ status: order.status })
-        .eq("id", orderId)
-        .eq("status", "REFUND_PENDING");
+
+      // CRITICAL: The error is ambiguous (timeout/network). Stripe may have
+      // actually created the refund — the response was just lost.
+      // DO NOT revert REFUND_PENDING here. Keep REFUND_PENDING and let the
+      // webhook (refund.created/updated) confirm the true outcome.
+      // This follows the same rule as capture-payment: after crossing the
+      // Stripe boundary, never assume the operation did NOT happen.
       return NextResponse.json(
-        { error: "Unable to initiate refund" },
-        { status: 400 }
+        { error: "Refund initiated but outcome pending confirmation" },
+        { status: 500 }
       );
     }
 

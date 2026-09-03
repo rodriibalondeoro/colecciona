@@ -1315,6 +1315,11 @@ BEGIN
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order % not found', p_order_id; END IF;
 
+  -- Idempotency: if already REFUNDED, return no-op success (webhook retries safe)
+  IF v_order.status = 'REFUNDED' THEN
+    RETURN jsonb_build_object('order_id', p_order_id, 'status', 'REFUNDED', 'message', 'Already refunded');
+  END IF;
+
   -- Only REFUND_PENDING orders can be marked refunded
   -- The webhook first transitions to REFUND_PENDING (initiation),
   -- then confirms with this function → REFUNDED.
