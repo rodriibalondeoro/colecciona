@@ -110,7 +110,7 @@ export async function POST(req) {
       // Find order by payment_intent_id
       const { data: order, error: orderError } = await supabase
         .from("orders")
-        .select("id, status")
+        .select("id, status, total")
         .eq("payment_intent_id", piId)
         .single();
 
@@ -119,8 +119,18 @@ export async function POST(req) {
         break;
       }
 
+      // CRITICAL: Only mark REFUNDED if this is a FULL refund
+      // charge.amount_refunded is in cents, order.total is in euros
+      const amountRefundedEuros = charge.amount_refunded / 100;
+      const isFullRefund = Math.abs(amountRefundedEuros - order.total) < 0.01;
+
+      if (!isFullRefund) {
+        console.log(`[Webhook] Partial refund: ${amountRefundedEuros}€ of ${order.total}€ — NOT marking REFUNDED`);
+        // Log partial refund for admin visibility, but do NOT change order status
+        break;
+      }
+
       // Only mark as REFUNDED if order is in a refundable state
-      // idempotent: if already REFUNDED, mark_order_refunded will handle
       if (["PAID", "PREPARING", "SHIPPED", "DELIVERED", "DISPUTED"].includes(order.status)) {
         const { error: refundError } = await supabase.rpc("mark_order_refunded", {
           p_order_id: order.id,
@@ -129,7 +139,7 @@ export async function POST(req) {
           console.error(`[Webhook] Error marking order ${order.id} refunded:`, refundError.message);
           criticalError = refundError.message;
         } else {
-          console.log(`[Webhook] Order ${order.id} marked REFUNDED`);
+          console.log(`[Webhook] Order ${order.id} marked REFUNDED (full refund confirmed)`);
         }
       } else {
         console.log(`[Webhook] Order ${order.id} status=${order.status} — skipping refund marking`);

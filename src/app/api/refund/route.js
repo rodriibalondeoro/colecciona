@@ -41,15 +41,19 @@ export async function POST(req) {
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    // 2. Verify user is a participant
-    if (order.buyer_id !== user.id && order.seller_id !== user.id) {
-      return NextResponse.json({ error: "Not a participant in this order" }, { status: 403 });
+    // 2. Verify user is the SELLER (only seller can initiate refund)
+    // Buyer should open a dispute instead of directly requesting refund
+    if (order.seller_id !== user.id) {
+      return NextResponse.json(
+        { error: "Only the seller can initiate a refund. Buyers should open a dispute." },
+        { status: 403 }
+      );
     }
 
     // 3. Verify order is in refundable state
     if (!["PAID", "PREPARING", "SHIPPED", "DELIVERED"].includes(order.status)) {
       return NextResponse.json(
-        { error: `Cannot refund order in status: ${order.status}` },
+        { error: "Unable to initiate refund for this order" },
         { status: 400 }
       );
     }
@@ -89,10 +93,10 @@ export async function POST(req) {
   } catch (error) {
     console.error("[Refund] Error:", error);
 
-    // Handle Stripe-specific errors
+    // Hide internal Stripe errors from client
     if (error.type === "StripeInvalidRequestError") {
       return NextResponse.json(
-        { error: `Stripe error: ${error.message}` },
+        { error: "Unable to initiate refund" },
         { status: 400 }
       );
     }
