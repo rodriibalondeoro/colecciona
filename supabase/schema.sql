@@ -1487,6 +1487,12 @@ CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
 -- A product can be in multiple order_items records, but only ONE can be for a
 -- non-cancelled/refunded/disputed order at a time.
 -- This allows re-sale after cancellation while preventing double-selling.
+--
+-- IMPORTANT: This trigger is NOT the primary concurrency protection.
+-- The PRIMARY protection is reserve_products_for_checkout(), which atomically
+-- transitions PRODUCT from ACTIVE → RESERVED using FOR UPDATE.
+-- Two buyers cannot reserve the same product simultaneously.
+-- This trigger is a defense-in-depth check for edge cases.
 CREATE OR REPLACE FUNCTION check_unique_active_product()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
@@ -1504,6 +1510,8 @@ BEGIN
   END IF;
 
   -- Count how many active orders already have this product
+  -- NOTE: This SELECT is not atomic and can race under extreme concurrency.
+  -- The primary protection is the product reservation mechanism, not this trigger.
   SELECT COUNT(*) INTO v_active_count
   FROM order_items oi
   JOIN orders o ON oi.order_id = o.id
