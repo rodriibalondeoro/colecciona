@@ -175,9 +175,16 @@ export async function POST(req) {
           const fullRefund = totalRefundedCents >= expectedAmountCents;
 
           // Update is_full_refund on this individual refund record.
-          await supabase.from("refunds")
+          // CRITICAL: check the error — incomplete financial evidence must trigger retry.
+          const { error: fullRefundUpdateError } = await supabase.from("refunds")
             .update({ is_full_refund: fullRefund })
             .eq("stripe_refund_id", refundId);
+
+          if (fullRefundUpdateError) {
+            console.error(`[Webhook] Failed to update is_full_refund for ${refundId}:`, fullRefundUpdateError.message);
+            criticalError = fullRefundUpdateError.message;
+            break;
+          }
 
           if (fullRefund && ["PAID", "PREPARING", "SHIPPED", "DELIVERED", "DISPUTED"].includes(order.status)) {
             const { error: refundError } = await supabase.rpc("mark_order_refunded", {
