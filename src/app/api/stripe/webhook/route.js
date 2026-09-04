@@ -255,8 +255,8 @@ export async function POST(req) {
 
       // Atomic: DB decides whether to INSERT, UPDATE, or no-op.
       // - INSERT if no row exists (converges for lost created events)
-      // - UPDATE only if incoming stripe_updated_at > existing (version ordering)
-      // - UPDATE only if existing status is not 'canceled' (terminal state)
+      // - UPDATE only if incoming stripe_updated_at > existing (sole authority)
+      // - Events with equal or older stripe_updated_at → no-op
       const { error } = await supabase.rpc("sync_subscription_from_stripe", {
         p_user_id: userId,
         p_stripe_subscription_id: sub.id,
