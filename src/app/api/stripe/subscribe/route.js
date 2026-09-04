@@ -1,13 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
-
-function getStripe() {
-  const Stripe = require("stripe").default;
-  return new Stripe(process.env.STRIPE_SECRET_KEY, {
-    apiVersion: "2024-12-18.acacia",
-  });
-}
+import { getStripe } from "@/lib/stripe";
 
 const PREMIUM_AMOUNT = 499; // 4.99 EUR en centimos
 

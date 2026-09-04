@@ -99,18 +99,15 @@ export default function CheckoutPage() {
     setProcessing(true);
     const token = session?.access_token || session?.accessToken;
 
-    fetch('/api/stripe/create-payment-intent', {
+    fetch('/api/checkout', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
-        cartItems: cart.map((i) => ({
-          productId: i.product.id,
-          shippingMethod: i.shippingMethod?.name || 'Sobre acolchado Correos',
-          shipping: i.shippingMethod?.price || 1.8,
-        })),
+        productIds: cart.map((i) => i.product.id),
+        shippingMethod: cart[0]?.shippingMethod?.name || 'standard',
         shippingAddress: `${address.calle}, ${address.cp} ${address.ciudad}, ${address.provincia}`,
       }),
     })
