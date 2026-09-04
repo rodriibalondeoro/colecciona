@@ -3436,33 +3436,49 @@ BEGIN
     RAISE EXCEPTION '[INVALID_STATUS] Cannot accept a % proposal', v_proposal.status;
   END IF;
 
-  -- ==================== RECEIVER ITEM AVAILABILITY CHECK ====================
-  -- Lock receiver items and verify availability before accepting
+  -- ==================== DEADLOCK-FREE LOCKING ====================
+  -- Lock ALL proposal items (proposer + receiver) in deterministic order
   FOR v_item IN
-    SELECT ci.*, tpi.quantity AS requested_quantity
+    SELECT ci.*, tpi.quantity AS requested_quantity, tpi.side, tpi.user_id AS participating_user_id
     FROM trade_proposal_items tpi
     JOIN collection_items ci ON ci.id = tpi.collection_item_id
     WHERE tpi.proposal_id = p_proposal_id
-      AND tpi.side = 'receiver'
     ORDER BY ci.id
     FOR UPDATE OF ci
   LOOP
-    -- Check item still belongs to receiver
-    IF v_item.user_id != v_caller THEN
-      RAISE EXCEPTION '[NOT_OWNER] Item % no longer belongs to you', v_item.id;
+    -- Determine expected owner based on side
+    IF v_item.side = 'receiver' THEN
+      -- Receiver items: must still belong to receiver (the caller)
+      IF v_item.participating_user_id != v_caller OR v_item.user_id != v_caller THEN
+        RAISE EXCEPTION '[NOT_OWNER] Receiver item % no longer belongs to you', v_item.id;
+      END IF;
+    ELSE
+      -- Proposer items: must still belong to proposer
+      IF v_item.participating_user_id != v_proposal.proposer_id OR v_item.user_id != v_proposal.proposer_id THEN
+        RAISE EXCEPTION '[NOT_OWNER] Proposer item % no longer belongs to proposer', v_item.id;
+      END IF;
     END IF;
 
-    -- Check item still available (only MISSING prevents trade; FOR_SALE is allowed)
+    -- Both sides: item must still be available (only MISSING prevents trade)
     IF v_item.status = 'MISSING' THEN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is no longer available', v_item.id;
     END IF;
 
-    -- Check availability using unified function
-    -- At ACCEPTED: both sides are committed, so check full availability
-    v_available := get_available_quantity(v_item.id);
-    IF v_item.requested_quantity > v_available THEN
-      RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: need % but only % available',
-        v_item.id, v_item.requested_quantity, v_available;
+    IF v_item.side = 'receiver' THEN
+      -- Receiver items become committed at ACCEPTED: full availability check
+      v_available := get_available_quantity(v_item.id);
+      IF v_item.requested_quantity > v_available THEN
+        RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: need % but only % available',
+          v_item.id, v_item.requested_quantity, v_available;
+      END IF;
+    ELSE
+      -- Proposer items were already committed at PROPOSED. get_available_quantity()
+      -- already subtracts this proposal's proposer commitment, so check raw
+      -- duplicate_quantity directly to avoid double-counting.
+      IF v_item.duplicate_quantity < v_item.requested_quantity THEN
+        RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Proposer item %: need % but only % duplicates',
+          v_item.id, v_item.requested_quantity, v_item.duplicate_quantity;
+      END IF;
     END IF;
   END LOOP;
 
