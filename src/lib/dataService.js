@@ -254,7 +254,7 @@ export async function getOffers() {
     });
     const data = await res.json();
     return data.offers || [];
-  } catch { return []; }
+  } catch (err) { console.error("[DataService] getOffers error:", err?.message); return []; }
 }
 
 /** Acepta o rechaza una oferta recibida. */
@@ -268,7 +268,7 @@ export async function updateOffer({ id, status }) {
       body: JSON.stringify({ id, status }),
     });
     return res.ok;
-  } catch { return null; }
+  } catch (err) { console.error("[DataService] updateOffer error:", err?.message); return null; }
 }
 
 /** Envía un push al destinatario (no bloqueante). */
@@ -296,7 +296,7 @@ export async function fetchReviews(userId) {
     const res = await fetch(`/api/reviews?userId=${encodeURIComponent(userId)}`);
     const data = await res.json();
     return data.reviews || [];
-  } catch { return []; }
+  } catch (err) { console.error("[DataService] fetchReviews error:", err?.message); return []; }
 }
 
 export async function getFavorites() {
@@ -306,7 +306,7 @@ export async function getFavorites() {
     const res = await fetch("/api/favorites", { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
     return data.favorites || [];
-  } catch { return []; }
+  } catch (err) { console.error("[DataService] getFavorites error:", err?.message); return []; }
 }
 
 export async function toggleFavoriteAPI(productId) {
@@ -320,7 +320,7 @@ export async function toggleFavoriteAPI(productId) {
     });
     const data = await res.json();
     return data.favorited;
-  } catch { return null; }
+  } catch (err) { console.error("[DataService] toggleFavoriteAPI error:", err?.message); return null; }
 }
 
 export async function getProfile() {
@@ -332,7 +332,7 @@ export async function getProfile() {
     const res = await fetch("/api/profile", { headers });
     const data = await res.json();
     return data.profile || null;
-  } catch { return null; }
+  } catch (err) { console.error("[DataService] getProfile error:", err?.message); return null; }
 }
 
 export async function updateProfile(updates) {
@@ -348,7 +348,7 @@ export async function updateProfile(updates) {
     });
     const data = await res.json();
     return data.profile || null;
-  } catch { return null; }
+  } catch (err) { console.error("[DataService] updateProfile error:", err?.message); return null; }
 }
 
 /**
@@ -419,5 +419,11 @@ export async function uploadCardImage(input) {
     console.warn("[DataService] Upload via API no disponible:", err?.message);
   }
 
+  // Production: never fallback to base64 — image won't persist across devices/browsers
+  if (isConfigured) {
+    throw new Error("Error al subir la imagen. Inténtalo de nuevo.");
+  }
+
+  // Demo mode only: localDataUrl as fallback
   return localDataUrl;
 }
