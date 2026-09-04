@@ -4016,3 +4016,75 @@ REVOKE ALL ON FUNCTION bind_active_refund(UUID, TEXT) FROM PUBLIC;
 
 -- resolve_refund_failed: NOT CLIENT-CALLABLE (Stripe webhook only)
 REVOKE ALL ON FUNCTION resolve_refund_failed(UUID, TEXT) FROM PUBLIC;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Collections visibility RPC
+-- Replaces PostgREST exists() hack with proper SQL visibility logic.
+-- PUBLIC: anyone can see. FOLLOWERS: only if follower_id = requester.
+-- PRIVATE: only owner. NULL requester → PUBLIC only.
+-- ─────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION get_visible_collections(
+  p_owner_id UUID,
+  p_requester_id UUID DEFAULT NULL,
+  p_page INT DEFAULT 1,
+  p_limit INT DEFAULT 20
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_from INT;
+  v_total INT;
+  v_items JSONB;
+BEGIN
+  v_from := (p_page - 1) * p_limit;
+
+  -- Count visible collections
+  SELECT count(*) INTO v_total
+  FROM collections c
+  WHERE c.user_id = p_owner_id
+    AND (
+      c.visibility = 'public'
+      OR (c.visibility = 'followers' AND p_requester_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM follows
+            WHERE follower_id = p_requester_id
+              AND following_id = p_owner_id
+          ))
+      OR (p_requester_id IS NOT NULL AND c.user_id = p_requester_id)
+    );
+
+  -- Fetch page
+  SELECT coalesce(jsonb_agg(row_to_json(c)), '[]'::jsonb)
+  INTO v_items
+  FROM (
+    SELECT c.*, (SELECT count(*) FROM collection_items ci WHERE ci.collection_id = c.id) AS item_count
+    FROM collections c
+    WHERE c.user_id = p_owner_id
+      AND (
+        c.visibility = 'public'
+        OR (c.visibility = 'followers' AND p_requester_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM follows
+              WHERE follower_id = p_requester_id
+                AND following_id = p_owner_id
+            ))
+        OR (p_requester_id IS NOT NULL AND c.user_id = p_requester_id)
+      )
+    ORDER BY c.updated_at DESC
+    LIMIT p_limit OFFSET v_from
+  ) c;
+
+  RETURN jsonb_build_object(
+    'collections', v_items,
+    'total', v_total,
+    'page', p_page,
+    'limit', p_limit
+  );
+END;
+$$;
+
+-- Public callable (any authenticated or unauthenticated user can query visibility)
+REVOKE ALL ON FUNCTION get_visible_collections(UUID, UUID, INT, INT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_visible_collections(UUID, UUID, INT, INT) TO authenticated;
+GRANT EXECUTE ON FUNCTION get_visible_collections(UUID, UUID, INT, INT) TO anon;
