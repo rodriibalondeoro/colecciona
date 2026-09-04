@@ -3483,7 +3483,14 @@ BEGIN
   END LOOP;
 
   -- ==================== ACCEPT ====================
-  UPDATE trade_proposals SET status = 'ACCEPTED' WHERE id = p_proposal_id;
+  UPDATE trade_proposals
+  SET status = 'ACCEPTED', accepted_at = now()
+  WHERE id = p_proposal_id AND status = 'PROPOSED';
+
+  -- Defensive: guard against unexpected state change despite the FOR UPDATE lock
+  IF NOT FOUND THEN
+    RAISE EXCEPTION '[INVALID_STATUS] Proposal no longer in PROPOSED state';
+  END IF;
 
   -- ==================== NOTIFICATION ====================
   INSERT INTO notifications (user_id, type, title, message, data, read)
