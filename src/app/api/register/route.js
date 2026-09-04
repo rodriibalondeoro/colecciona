@@ -20,25 +20,28 @@ export async function POST(req) {
     const supabase = createClient(url, key);
     const body = await req.json();
 
-    const email = (body.email || "").trim();
+    const email = (body.email || "").trim().slice(0, 254);
     const phone = normalizePhone(body.phone);
-    const name = String(body.fullName || "").trim();
-    const username = String(body.username || "").replace("@", "").trim();
+    const name = String(body.fullName || "").trim().slice(0, 100);
+    const username = String(body.username || "").replace("@", "").trim().slice(0, 30);
+    const password = String(body.password || "");
 
-    if (!email) {
-      return NextResponse.json({ error: "Email obligatorio" }, { status: 400 });
+    if (!email || !email.includes("@")) {
+      return NextResponse.json({ error: "Email obligatorio y válido" }, { status: 400 });
     }
 
-    // 1 número = 1 cuenta: bloqueamos teléfonos duplicados antes de crear nada.
-    // Comparamos por dígitos para tolerar prefijo/espacios.
+    if (password.length < 6 || password.length > 128) {
+      return NextResponse.json({ error: "La contraseña debe tener entre 6 y 128 caracteres" }, { status: 400 });
+    }
+
+    // 1 número = 1 cuenta: check phone uniqueness via SQL (no download all phones)
     if (phone) {
       const digits = phone.replace(/\D/g, "");
-      const { data: all } = await supabase
-        .from("user_private")
-        .select("user_id, phone")
-        .not("phone", "eq", "");
-      const dup = (all || []).find((u) => u.phone && u.phone.replace(/\D/g, "") === digits);
-      if (dup) {
+      // Use RPC for efficient phone duplicate check without downloading all phones
+      const { data: phoneExists } = await supabase.rpc("check_phone_exists", {
+        p_phone_digits: digits,
+      });
+      if (phoneExists) {
         return NextResponse.json(
           {
             error: `Este número de teléfono ya está asociado a una cuenta activa. Sólo se permite una cuenta por número de teléfono.`,
@@ -57,7 +60,7 @@ export async function POST(req) {
     // choca con el constraint users_phone_key).
     const { data, error } = await supabase.auth.admin.createUser({
       email,
-      password: body.password || `Colecciona${Date.now()}`,
+      password: password || `Colecciona${Date.now()}`,
       email_confirm: true,
       user_metadata: {
         phone,

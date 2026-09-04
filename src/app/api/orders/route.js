@@ -13,6 +13,11 @@ export async function GET(req) {
 
     const supabase = createUserClient(token);
 
+    const { searchParams } = new URL(req.url);
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+    const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "20", 10)));
+    const from = (page - 1) * limit;
+
     const { data, error } = await supabase
       .from("orders")
       .select(`
@@ -22,14 +27,15 @@ export async function GET(req) {
         buyer:profiles!orders_buyer_id_fkey(name, username)
       `)
       .or(`buyer_id.eq.${user.id},seller_id.eq.${user.id}`)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range(from, from + limit - 1);
 
     if (error) {
       console.error("[Orders] Supabase error:", error.message);
       return NextResponse.json({ error: "Error loading orders" }, { status: 500 });
     }
 
-    return NextResponse.json({ orders: data || [] });
+    return NextResponse.json({ orders: data || [], page, limit });
   } catch (err) {
     console.error("[Orders] Error:", err);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });

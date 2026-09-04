@@ -4285,3 +4285,101 @@ $$;
 
 REVOKE ALL ON FUNCTION find_user_matches(UUID, INT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION find_user_matches(UUID, INT) TO authenticated;
+
+-- Check phone uniqueness without downloading all phones
+CREATE OR REPLACE FUNCTION check_phone_exists(p_phone_digits TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_exists BOOLEAN;
+BEGIN
+  SELECT EXISTS(
+    SELECT 1 FROM user_private
+    WHERE phone IS NOT NULL AND phone != ''
+      AND regexp_replace(phone, '[^0-9]', '', 'g') = p_phone_digits
+  ) INTO v_exists;
+  RETURN v_exists;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION check_phone_exists(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION check_phone_exists(TEXT) TO authenticated;
+
+-- ============================================================================
+-- GET THREAD SUMMARIES — SQL-based thread computation (replaces global message load)
+-- Returns only the last message per conversation, not all messages
+-- ============================================================================
+CREATE OR REPLACE FUNCTION get_thread_summaries(
+  p_user_id UUID,
+  p_limit INT DEFAULT 20,
+  p_offset INT DEFAULT 0
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_result JSONB;
+BEGIN
+  WITH
+  -- Deduplicate: find the latest message per conversation partner + product
+  thread_last AS (
+    SELECT DISTINCT ON (partner_id, product_id)
+      id,
+      partner_id,
+      product_id,
+      text AS last_message,
+      created_at AS last_time,
+      is_read,
+      sender_id
+    FROM (
+      SELECT
+        m.id,
+        m.product_id,
+        m.text,
+        m.created_at,
+        m.is_read,
+        m.sender_id,
+        CASE WHEN m.sender_id = p_user_id THEN m.receiver_id ELSE m.sender_id END AS partner_id
+      FROM messages m
+      WHERE m.sender_id = p_user_id OR m.receiver_id = p_user_id
+    ) sub
+    ORDER BY partner_id, product_id, created_at DESC
+  ),
+  -- Count unread per thread
+  unread_counts AS (
+    SELECT
+      CASE WHEN sender_id = p_user_id THEN
+        (SELECT receiver_id FROM messages WHERE id = thread_last.id)
+      ELSE
+        sender_id
+      END AS partner_id,
+      product_id,
+      COUNT(*) AS unread_count
+    FROM thread_last
+    WHERE sender_id != p_user_id AND is_read = false
+    GROUP BY partner_id, product_id, sender_id, thread_last.id
+  )
+  SELECT jsonb_agg(
+    jsonb_build_object(
+      'partner_id', tl.partner_id,
+      'product_id', tl.product_id,
+      'last_message', tl.last_message,
+      'last_time', tl.last_time,
+      'unread_count', COALESCE(uc.unread_count, 0)
+    )
+    ORDER BY tl.last_time DESC
+  )
+  INTO v_result
+  FROM thread_last tl
+  LEFT JOIN unread_counts uc ON uc.partner_id = tl.partner_id
+    AND (uc.product_id = tl.product_id OR (uc.product_id IS NULL AND tl.product_id IS NULL))
+  ORDER BY tl.last_time DESC
+  LIMIT p_limit OFFSET p_offset;
+
+  RETURN COALESCE(v_result, '[]'::jsonb);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION get_thread_summaries(UUID, INT, INT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_thread_summaries(UUID, INT, INT) TO authenticated;

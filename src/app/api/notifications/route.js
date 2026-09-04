@@ -57,13 +57,15 @@ export async function PATCH(req) {
 
     const { id, all } = await req.json();
 
-    if (all) {
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    if (all === true) {
       const { error } = await supabase.from("notifications").update({ read: true }).eq("user_id", user.id).eq("read", false);
       if (error) {
         console.error("[Notifications] Supabase error:", error.message);
         return NextResponse.json({ error: "Error updating notifications" }, { status: 500 });
       }
-    } else if (id) {
+    } else if (id && typeof id === "string" && UUID_RE.test(id)) {
       // IDOR FIX: always filter by user_id — users can only mark their own notifications
       const { error } = await supabase.from("notifications").update({ read: true }).eq("id", id).eq("user_id", user.id);
       if (error) {

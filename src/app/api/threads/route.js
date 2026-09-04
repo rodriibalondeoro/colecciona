@@ -13,82 +13,66 @@ export async function GET(req) {
 
     const supabase = createUserClient(token);
 
-    // Get all messages for this user
-    const { data: messages, error: msgError } = await supabase
-      .from("messages")
-      .select("id, sender_id, receiver_id, product_id, text, created_at")
-      .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
-      .order("created_at", { ascending: true });
+    const { searchParams } = new URL(req.url);
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+    const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "20", 10)));
+    const from = (page - 1) * limit;
+
+    // Get last message per thread using a window function (SQL, not JS)
+    // This avoids loading ALL messages into memory
+    const { data: lastMessages, error: msgError } = await supabase
+      .rpc("get_thread_summaries", {
+        p_user_id: user.id,
+        p_limit: limit,
+        p_offset: from,
+      });
 
     if (msgError) {
-      console.error("[API /threads] Supabase error:", msgError.message);
+      console.error("[API /threads] RPC error:", msgError.message);
       return NextResponse.json({ error: "Error loading threads" }, { status: 500 });
     }
 
-    if (!messages || messages.length === 0) {
+    if (!lastMessages || lastMessages.length === 0) {
       return NextResponse.json({ threads: [] });
     }
 
-    // Derive threads from messages
-    const threadMap = new Map();
-    for (const msg of messages) {
-      const partnerId = msg.sender_id === user.id ? msg.receiver_id : msg.sender_id;
-      const key = `${partnerId}:${msg.product_id || "null"}`;
+    // Collect partner and product IDs for batch fetch
+    const partnerIds = [...new Set(lastMessages.map(t => t.partner_id).filter(Boolean))];
+    const productIds = [...new Set(lastMessages.map(t => t.product_id).filter(Boolean))];
 
-      if (!threadMap.has(key)) {
-        threadMap.set(key, {
-          id: `th-${partnerId}-${msg.product_id || "g"}`,
-          partnerId,
-          productId: msg.product_id,
-          messages: [],
-          lastMessage: "",
-          lastTime: "",
-          unread: 0,
-        });
-      }
-
-      const thread = threadMap.get(key);
-      thread.messages.push({
-        id: msg.id,
-        from: msg.sender_id === user.id ? "me" : msg.sender_id,
-        text: msg.text,
-        time: msg.created_at,
-      });
-      thread.lastMessage = msg.text;
-      thread.lastTime = msg.created_at;
-      if (msg.receiver_id === user.id && msg.sender_id !== user.id) {
-        thread.unread++;
-      }
+    // Batch fetch profiles
+    let profiles = [];
+    if (partnerIds.length > 0) {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, name, username, avatar_url")
+        .in("id", partnerIds);
+      profiles = data || [];
     }
+    const profileMap = new Map(profiles.map(p => [p.id, p]));
 
-    // Fetch partner profiles
-    const partnerIds = [...new Set([...threadMap.values()].map((t) => t.partnerId))];
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("id, name, username, avatar_url")
-      .in("id", partnerIds);
-
-    const profileMap = new Map((profiles || []).map((p) => [p.id, p]));
-
-    // Fetch product info
-    const productIds = [...new Set([...threadMap.values()].map((t) => t.productId).filter(Boolean))];
-    let productMap = new Map();
+    // Batch fetch products
+    let products = [];
     if (productIds.length > 0) {
-      const { data: prods } = await supabase
+      const { data } = await supabase
         .from("products")
         .select("id, title, image, price")
         .in("id", productIds);
-      productMap = new Map((prods || []).map((p) => [p.id, p]));
+      products = data || [];
     }
+    const productMap = new Map(products.map(p => [p.id, p]));
 
-    // Build final threads
-    const threads = [...threadMap.values()]
-      .map((t) => ({
-        ...t,
-        partner: profileMap.get(t.partnerId) || { id: t.partnerId, name: "Usuario" },
-        product: t.productId ? productMap.get(t.productId) || null : null,
-      }))
-      .sort((a, b) => new Date(b.lastTime) - new Date(a.lastTime));
+    // Build thread summaries
+    const threads = lastMessages.map(t => ({
+      id: `th-${t.partner_id}-${t.product_id || "g"}`,
+      partnerId: t.partner_id,
+      productId: t.product_id,
+      lastMessage: t.last_message,
+      lastTime: t.last_time,
+      unread: t.unread_count || 0,
+      partner: profileMap.get(t.partner_id) || { id: t.partner_id, name: "Usuario" },
+      product: t.product_id ? productMap.get(t.product_id) || null : null,
+    }));
 
     return NextResponse.json({ threads });
   } catch (err) {
