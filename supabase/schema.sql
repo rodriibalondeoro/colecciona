@@ -136,7 +136,7 @@ DO $$ BEGIN
   CREATE TYPE trade_status AS ENUM (
     'DRAFT', 'PROPOSED', 'COUNTERED', 'ACCEPTED',
     'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED',
-    'COMPLETED', 'CANCELLED', 'DISPUTED'
+    'COMPLETED', 'CANCELLED', 'DISPUTED', 'SUPERSEDED'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -2122,6 +2122,8 @@ CREATE TRIGGER trg_validate_collection_item_quantities
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS trade_proposals (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  parent_proposal_id UUID REFERENCES trade_proposals(id) ON DELETE SET NULL,
+  version INTEGER NOT NULL DEFAULT 1,
   proposer_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   receiver_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   status trade_status DEFAULT 'DRAFT',
@@ -2695,14 +2697,16 @@ BEGIN
       WHEN OLD.status = 'DRAFT' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'PROPOSED' AND NEW.status = 'ACCEPTED' AND auth.uid() = OLD.receiver_id THEN true
       WHEN OLD.status = 'PROPOSED' AND NEW.status = 'COUNTERED' AND auth.uid() = OLD.receiver_id THEN true
+      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'SUPERSEDED' AND auth.uid() = OLD.receiver_id THEN true
       WHEN OLD.status = 'PROPOSED' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'COUNTERED' AND NEW.status = 'ACCEPTED' AND auth.uid() = OLD.proposer_id THEN true
+      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'SUPERSEDED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'COUNTERED' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'ACCEPTED' AND NEW.status = 'SHIPPING_PENDING' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
       WHEN OLD.status = 'SHIPPING_PENDING' AND NEW.status = 'SHIPPED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
       WHEN OLD.status = 'SHIPPED' AND NEW.status = 'RECEIVED' AND auth.uid() = OLD.receiver_id THEN true
       WHEN OLD.status = 'RECEIVED' AND NEW.status = 'COMPLETED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
-      WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','DISPUTED') AND NEW.status = 'DISPUTED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','DISPUTED','SUPERSEDED') AND NEW.status = 'DISPUTED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
       ELSE false
     END;
     IF NOT allowed THEN RAISE EXCEPTION 'Invalid transition: % -> %', OLD.status, NEW.status; END IF;
@@ -2933,6 +2937,9 @@ BEGIN
   END LOOP;
 
   -- ==================== RECEIVER ITEMS VALIDATION ====================
+  -- Receiver items are REQUESTED only, not committed at PROPOSED.
+  -- Ownership and status are validated, but availability is NOT checked here.
+  -- Receiver items become committed only when receiver ACCEPTS or creates counter-offer.
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_receiver_items)
   LOOP
     v_item_id := (v_item->>'collection_item_id')::uuid;
@@ -2949,19 +2956,7 @@ BEGIN
     IF v_item_record.status IN ('MISSING', 'FOR_SALE') THEN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
-
-    SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
-    FROM trade_proposal_items tpi
-    JOIN trade_proposals tp ON tp.id = tpi.proposal_id
-    WHERE tpi.collection_item_id = v_item_id
-      AND tpi.user_id = p_receiver_id
-      AND tp.status NOT IN ('COMPLETED', 'CANCELLED', 'DISPUTED');
-
-    v_available := v_item_record.duplicate_quantity - v_committed;
-    IF v_quantity > v_available THEN
-      RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: requested % but only % available',
-        v_item_id, v_quantity, v_available;
-    END IF;
+    -- NOTE: no availability check here — receiver items are not committed at PROPOSED
   END LOOP;
 
   -- ==================== INSERT PROPOSAL ====================
@@ -3031,6 +3026,238 @@ $$;
 
 REVOKE ALL ON FUNCTION create_trade_proposal(UUID, TEXT, JSONB, JSONB) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION create_trade_proposal(UUID, TEXT, JSONB, JSONB) TO authenticated;
+
+-- ============================================================================
+-- COUNTER-OFFER PROPOSAL — atomic versioning with role swap
+-- ============================================================================
+
+-- Counter-offer: receiver becomes proposer, creates new version
+-- Old proposal → SUPERSEDED, new proposal → PROPOSED
+CREATE OR REPLACE FUNCTION counter_offer_proposal(
+  p_proposal_id UUID,
+  p_message TEXT DEFAULT NULL,
+  p_new_proposer_items JSONB DEFAULT '[]'::jsonb,
+  p_new_receiver_items JSONB DEFAULT '[]'::jsonb
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_caller UUID := auth.uid();
+  v_old_proposal RECORD;
+  v_new_proposal_id UUID;
+  v_new_version INTEGER;
+  v_item JSONB;
+  v_item_id UUID;
+  v_quantity INTEGER;
+  v_item_record RECORD;
+  v_committed INTEGER;
+  v_available INTEGER;
+  v_all_item_ids UUID[];
+  v_new_proposer_item_ids UUID[];
+  v_new_receiver_item_ids UUID[];
+  v_overlap UUID[];
+  v_new_proposal JSONB;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  IF p_proposal_id IS NULL THEN RAISE EXCEPTION '[PROPOSAL_REQUIRED] Proposal ID required'; END IF;
+
+  -- Read and lock old proposal
+  SELECT * INTO v_old_proposal FROM trade_proposals WHERE id = p_proposal_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION '[PROPOSAL_NOT_FOUND] Proposal not found'; END IF;
+
+  -- Only receiver can counter
+  IF v_old_proposal.receiver_id != v_caller THEN
+    RAISE EXCEPTION '[NOT_RECEIVER] Only the receiver can counter this proposal';
+  END IF;
+
+  -- Must be PROPOSED or COUNTERED
+  IF v_old_proposal.status NOT IN ('PROPOSED', 'COUNTERED') THEN
+    RAISE EXCEPTION '[INVALID_STATUS] Cannot counter a % proposal', v_old_proposal.status;
+  END IF;
+
+  -- Message length
+  IF length(p_message) > 1000 THEN
+    RAISE EXCEPTION '[MESSAGE_TOO_LONG] Message too long (max 1000 characters)';
+  END IF;
+
+  -- Must have at least one item
+  IF jsonb_array_length(p_new_proposer_items) = 0 AND jsonb_array_length(p_new_receiver_items) = 0 THEN
+    RAISE EXCEPTION '[NO_ITEMS] At least one item required';
+  END IF;
+
+  -- Extract item IDs
+  SELECT array_agg((item->>'collection_item_id')::uuid) INTO v_new_proposer_item_ids
+  FROM jsonb_array_elements(p_new_proposer_items) AS item;
+  SELECT array_agg((item->>'collection_item_id')::uuid) INTO v_new_receiver_item_ids
+  FROM jsonb_array_elements(p_new_receiver_items) AS item;
+
+  -- Cross-side duplicate check
+  IF v_new_proposer_item_ids IS NOT NULL AND v_new_receiver_item_ids IS NOT NULL THEN
+    SELECT array_agg(id) INTO v_overlap
+    FROM unnest(v_new_proposer_item_ids) AS id
+    WHERE id = ANY(v_new_receiver_item_ids);
+    IF v_overlap IS NOT NULL AND array_length(v_overlap, 1) > 0 THEN
+      RAISE EXCEPTION '[OVERLAP_ITEMS] Item % appears on both sides', v_overlap[1];
+    END IF;
+  END IF;
+
+  -- Within-side duplicate checks
+  IF v_new_proposer_item_ids IS NOT NULL AND array_length(v_new_proposer_item_ids, 1) >
+     (SELECT count(DISTINCT id) FROM unnest(v_new_proposer_item_ids) AS id) THEN
+    RAISE EXCEPTION '[DUPLICATE_ITEMS] Duplicate items in proposer_items';
+  END IF;
+  IF v_new_receiver_item_ids IS NOT NULL AND array_length(v_new_receiver_item_ids, 1) >
+     (SELECT count(DISTINCT id) FROM unnest(v_new_receiver_item_ids) AS id) THEN
+    RAISE EXCEPTION '[DUPLICATE_ITEMS] Duplicate items in receiver_items';
+  END IF;
+
+  -- Deadlock-free locking: all item IDs in ORDER BY id
+  v_all_item_ids := COALESCE(v_new_proposer_item_ids, '{}[]'::uuid[])
+    || COALESCE(v_new_receiver_item_ids, '{}[]'::uuid[]);
+
+  FOR v_item_record IN
+    SELECT * FROM collection_items WHERE id = ANY(v_all_item_ids) ORDER BY id FOR UPDATE
+  LOOP
+    NULL;
+  END LOOP;
+
+  -- ==================== NEW PROPOSER ITEMS (counter-offerer = caller) ====================
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_new_proposer_items)
+  LOOP
+    v_item_id := (v_item->>'collection_item_id')::uuid;
+    v_quantity := COALESCE((v_item->>'quantity')::integer, 1);
+
+    IF v_item_id IS NULL THEN RAISE EXCEPTION '[INVALID_ITEM] Invalid item ID'; END IF;
+    IF v_quantity < 1 THEN RAISE EXCEPTION '[INVALID_QUANTITY] Quantity must be >= 1'; END IF;
+
+    SELECT * INTO v_item_record FROM collection_items WHERE id = v_item_id;
+    IF NOT FOUND THEN RAISE EXCEPTION '[ITEM_NOT_FOUND] Item % not found', v_item_id; END IF;
+    IF v_item_record.user_id != v_caller THEN
+      RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to you', v_item_id;
+    END IF;
+    IF v_item_record.status IN ('MISSING', 'FOR_SALE') THEN
+      RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
+    END IF;
+
+    -- Check availability (same as create_trade_proposal)
+    SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
+    FROM trade_proposal_items tpi
+    JOIN trade_proposals tp ON tp.id = tpi.proposal_id
+    WHERE tpi.collection_item_id = v_item_id
+      AND tpi.user_id = v_caller
+      AND tp.status NOT IN ('COMPLETED', 'CANCELLED', 'DISPUTED', 'SUPERSEDED');
+
+    v_available := v_item_record.duplicate_quantity - v_committed;
+    IF v_quantity > v_available THEN
+      RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: requested % but only % available',
+        v_item_id, v_quantity, v_available;
+    END IF;
+  END LOOP;
+
+  -- ==================== NEW RECEIVER ITEMS (original proposer) ====================
+  -- Ownership + status validated, but NOT committed (same as create)
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_new_receiver_items)
+  LOOP
+    v_item_id := (v_item->>'collection_item_id')::uuid;
+    v_quantity := COALESCE((v_item->>'quantity')::integer, 1);
+
+    IF v_item_id IS NULL THEN RAISE EXCEPTION '[INVALID_ITEM] Invalid receiver item ID'; END IF;
+    IF v_quantity < 1 THEN RAISE EXCEPTION '[INVALID_QUANTITY] Quantity must be >= 1'; END IF;
+
+    SELECT * INTO v_item_record FROM collection_items WHERE id = v_item_id;
+    IF NOT FOUND THEN RAISE EXCEPTION '[ITEM_NOT_FOUND] Item % not found', v_item_id; END IF;
+    IF v_item_record.user_id != v_old_proposal.proposer_id THEN
+      RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to the original proposer', v_item_id;
+    END IF;
+    IF v_item_record.status IN ('MISSING', 'FOR_SALE') THEN
+      RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
+    END IF;
+    -- NOTE: no availability check — receiver items not committed at PROPOSED
+  END LOOP;
+
+  -- ==================== SUPERSEDED OLD PROPOSAL ====================
+  UPDATE trade_proposals SET status = 'SUPERSEDED' WHERE id = p_proposal_id;
+
+  -- ==================== CREATE NEW VERSION ====================
+  -- Version = old version + 1 (or 1 if original was DRAFT->PROPOSED)
+  v_new_version := COALESCE(v_old_proposal.version, 1) + 1;
+
+  INSERT INTO trade_proposals (
+    parent_proposal_id, version, proposer_id, receiver_id, status, message
+  ) VALUES (
+    p_proposal_id,
+    v_new_version,
+    v_caller,  -- counter-offerer becomes new proposer
+    v_old_proposal.proposer_id,  -- original proposer becomes new receiver
+    'PROPOSED',
+    p_message
+  ) RETURNING id INTO v_new_proposal_id;
+
+  -- ==================== INSERT NEW ITEMS ====================
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_new_proposer_items)
+  LOOP
+    INSERT INTO trade_proposal_items (proposal_id, collection_item_id, user_id, quantity, side)
+    VALUES (
+      v_new_proposal_id,
+      (v_item->>'collection_item_id')::uuid,
+      v_caller,
+      COALESCE((v_item->>'quantity')::integer, 1),
+      'proposer'
+    );
+  END LOOP;
+
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_new_receiver_items)
+  LOOP
+    INSERT INTO trade_proposal_items (proposal_id, collection_item_id, user_id, quantity, side)
+    VALUES (
+      v_new_proposal_id,
+      (v_item->>'collection_item_id')::uuid,
+      v_old_proposal.proposer_id,
+      COALESCE((v_item->>'quantity')::integer, 1),
+      'receiver'
+    );
+  END LOOP;
+
+  -- ==================== NOTIFICATION ====================
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (
+    v_old_proposal.proposer_id,
+    'trade_proposal',
+    'Contraoferta recibida',
+    'Te enviaron una contraoferta',
+    jsonb_build_object('link', '/intercambios', 'proposal_id', v_new_proposal_id),
+    false
+  );
+
+  -- Return new proposal
+  SELECT jsonb_build_object(
+    'id', tp.id,
+    'parent_proposal_id', tp.parent_proposal_id,
+    'version', tp.version,
+    'proposer_id', tp.proposer_id,
+    'receiver_id', tp.receiver_id,
+    'status', tp.status,
+    'message', tp.message,
+    'created_at', tp.created_at,
+    'items', (
+      SELECT jsonb_agg(jsonb_build_object(
+        'id', tpi.id,
+        'collection_item_id', tpi.collection_item_id,
+        'quantity', tpi.quantity,
+        'side', tpi.side
+      ))
+      FROM trade_proposal_items tpi WHERE tpi.proposal_id = tp.id
+    )
+  ) INTO v_new_proposal
+  FROM trade_proposals tp WHERE tp.id = v_new_proposal_id;
+
+  RETURN v_new_proposal;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION counter_offer_proposal(UUID, TEXT, JSONB, JSONB) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION counter_offer_proposal(UUID, TEXT, JSONB, JSONB) TO authenticated;
 
 -- Reviews RPC: validates order COMPLETED, participant, no duplicate
 CREATE OR REPLACE FUNCTION create_review(

@@ -75,6 +75,9 @@ export async function GET(req) {
       .order("created_at", { ascending: false })
       .range(from, from + limit - 1);
 
+    // Exclude SUPERSEDED from list (show only active versions)
+    if (!status) query = query.neq("status", "SUPERSEDED");
+
     if (status) query = query.eq("status", status);
 
     const { data, error, count } = await query;
