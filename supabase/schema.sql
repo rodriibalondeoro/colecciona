@@ -157,9 +157,11 @@ CREATE TABLE IF NOT EXISTS profiles (
   following INTEGER DEFAULT 0 CHECK (following >= 0),
   response_time TEXT DEFAULT '< 1 hora',
   member_since TEXT NOT NULL,
+  is_admin BOOLEAN DEFAULT false NOT NULL,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_profiles_username ON profiles(username);
+CREATE INDEX IF NOT EXISTS idx_profiles_is_admin ON profiles(id, is_admin) WHERE is_admin = true;
 
 -- ============================================================================
 -- 2. USER_PRIVATE — private user data (owner only)
@@ -2299,6 +2301,33 @@ DROP POLICY IF EXISTS "profiles_update_own" ON profiles;
 CREATE POLICY "profiles_update_own" ON profiles FOR UPDATE USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
 DROP POLICY IF EXISTS "profiles_delete_own" ON profiles;
 CREATE POLICY "profiles_delete_own" ON profiles FOR DELETE USING (auth.uid() = id);
+
+-- TRIGGER: prevent non-admins from self-elevating is_admin
+-- RLS can't restrict individual columns, so we use a trigger.
+CREATE OR REPLACE FUNCTION public.prevent_self_admin_elevation()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.is_admin IS DISTINCT FROM OLD.is_admin THEN
+    IF NOT COALESCE(
+      (SELECT is_admin FROM public.profiles WHERE id = auth.uid()),
+      false
+    ) THEN
+      RAISE EXCEPTION 'Only admins can modify admin status';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS prevent_self_admin_elevation ON public.profiles;
+CREATE TRIGGER prevent_self_admin_elevation
+  BEFORE UPDATE ON public.profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_self_admin_elevation();
 
 ALTER TABLE user_private ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "user_private_select_own" ON user_private;
