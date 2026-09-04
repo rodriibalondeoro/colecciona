@@ -2630,6 +2630,25 @@ ALTER TABLE favorites ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "favorites_owner_all" ON favorites;
 CREATE POLICY "favorites_owner_all" ON favorites FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
+-- Favorites counter: keep products.favorites in sync with favorites table
+CREATE OR REPLACE FUNCTION update_product_favorites_count()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    UPDATE products SET favorites = favorites + 1 WHERE id = NEW.product_id;
+  ELSIF TG_OP = 'DELETE' THEN
+    UPDATE products SET favorites = GREATEST(favorites - 1, 0) WHERE id = OLD.product_id;
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_update_product_favorites ON favorites;
+CREATE TRIGGER trg_update_product_favorites
+  AFTER INSERT OR DELETE ON favorites
+  FOR EACH ROW EXECUTE FUNCTION update_product_favorites_count();
+
 ALTER TABLE price_history ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "price_history_select_public" ON price_history;
 CREATE POLICY "price_history_select_public" ON price_history FOR SELECT USING (true);
