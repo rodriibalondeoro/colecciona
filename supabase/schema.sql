@@ -2070,7 +2070,8 @@ CREATE INDEX IF NOT EXISTS idx_collection_items_status ON collection_items(statu
 CREATE INDEX IF NOT EXISTS idx_collection_items_card_name ON collection_items(card_name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_items_unique_card ON collection_items(collection_id, card_name, card_number);
 
--- Add FK from products to collection_items (deferred to avoid circular dependency)
+-- Add collection_item_id column + FK to products (deferred to avoid circular dependency)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS collection_item_id UUID;
 ALTER TABLE products ADD CONSTRAINT fk_products_collection_item
   FOREIGN KEY (collection_item_id) REFERENCES collection_items(id) ON DELETE SET NULL;
 
@@ -2513,29 +2514,20 @@ ALTER TABLE trade_proposals ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "trade_proposals_select_participant" ON trade_proposals;
 CREATE POLICY "trade_proposals_select_participant" ON trade_proposals
   FOR SELECT USING (auth.uid() = proposer_id OR auth.uid() = receiver_id);
-DROP POLICY IF EXISTS "trade_proposals_insert_proposer" ON trade_proposals;
-CREATE POLICY "trade_proposals_insert_proposer" ON trade_proposals
-  FOR INSERT WITH CHECK (auth.uid() = proposer_id);
-DROP POLICY IF EXISTS "trade_proposals_update_participant" ON trade_proposals;
-CREATE POLICY "trade_proposals_update_participant" ON trade_proposals
-  FOR UPDATE USING (auth.uid() = proposer_id OR auth.uid() = receiver_id)
-  WITH CHECK (auth.uid() = proposer_id OR auth.uid() = receiver_id);
-DROP POLICY IF EXISTS "trade_proposals_delete_proposer_draft" ON trade_proposals;
-CREATE POLICY "trade_proposals_delete_proposer_draft" ON trade_proposals
-  FOR DELETE USING (auth.uid() = proposer_id AND status IN ('DRAFT','PROPOSED'));
+-- NO INSERT/UPDATE/DELETE policies for users:
+-- All writes go through SECURITY DEFINER RPCs (create_trade_proposal,
+-- counter_offer_proposal, accept_trade_proposal) which handle atomicity,
+-- locking, availability checks, and duplicate detection.
 
 ALTER TABLE trade_proposal_items ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "trade_items_insert_own" ON trade_proposal_items;
-CREATE POLICY "trade_items_insert_own" ON trade_proposal_items FOR INSERT WITH CHECK (auth.uid() = user_id);
 DROP POLICY IF EXISTS "trade_items_select_participant" ON trade_proposal_items;
 CREATE POLICY "trade_items_select_participant" ON trade_proposal_items FOR SELECT USING (
   EXISTS (SELECT 1 FROM trade_proposals WHERE trade_proposals.id = trade_proposal_items.proposal_id
     AND (trade_proposals.proposer_id = auth.uid() OR trade_proposals.receiver_id = auth.uid()))
 );
-DROP POLICY IF EXISTS "trade_items_update_own" ON trade_proposal_items;
-CREATE POLICY "trade_items_update_own" ON trade_proposal_items FOR UPDATE USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-DROP POLICY IF EXISTS "trade_items_delete_own" ON trade_proposal_items;
-CREATE POLICY "trade_items_delete_own" ON trade_proposal_items FOR DELETE USING (auth.uid() = user_id);
+-- NO INSERT/UPDATE/DELETE policies for users:
+-- trade_proposal_items are created only via SECURITY DEFINER RPCs.
+-- This prevents bypassing the availability model with direct inserts.
 
 ALTER TABLE trade_history ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "trade_history_participant_read" ON trade_history;
@@ -3477,6 +3469,63 @@ $$;
 
 REVOKE ALL ON FUNCTION accept_trade_proposal(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION accept_trade_proposal(UUID) TO authenticated;
+
+-- ============================================================================
+-- TRANSITION TRADE PROPOSAL — simple status transitions via RPC
+-- ============================================================================
+
+-- Handles: CANCELLED, SHIPPING_PENDING, SHIPPED, RECEIVED, COMPLETED, DISPUTED
+-- The DB trigger validates transitions + permissions (auth.uid())
+CREATE OR REPLACE FUNCTION transition_trade_proposal(
+  p_proposal_id UUID,
+  p_new_status TEXT,
+  p_message TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_caller UUID := auth.uid();
+  v_proposal RECORD;
+  v_result JSONB;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  IF p_proposal_id IS NULL THEN RAISE EXCEPTION '[PROPOSAL_REQUIRED] Proposal ID required'; END IF;
+
+  -- Read proposal
+  SELECT * INTO v_proposal FROM trade_proposals WHERE id = p_proposal_id;
+  IF NOT FOUND THEN RAISE EXCEPTION '[PROPOSAL_NOT_FOUND] Proposal not found'; END IF;
+
+  -- Only participants
+  IF v_proposal.proposer_id != v_caller AND v_proposal.receiver_id != v_caller THEN
+    RAISE EXCEPTION '[FORBIDDEN] Not a participant of this proposal';
+  END IF;
+
+  -- Update status (trigger validates transition + permissions)
+  UPDATE trade_proposals SET status = p_new_status WHERE id = p_proposal_id;
+
+  -- Notify the other party
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  SELECT
+    CASE WHEN v_caller = v_proposal.proposer_id THEN v_proposal.receiver_id ELSE v_proposal.proposer_id END,
+    'trade_update',
+    'Actualización de intercambio',
+    'Tu propuesta de intercambio cambió de estado',
+    jsonb_build_object('link', '/intercambios', 'proposal_id', p_proposal_id),
+    false;
+
+  SELECT jsonb_build_object(
+    'id', tp.id,
+    'status', tp.status
+  ) INTO v_result
+  FROM trade_proposals tp WHERE tp.id = p_proposal_id;
+
+  RETURN v_result;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION transition_trade_proposal(UUID, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION transition_trade_proposal(UUID, TEXT, TEXT) TO authenticated;
 
 -- Reviews RPC: validates order COMPLETED, participant, no duplicate
 CREATE OR REPLACE FUNCTION create_review(

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
-import { createClient } from "@supabase/supabase-js";
 
 function mapRpcError(message) {
   if (!message) return { status: 500 };
@@ -10,7 +9,9 @@ function mapRpcError(message) {
     case "AUTH_REQUIRED": return { status: 401 };
     case "NOT_RECEIVER": return { status: 403 };
     case "NOT_OWNER": return { status: 403 };
+    case "FORBIDDEN": return { status: 403 };
     case "PROPOSAL_NOT_FOUND": return { status: 404 };
+    case "PROPOSAL_REQUIRED": return { status: 400 };
     case "ITEM_NOT_FOUND": return { status: 404 };
     case "INVALID_STATUS": return { status: 409 };
     case "ITEM_UNAVAILABLE": return { status: 409 };
@@ -142,65 +143,22 @@ export async function PATCH(req, { params }) {
       return NextResponse.json({ ok: true, result: data });
     }
 
-    // All other status transitions: simple update (DB trigger validates)
+    // All other status transitions via RPC (DB trigger validates permissions)
     const supabase = createUserClient(token);
 
-    const { data: proposal } = await supabase
-      .from("trade_proposals")
-      .select("*")
-      .eq("id", id)
-      .single();
+    const { data, error: rpcError } = await supabase.rpc("transition_trade_proposal", {
+      p_proposal_id: id,
+      p_new_status: newStatus,
+      p_message: message || null,
+    });
 
-    if (!proposal) {
-      return NextResponse.json({ error: "Propuesta no encontrada" }, { status: 404 });
+    if (rpcError) {
+      console.warn("[Trade Proposal PATCH] Transition error:", rpcError.message);
+      const mapped = mapRpcError(rpcError.message);
+      return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
     }
 
-    if (proposal.proposer_id !== user.id && proposal.receiver_id !== user.id) {
-      return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
-    }
-
-    const updates = { status: newStatus };
-    if (message) updates.message = message;
-
-    const { error: updateError } = await supabase
-      .from("trade_proposals")
-      .update(updates)
-      .eq("id", id);
-
-    if (updateError) {
-      console.warn("[Trade Proposal PATCH] Update error:", updateError.message);
-      return NextResponse.json({ error: updateError.message }, { status: 400 });
-    }
-
-    // Notify the other party (best-effort)
-    const otherUserId = user.id === proposal.proposer_id ? proposal.receiver_id : proposal.proposer_id;
-    const statusLabels = {
-      ACCEPTED: "aceptó tu propuesta",
-      CANCELLED: "canceló la propuesta",
-      SHIPPED: "marcó como enviado",
-      SHIPPING_PENDING: "confirmó envío pendiente",
-      RECEIVED: "confirmó recepción",
-      COMPLETED: "completó el intercambio",
-      DISPUTED: "abrió una disputa",
-    };
-
-    if (statusLabels[newStatus]) {
-      try {
-        const serviceClient = createClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL,
-          process.env.SUPABASE_SERVICE_ROLE_KEY
-        );
-        await serviceClient.from("notifications").insert({
-          user_id: otherUserId,
-          type: "trade_update",
-          title: "Actualización de intercambio",
-          message: `${user.name || "Alguien"} ${statusLabels[newStatus]}`,
-          data: { link: "/intercambios" },
-        });
-      } catch {}
-    }
-
-    return NextResponse.json({ ok: true, status: newStatus });
+    return NextResponse.json({ ok: true, result: data });
   } catch (err) {
     console.error("[Trade Proposal PATCH]", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
