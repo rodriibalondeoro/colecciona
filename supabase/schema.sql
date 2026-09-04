@@ -2351,6 +2351,7 @@ SET search_path = public
 AS $$
 DECLARE
   v_caller UUID := auth.uid();
+  v_inserted BOOLEAN;
 BEGIN
   IF v_caller IS NULL THEN
     RAISE EXCEPTION 'Not authenticated';
@@ -2370,9 +2371,15 @@ BEGIN
   VALUES (v_caller, p_target_user_id)
   ON CONFLICT (follower_id, following_id) DO NOTHING;
 
-  -- Atomic counter updates
-  UPDATE public.profiles SET followers = COALESCE(followers, 0) + 1 WHERE id = p_target_user_id;
-  UPDATE public.profiles SET following = COALESCE(following, 0) + 1 WHERE id = v_caller;
+  -- Check if a new row was actually inserted (not just a no-op conflict)
+  GET DIAGNOSTICS v_inserted = ROW_COUNT;
+  v_inserted := (v_inserted > 0);
+
+  -- Only increment counters if a new follow was created
+  IF v_inserted THEN
+    UPDATE public.profiles SET followers = COALESCE(followers, 0) + 1 WHERE id = p_target_user_id;
+    UPDATE public.profiles SET following = COALESCE(following, 0) + 1 WHERE id = v_caller;
+  END IF;
 
   RETURN jsonb_build_object('success', true, 'following', true);
 END;
@@ -2386,6 +2393,7 @@ SET search_path = public
 AS $$
 DECLARE
   v_caller UUID := auth.uid();
+  v_deleted BOOLEAN;
 BEGIN
   IF v_caller IS NULL THEN
     RAISE EXCEPTION 'Not authenticated';
@@ -2395,9 +2403,15 @@ BEGIN
   DELETE FROM public.follows
   WHERE follower_id = v_caller AND following_id = p_target_user_id;
 
-  -- Atomic counter updates (GREATEST prevents negative)
-  UPDATE public.profiles SET followers = GREATEST(COALESCE(followers, 0) - 1, 0) WHERE id = p_target_user_id;
-  UPDATE public.profiles SET following = GREATEST(COALESCE(following, 0) - 1, 0) WHERE id = v_caller;
+  -- Check if a row was actually deleted
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  v_deleted := (v_deleted > 0);
+
+  -- Only decrement counters if a follow was actually removed
+  IF v_deleted THEN
+    UPDATE public.profiles SET followers = GREATEST(COALESCE(followers, 0) - 1, 0) WHERE id = p_target_user_id;
+    UPDATE public.profiles SET following = GREATEST(COALESCE(following, 0) - 1, 0) WHERE id = v_caller;
+  END IF;
 
   RETURN jsonb_build_object('success', true, 'following', false);
 END;
