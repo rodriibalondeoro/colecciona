@@ -90,7 +90,8 @@ export async function POST(req) {
     }
 
     // Create notification for recipient (server-side via service role)
-    await serviceClient.from("notifications").insert({
+    // Non-blocking: log error but don't fail the message.
+    const { error: notifError } = await serviceClient.from("notifications").insert({
       user_id: body.receiverId,
       type: "message",
       title: "Nuevo mensaje",
@@ -98,6 +99,9 @@ export async function POST(req) {
       data: { sender_id: user.id },
       link: `/messages`,
     });
+    if (notifError) {
+      console.error("[API /message] Notification insert failed:", notifError.message);
+    }
 
     return NextResponse.json({ success: true, messageId: message.id, createdAt: message.created_at });
   } catch (err) {
