@@ -2649,6 +2649,15 @@ CREATE TRIGGER trg_update_product_favorites
   AFTER INSERT OR DELETE ON favorites
   FOR EACH ROW EXECUTE FUNCTION update_product_favorites_count();
 
+-- POST-MIGRATION: reconcile historical favorites counts
+-- Run once after applying this migration to sync existing data
+UPDATE products p
+SET favorites = (
+  SELECT COUNT(*)
+  FROM favorites f
+  WHERE f.product_id = p.id
+);
+
 ALTER TABLE price_history ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "price_history_select_public" ON price_history;
 CREATE POLICY "price_history_select_public" ON price_history FOR SELECT USING (true);
