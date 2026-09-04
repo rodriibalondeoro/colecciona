@@ -3,12 +3,24 @@ import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
 function mapRpcError(message) {
   if (!message) return { status: 500 };
-  if (message.includes("not found")) return { status: 404 };
-  if (message.includes("does not belong")) return { status: 403 };
-  if (message.includes("not available")) return { status: 409 };
-  if (message.includes("yourself")) return { status: 400 };
-  if (message.includes("not authenticated")) return { status: 401 };
-  return { status: 500 };
+  const codeMatch = message.match(/^\[([A-Z_]+)\]/);
+  const code = codeMatch ? codeMatch[1] : null;
+  switch (code) {
+    case "AUTH_REQUIRED": return { status: 401 };
+    case "RECEIVER_REQUIRED": return { status: 400 };
+    case "SELF_TRADE": return { status: 400 };
+    case "RECEIVER_NOT_FOUND": return { status: 404 };
+    case "MESSAGE_TOO_LONG": return { status: 400 };
+    case "NO_ITEMS": return { status: 400 };
+    case "OVERLAP_ITEMS": return { status: 400 };
+    case "INVALID_ITEM": return { status: 400 };
+    case "INVALID_QUANTITY": return { status: 400 };
+    case "ITEM_NOT_FOUND": return { status: 404 };
+    case "NOT_OWNER": return { status: 403 };
+    case "ITEM_UNAVAILABLE": return { status: 409 };
+    case "INSUFFICIENT_QUANTITY": return { status: 409 };
+    default: return { status: 500 };
+  }
 }
 
 function validateItems(items, side) {

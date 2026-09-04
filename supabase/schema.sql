@@ -2827,75 +2827,128 @@ DECLARE
   v_item_record RECORD;
   v_committed INTEGER;
   v_available INTEGER;
+  v_all_item_ids UUID[];
+  v_proposer_item_ids UUID[];
+  v_receiver_item_ids UUID[];
+  v_overlap UUID[];
 BEGIN
   -- Auth check
-  IF v_caller IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
 
   -- Receiver validation
-  IF p_receiver_id IS NULL THEN RAISE EXCEPTION 'Receiver required'; END IF;
-  IF p_receiver_id = v_caller THEN RAISE EXCEPTION 'Cannot trade with yourself'; END IF;
+  IF p_receiver_id IS NULL THEN RAISE EXCEPTION '[RECEIVER_REQUIRED] Receiver required'; END IF;
+  IF p_receiver_id = v_caller THEN RAISE EXCEPTION '[SELF_TRADE] Cannot trade with yourself'; END IF;
   IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = p_receiver_id) THEN
-    RAISE EXCEPTION 'Receiver not found';
+    RAISE EXCEPTION '[RECEIVER_NOT_FOUND] Receiver not found';
   END IF;
 
   -- Message length
   IF length(p_message) > 1000 THEN
-    RAISE EXCEPTION 'Message too long (max 1000 characters)';
+    RAISE EXCEPTION '[MESSAGE_TOO_LONG] Message too long (max 1000 characters)';
   END IF;
 
   -- Must have at least one item
   IF jsonb_array_length(p_proposer_items) = 0 AND jsonb_array_length(p_receiver_items) = 0 THEN
-    RAISE EXCEPTION 'At least one item required';
+    RAISE EXCEPTION '[NO_ITEMS] At least one item required';
   END IF;
 
-  -- ==================== PROPOSER ITEMS ====================
+  -- Extract and validate proposer item IDs
+  SELECT array_agg((item->>'collection_item_id')::uuid) INTO v_proposer_item_ids
+  FROM jsonb_array_elements(p_proposer_items) AS item;
+
+  -- Extract and validate receiver item IDs
+  SELECT array_agg((item->>'collection_item_id')::uuid) INTO v_receiver_item_ids
+  FROM jsonb_array_elements(p_receiver_items) AS item;
+
+  -- Cross-side duplicate check: same item cannot appear on both sides
+  IF v_proposer_item_ids IS NOT NULL AND v_receiver_item_ids IS NOT NULL THEN
+    SELECT array_agg(id) INTO v_overlap
+    FROM unnest(v_proposer_item_ids) AS id
+    WHERE id = ANY(v_receiver_item_ids);
+
+    IF v_overlap IS NOT NULL AND array_length(v_overlap, 1) > 0 THEN
+      RAISE EXCEPTION '[OVERLAP_ITEMS] Item % appears on both sides', v_overlap[1];
+    END IF;
+  END IF;
+
+  -- ==================== DEADLOCK-FREE LOCKING ====================
+  -- Collect ALL item IDs, then lock in ORDER BY id (global convention)
+  v_all_item_ids := COALESCE(v_proposer_item_ids, '{}[]'::uuid[])
+    || COALESCE(v_receiver_item_ids, '{}[]'::uuid[]);
+
+  -- Lock all items in deterministic order (prevents deadlocks)
+  FOR v_item_record IN
+    SELECT * FROM collection_items
+    WHERE id = ANY(v_all_item_ids)
+    ORDER BY id
+    FOR UPDATE OF collection_items
+  LOOP
+    NULL; -- Lock acquired, will validate below
+  END LOOP;
+
+  -- ==================== PROPOSER ITEMS VALIDATION ====================
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_proposer_items)
   LOOP
     v_item_id := (v_item->>'collection_item_id')::uuid;
     v_quantity := COALESCE((v_item->>'quantity')::integer, 1);
 
-    -- Format checks
-    IF v_item_id IS NULL THEN RAISE EXCEPTION 'Invalid item ID'; END IF;
-    IF v_quantity < 1 THEN RAISE EXCEPTION 'Quantity must be >= 1'; END IF;
+    IF v_item_id IS NULL THEN RAISE EXCEPTION '[INVALID_ITEM] Invalid item ID'; END IF;
+    IF v_quantity < 1 THEN RAISE EXCEPTION '[INVALID_QUANTITY] Quantity must be >= 1'; END IF;
 
-    -- Lock and validate item
-    SELECT * INTO v_item_record FROM collection_items WHERE id = v_item_id FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION 'Item % not found', v_item_id; END IF;
+    -- Item already locked, just read and validate
+    SELECT * INTO v_item_record FROM collection_items WHERE id = v_item_id;
+    IF NOT FOUND THEN RAISE EXCEPTION '[ITEM_NOT_FOUND] Item % not found', v_item_id; END IF;
     IF v_item_record.user_id != v_caller THEN
-      RAISE EXCEPTION 'Item % does not belong to you', v_item_id;
+      RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to you', v_item_id;
     END IF;
     IF v_item_record.status IN ('MISSING', 'TRADED') THEN
-      RAISE EXCEPTION 'Item % is not available', v_item_id;
+      RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
 
-    -- Batch availability: duplicate_quantity - trade_quantity
-    v_available := v_item_record.duplicate_quantity - v_item_record.trade_quantity;
+    -- Availability: duplicate_quantity minus quantity committed in active proposals
+    SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
+    FROM trade_proposal_items tpi
+    JOIN trade_proposals tp ON tp.id = tpi.proposal_id
+    WHERE tpi.collection_item_id = v_item_id
+      AND tpi.user_id = v_caller
+      AND tp.status NOT IN ('COMPLETED', 'CANCELLED', 'DISPUTED');
+
+    v_available := v_item_record.duplicate_quantity - v_committed;
     IF v_quantity > v_available THEN
-      RAISE EXCEPTION 'Item %: requested % but only % available', v_item_id, v_quantity, v_available;
+      RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: requested % but only % available',
+        v_item_id, v_quantity, v_available;
     END IF;
   END LOOP;
 
-  -- ==================== RECEIVER ITEMS ====================
+  -- ==================== RECEIVER ITEMS VALIDATION ====================
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_receiver_items)
   LOOP
     v_item_id := (v_item->>'collection_item_id')::uuid;
     v_quantity := COALESCE((v_item->>'quantity')::integer, 1);
 
-    IF v_item_id IS NULL THEN RAISE EXCEPTION 'Invalid receiver item ID'; END IF;
-    IF v_quantity < 1 THEN RAISE EXCEPTION 'Quantity must be >= 1'; END IF;
+    IF v_item_id IS NULL THEN RAISE EXCEPTION '[INVALID_ITEM] Invalid receiver item ID'; END IF;
+    IF v_quantity < 1 THEN RAISE EXCEPTION '[INVALID_QUANTITY] Quantity must be >= 1'; END IF;
 
-    SELECT * INTO v_item_record FROM collection_items WHERE id = v_item_id FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION 'Item % not found', v_item_id; END IF;
+    SELECT * INTO v_item_record FROM collection_items WHERE id = v_item_id;
+    IF NOT FOUND THEN RAISE EXCEPTION '[ITEM_NOT_FOUND] Item % not found', v_item_id; END IF;
     IF v_item_record.user_id != p_receiver_id THEN
-      RAISE EXCEPTION 'Item % does not belong to receiver', v_item_id;
+      RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to receiver', v_item_id;
     END IF;
     IF v_item_record.status IN ('MISSING', 'TRADED') THEN
-      RAISE EXCEPTION 'Item % is not available', v_item_id;
+      RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
 
-    v_available := v_item_record.duplicate_quantity - v_item_record.trade_quantity;
+    SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
+    FROM trade_proposal_items tpi
+    JOIN trade_proposals tp ON tp.id = tpi.proposal_id
+    WHERE tpi.collection_item_id = v_item_id
+      AND tpi.user_id = p_receiver_id
+      AND tp.status NOT IN ('COMPLETED', 'CANCELLED', 'DISPUTED');
+
+    v_available := v_item_record.duplicate_quantity - v_committed;
     IF v_quantity > v_available THEN
-      RAISE EXCEPTION 'Item %: requested % but only % available', v_item_id, v_quantity, v_available;
+      RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: requested % but only % available',
+        v_item_id, v_quantity, v_available;
     END IF;
   END LOOP;
 
@@ -2905,7 +2958,6 @@ BEGIN
   RETURNING id INTO v_proposal_id;
 
   -- ==================== INSERT ITEMS ====================
-  -- Proposer items
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_proposer_items)
   LOOP
     INSERT INTO trade_proposal_items (proposal_id, collection_item_id, user_id, quantity, side)
@@ -2918,7 +2970,6 @@ BEGIN
     );
   END LOOP;
 
-  -- Receiver items
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_receiver_items)
   LOOP
     INSERT INTO trade_proposal_items (proposal_id, collection_item_id, user_id, quantity, side)
