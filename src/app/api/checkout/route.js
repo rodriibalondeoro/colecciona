@@ -22,6 +22,16 @@ export async function POST(req) {
       return NextResponse.json({ error: "No hay productos seleccionados" }, { status: 400 });
     }
 
+    if (productIds.length > 50) {
+      return NextResponse.json({ error: "Demasiados productos (máximo 50)" }, { status: 400 });
+    }
+
+    // Validate all IDs are UUIDs
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!productIds.every(id => typeof id === "string" && UUID_RE.test(id))) {
+      return NextResponse.json({ error: "ID de producto inválido" }, { status: 400 });
+    }
+
     if (!url || !serviceKey) {
       return NextResponse.json({ error: "Supabase no configurado" }, { status: 503 });
     }

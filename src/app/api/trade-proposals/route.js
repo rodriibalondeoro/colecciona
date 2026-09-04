@@ -115,6 +115,12 @@ export async function POST(req) {
       return NextResponse.json({ error: "Debes incluir al menos un elemento" }, { status: 400 });
     }
 
+    // Max items limit
+    const totalItems = (proposer_items?.length || 0) + (receiver_items?.length || 0);
+    if (totalItems > 50) {
+      return NextResponse.json({ error: "Demasiados elementos (máximo 50)" }, { status: 400 });
+    }
+
     // Validate item format
     const proposerFmtError = validateItems(proposer_items, "proposer");
     if (proposerFmtError) {

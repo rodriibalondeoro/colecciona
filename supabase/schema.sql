@@ -3648,6 +3648,22 @@ BEGIN
 END;
 $$;
 
+-- Recalculate reviewer rating using SQL AVG (scales better than JS)
+CREATE OR REPLACE FUNCTION update_reviewer_rating(p_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_avg NUMERIC;
+BEGIN
+  SELECT AVG(rating)::NUMERIC(3,2) INTO v_avg FROM reviews WHERE target_user_id = p_user_id;
+  UPDATE profiles SET rating = COALESCE(v_avg, 0) WHERE id = p_user_id;
+  RETURN jsonb_build_object('rating', COALESCE(v_avg, 0));
+END;
+$$;
+
+REVOKE ALL ON FUNCTION update_reviewer_rating(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION update_reviewer_rating(UUID) TO authenticated;
+
 -- ============================================================================
 -- OFFERS RPCs — atomic price negotiation
 -- ============================================================================

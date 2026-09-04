@@ -12,6 +12,23 @@ export async function POST(req) {
     const supabase = getServerSupabase();
     if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 
+    // Validate input types
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!body.orderId || typeof body.orderId !== "string" || !UUID_RE.test(body.orderId)) {
+      return NextResponse.json({ error: "Pedido inválido" }, { status: 400 });
+    }
+    if (!Number.isInteger(body.rating) || body.rating < 1 || body.rating > 5) {
+      return NextResponse.json({ error: "Valoración debe ser un entero entre 1 y 5" }, { status: 400 });
+    }
+    if (body.comment !== undefined && body.comment !== null) {
+      if (typeof body.comment !== "string") {
+        return NextResponse.json({ error: "Comentario inválido" }, { status: 400 });
+      }
+      if (body.comment.length > 2000) {
+        return NextResponse.json({ error: "Comentario demasiado largo (máximo 2000 caracteres)" }, { status: 400 });
+      }
+    }
+
     const { data: order } = await supabase
       .from("orders")
       .select("id, status, buyer_id, seller_id")
@@ -65,15 +82,22 @@ export async function POST(req) {
       return NextResponse.json({ error: insertError.message }, { status: 500 });
     }
 
-    const { data: allReviews } = await supabase
-      .from("reviews")
-      .select("rating")
-      .eq("target_user_id", reviewedId);
+    // Update rating using SQL AVG (scales better than loading all reviews into JS)
+    const { data: avgResult } = await supabase
+      .rpc("update_reviewer_rating", { p_user_id: reviewedId });
 
-    if (allReviews && allReviews.length > 0) {
-      const avg = allReviews.reduce((acc, r) => acc + r.rating, 0) / allReviews.length;
-      const rounded = Math.round(avg * 100) / 100;
-      await supabase.from("profiles").update({ rating: rounded }).eq("id", reviewedId);
+    // Fallback: direct SQL AVG if RPC not available
+    if (!avgResult) {
+      const { data: allReviews } = await supabase
+        .from("reviews")
+        .select("rating")
+        .eq("target_user_id", reviewedId);
+
+      if (allReviews && allReviews.length > 0) {
+        const avg = allReviews.reduce((acc, r) => acc + r.rating, 0) / allReviews.length;
+        const rounded = Math.round(avg * 100) / 100;
+        await supabase.from("profiles").update({ rating: rounded }).eq("id", reviewedId);
+      }
     }
 
     await supabase.from("notifications").insert({

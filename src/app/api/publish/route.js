@@ -70,7 +70,8 @@ export async function POST(req) {
         .select("user_id, card_name")
         .eq("status", "MISSING")
         .ilike("card_name", cardTitle)
-        .neq("user_id", user.id);
+        .neq("user_id", user.id)
+        .limit(100);
 
       if (queryError) {
         console.warn("[API /publish] Query error:", queryError.message);

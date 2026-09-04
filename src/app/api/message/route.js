@@ -25,12 +25,21 @@ export async function POST(req) {
 
     const body = await req.json();
 
-    if (!body.receiverId || !body.text) {
-      return NextResponse.json({ error: "Faltan campos requeridos" }, { status: 400 });
+    // Validate types explicitly
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!body.receiverId || typeof body.receiverId !== "string" || !UUID_RE.test(body.receiverId)) {
+      return NextResponse.json({ error: "Destinatario inválido" }, { status: 400 });
     }
-
+    if (!body.text || typeof body.text !== "string" || body.text.trim().length === 0) {
+      return NextResponse.json({ error: "El mensaje no puede estar vacío" }, { status: 400 });
+    }
     if (body.text.length > 5000) {
-      return NextResponse.json({ error: "Mensaje demasiado largo" }, { status: 400 });
+      return NextResponse.json({ error: "Mensaje demasiado largo (máximo 5000 caracteres)" }, { status: 400 });
+    }
+    if (body.productId !== undefined && body.productId !== null) {
+      if (typeof body.productId !== "string" || !UUID_RE.test(body.productId)) {
+        return NextResponse.json({ error: "ID de producto inválido" }, { status: 400 });
+      }
     }
 
     // BLOCK self-messaging
