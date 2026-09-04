@@ -226,24 +226,6 @@ export async function persistMessage(message) {
   }
 }
 
-/** Crea una notificación para el destinatario (no bloqueante). */
-export async function notifyUser({ recipientId, type, title, body, link }) {
-  if (!recipientId) return;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
-    await fetch("/api/notifications", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-      body: JSON.stringify({ recipientId, type, title, body, link }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-  } catch (err) {
-    console.warn("[DataService] notifyUser no disponible:", err?.message);
-  }
-}
-
 /** Crea una oferta de precio para un producto (inicia el hilo de negociación). */
 export async function createOffer({ productId, amount, message }) {
   const token = await getAuthToken();

@@ -19,37 +19,15 @@ export async function GET(req) {
   return NextResponse.json({ notifications: data || [] });
 }
 
-export async function POST(req) {
-  const { user, error: authError } = await verifyAuth(req);
-  if (authError || !user) {
-    return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-  }
-
-  const { recipientId, type = "general", title, body, link = "#" } = await req.json();
-  if (!recipientId || !title) {
-    return NextResponse.json({ error: "recipientId y title son obligatorios" }, { status: 400 });
-  }
-
-  // SECURITY: users can only create notifications for OTHER users (not self-spam)
-  // Server-side notifications (message, offer, etc.) should use serviceRole directly.
-  if (recipientId === user.id) {
-    return NextResponse.json({ error: "No puedes crear notificaciones para ti mismo" }, { status: 400 });
-  }
-
-  const supabase = getServerSupabase();
-  if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
-
-  const { data, error } = await supabase
-    .from("notifications")
-    .insert([{ user_id: recipientId, type, title, body, link, read: false }])
-    .select()
-    .single();
-
-  if (error) {
-    console.warn("[Notifications API] Error al insertar:", error.message);
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-  return NextResponse.json({ success: true, notification: data });
+// POST REMOVED: notifications are created server-side only via service_role.
+// Client-side notification creation was a spam/abuse vector.
+// All notification creation happens in API routes (message, offers, etc.)
+// using serviceClient directly — no endpoint exposed to the frontend.
+export async function POST() {
+  return NextResponse.json(
+    { error: "Notifications cannot be created via client API" },
+    { status: 405 }
+  );
 }
 
 export async function PATCH(req) {
