@@ -2772,12 +2772,19 @@ BEGIN
   END IF;
 
   -- Check against already-committed quantities in active proposals
+  -- Commitment model: PROPOSED/COUNTERED → only proposer items committed
+  --                   ACCEPTED+ → both sides committed
+  --                   SUPERSEDED/CANCELLED/COMPLETED/DISPUTED → nothing committed
   SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
   FROM trade_proposal_items tpi
   JOIN trade_proposals tp ON tp.id = tpi.proposal_id
   WHERE tpi.collection_item_id = NEW.collection_item_id
     AND tpi.user_id = NEW.user_id
-    AND tp.status NOT IN ('COMPLETED','CANCELLED','DISPUTED')
+    AND (
+      (tp.status IN ('PROPOSED', 'COUNTERED') AND tpi.side = 'proposer')
+      OR
+      (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
+    )
     AND (NEW.id IS NULL OR tpi.id != NEW.id);
 
   IF (NEW.quantity + v_committed) > v_item.duplicate_quantity THEN
@@ -2922,12 +2929,17 @@ BEGIN
     END IF;
 
     -- Availability: duplicate_quantity minus quantity committed in active proposals
+    -- Same logic as trigger: PROPOSED/COUNTERED → proposer only; ACCEPTED+ → both
     SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
     FROM trade_proposal_items tpi
     JOIN trade_proposals tp ON tp.id = tpi.proposal_id
     WHERE tpi.collection_item_id = v_item_id
       AND tpi.user_id = v_caller
-      AND tp.status NOT IN ('COMPLETED', 'CANCELLED', 'DISPUTED');
+      AND (
+        (tp.status IN ('PROPOSED', 'COUNTERED') AND tpi.side = 'proposer')
+        OR
+        (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
+      );
 
     v_available := v_item_record.duplicate_quantity - v_committed;
     IF v_quantity > v_available THEN
@@ -3140,13 +3152,17 @@ BEGIN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
 
-    -- Check availability (same as create_trade_proposal)
+    -- Check availability (same logic as trigger + create_trade_proposal)
     SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
     FROM trade_proposal_items tpi
     JOIN trade_proposals tp ON tp.id = tpi.proposal_id
     WHERE tpi.collection_item_id = v_item_id
       AND tpi.user_id = v_caller
-      AND tp.status NOT IN ('COMPLETED', 'CANCELLED', 'DISPUTED', 'SUPERSEDED');
+      AND (
+        (tp.status IN ('PROPOSED', 'COUNTERED') AND tpi.side = 'proposer')
+        OR
+        (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
+      );
 
     v_available := v_item_record.duplicate_quantity - v_committed;
     IF v_quantity > v_available THEN
@@ -3258,6 +3274,113 @@ $$;
 
 REVOKE ALL ON FUNCTION counter_offer_proposal(UUID, TEXT, JSONB, JSONB) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION counter_offer_proposal(UUID, TEXT, JSONB, JSONB) TO authenticated;
+
+-- ============================================================================
+-- ACCEPT TRADE PROPOSAL — atomic accept with receiver item availability check
+-- ============================================================================
+
+-- Accept: locks receiver items, checks availability, updates status atomically
+CREATE OR REPLACE FUNCTION accept_trade_proposal(p_proposal_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_caller UUID := auth.uid();
+  v_proposal RECORD;
+  v_item RECORD;
+  v_committed INTEGER;
+  v_available INTEGER;
+  v_result JSONB;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  IF p_proposal_id IS NULL THEN RAISE EXCEPTION '[PROPOSAL_REQUIRED] Proposal ID required'; END IF;
+
+  -- Read and lock proposal
+  SELECT * INTO v_proposal FROM trade_proposals WHERE id = p_proposal_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION '[PROPOSAL_NOT_FOUND] Proposal not found'; END IF;
+
+  -- Only receiver can accept
+  IF v_proposal.receiver_id != v_caller THEN
+    RAISE EXCEPTION '[NOT_RECEIVER] Only the receiver can accept this proposal';
+  END IF;
+
+  -- Must be PROPOSED or COUNTERED
+  IF v_proposal.status NOT IN ('PROPOSED', 'COUNTERED') THEN
+    RAISE EXCEPTION '[INVALID_STATUS] Cannot accept a % proposal', v_proposal.status;
+  END IF;
+
+  -- ==================== RECEIVER ITEM AVAILABILITY CHECK ====================
+  -- Lock receiver items and verify availability before accepting
+  FOR v_item IN
+    SELECT ci.*, tpi.quantity AS requested_quantity
+    FROM trade_proposal_items tpi
+    JOIN collection_items ci ON ci.id = tpi.collection_item_id
+    WHERE tpi.proposal_id = p_proposal_id
+      AND tpi.side = 'receiver'
+    ORDER BY ci.id
+    FOR UPDATE OF ci
+  LOOP
+    -- Check item still belongs to receiver
+    IF v_item.user_id != v_caller THEN
+      RAISE EXCEPTION '[NOT_OWNER] Item % no longer belongs to you', v_item.id;
+    END IF;
+
+    -- Check item still available
+    IF v_item.status IN ('MISSING', 'FOR_SALE') THEN
+      RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is no longer available', v_item.id;
+    END IF;
+
+    -- Check availability: now that we're accepting, BOTH sides are committed
+    -- So count all items (proposer + receiver) in this and other active proposals
+    SELECT COALESCE(SUM(tpi2.quantity), 0) INTO v_committed
+    FROM trade_proposal_items tpi2
+    JOIN trade_proposals tp2 ON tp2.id = tpi2.proposal_id
+    WHERE tpi2.collection_item_id = v_item.id
+      AND tpi2.user_id = v_caller
+      AND (
+        (tp2.status IN ('PROPOSED', 'COUNTERED') AND tpi2.side = 'proposer')
+        OR
+        (tp2.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
+      )
+      AND tpi2.proposal_id != p_proposal_id;  -- Exclude this proposal's items
+
+    v_available := v_item.duplicate_quantity - v_committed;
+    IF v_item.requested_quantity > v_available THEN
+      RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: need % but only % available',
+        v_item.id, v_item.requested_quantity, v_available;
+    END IF;
+  END LOOP;
+
+  -- ==================== ACCEPT ====================
+  UPDATE trade_proposals SET status = 'ACCEPTED' WHERE id = p_proposal_id;
+
+  -- ==================== NOTIFICATION ====================
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (
+    v_proposal.proposer_id,
+    'trade_update',
+    'Propuesta aceptada',
+    'Tu propuesta de intercambio fue aceptada',
+    jsonb_build_object('link', '/intercambios', 'proposal_id', p_proposal_id),
+    false
+  );
+
+  -- Return updated proposal
+  SELECT jsonb_build_object(
+    'id', tp.id,
+    'status', tp.status,
+    'proposer_id', tp.proposer_id,
+    'receiver_id', tp.receiver_id,
+    'accepted_at', tp.accepted_at
+  ) INTO v_result
+  FROM trade_proposals tp WHERE tp.id = p_proposal_id;
+
+  RETURN v_result;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION accept_trade_proposal(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION accept_trade_proposal(UUID) TO authenticated;
 
 -- Reviews RPC: validates order COMPLETED, participant, no duplicate
 CREATE OR REPLACE FUNCTION create_review(

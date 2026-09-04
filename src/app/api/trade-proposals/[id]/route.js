@@ -126,6 +126,22 @@ export async function PATCH(req, { params }) {
       return NextResponse.json({ ok: true, result: data });
     }
 
+    // ACCEPTED requires accept RPC (receiver item availability check)
+    if (newStatus === "ACCEPTED") {
+      const supabase = createUserClient(token);
+      const { data, error: rpcError } = await supabase.rpc("accept_trade_proposal", {
+        p_proposal_id: id,
+      });
+
+      if (rpcError) {
+        console.warn("[Trade Proposal PATCH] Accept error:", rpcError.message);
+        const mapped = mapRpcError(rpcError.message);
+        return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
+      }
+
+      return NextResponse.json({ ok: true, result: data });
+    }
+
     // All other status transitions: simple update (DB trigger validates)
     const supabase = createUserClient(token);
 
