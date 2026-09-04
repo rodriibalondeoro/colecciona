@@ -2,32 +2,28 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
-import { appendFileSync } from "fs";
-
-function logDebug(msg) {
-  try { appendFileSync("/tmp/colecciona-publish.log", `${new Date().toISOString()} ${msg}\n`); } catch {}
-}
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const PRODUCT_STATUSES = new Set(["DRAFT", "ACTIVE"]);
 
+const TITLE_MAX = 200;
+const DESC_MAX = 2000;
+const VALID_CATEGORIES = new Set([
+  " Pokemon", "Yu-Gi-Oh!", "Magic", "One Piece", "Dragon Ball",
+  "Digimon", "Force of Valor", "Lorcana", "Other",
+]);
+const VALID_CONDITIONS = new Set(["NEW", "LIKE_NEW", "GOOD", "ACCEPTABLE", "POOR"]);
+
 export async function POST(req) {
   try {
     const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const authHeader = req.headers.get("authorization") || "(none)";
-    logDebug(`POST ip=${ip} auth=${authHeader.slice(0, 30)}`);
-    const isDev = process.env.NODE_ENV !== "production";
-    if (!isDev) {
-      const rl = rateLimit(`publish:${ip}`, { limit: 10, windowMs: 60000 });
-      if (!rl.allowed) {
-        logDebug("RATE LIMITED");
-        return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
-      }
+    const rl = rateLimit(`publish:${ip}`, { limit: 10, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
     }
 
     if (!url || !key) {
-      logDebug("SUPABASE NOT CONFIGURED");
       return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
     }
 
@@ -37,25 +33,56 @@ export async function POST(req) {
     }
 
     const body = await req.json();
+
+    // SERVER-SIDE VALIDATION
+    if (!body.title || typeof body.title !== "string" || body.title.trim().length === 0) {
+      return NextResponse.json({ error: "Título es obligatorio" }, { status: 400 });
+    }
+    if (body.title.length > TITLE_MAX) {
+      return NextResponse.json({ error: `Título máximo ${TITLE_MAX} caracteres` }, { status: 400 });
+    }
+
+    const price = Number(body.price);
+    if (!Number.isFinite(price) || price <= 0) {
+      return NextResponse.json({ error: "Precio debe ser un número positivo" }, { status: 400 });
+    }
+    if (price > 999999) {
+      return NextResponse.json({ error: "Precio máximo 999999" }, { status: 400 });
+    }
+
+    if (body.description && body.description.length > DESC_MAX) {
+      return NextResponse.json({ error: `Descripción máxima ${DESC_MAX} caracteres` }, { status: 400 });
+    }
+
+    if (body.image && typeof body.image === "string" && !body.image.startsWith("http")) {
+      return NextResponse.json({ error: "Imagen debe ser una URL válida" }, { status: 400 });
+    }
+
+    if (body.year) {
+      const year = Number(body.year);
+      if (!Number.isInteger(year) || year < 1900 || year > new Date().getFullYear() + 1) {
+        return NextResponse.json({ error: "Año inválido" }, { status: 400 });
+      }
+    }
+
     const status = PRODUCT_STATUSES.has(body.status) ? body.status : "ACTIVE";
-    logDebug(`body: seller=${user.id} title=${body.title} img=${String(body.image).slice(0, 60)}`);
     const supabase = createClient(url, key);
 
     const { data, error } = await supabase
       .from("products")
       .insert({
-        title: body.title,
-        price: body.price,
-        image: body.image,
-        category: body.category,
-        condition: body.condition,
+        title: body.title.trim(),
+        price,
+        image: body.image || null,
+        category: body.category || null,
+        condition: body.condition || null,
         seller: user.id,
-        code: body.code,
-        rarity: body.rarity,
-        description: body.description,
-        set: body.set,
-        language: body.language,
-        year: body.year,
+        code: body.code || null,
+        rarity: body.rarity || null,
+        description: body.description || null,
+        set: body.set || null,
+        language: body.language || null,
+        year: body.year || null,
         status,
         created_at: new Date().toISOString(),
       })
@@ -81,8 +108,8 @@ export async function POST(req) {
         const notifications = missingHolders.map(h => ({
           user_id: h.user_id,
           type: "price_alert",
-          title: "🔥 ¡Cromo de tu lista de faltas disponible!",
-          message: `"${cardTitle}" acaba de ser publicado por ${user.id} a ${body.price}€.`,
+          title: "Cromo de tu lista de faltas disponible",
+          message: `"${cardTitle}" acaba de ser publicado a ${price}€.`,
           data: { product_id: data.id, card_name: h.card_name },
           read: false,
           created_at: new Date().toISOString(),

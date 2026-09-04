@@ -10,7 +10,22 @@ export async function GET(req) {
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) {
+    return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
+  }
+
   const supabase = createClient(url, serviceKey);
+
+  // ADMIN CHECK: verify user is admin before exposing internal stats
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("is_admin")
+    .eq("id", user.id)
+    .single();
+
+  if (profileError || !profile?.is_admin) {
+    return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+  }
 
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
