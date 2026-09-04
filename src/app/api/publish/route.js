@@ -68,6 +68,34 @@ export async function POST(req) {
     const status = PRODUCT_STATUSES.has(body.status) ? body.status : "ACTIVE";
     const supabase = createClient(url, key);
 
+    // Validate collection_item_id if provided (unified inventory)
+    let collectionItemId = body.collection_item_id || null;
+    if (collectionItemId) {
+      // Verify the collection item belongs to the seller
+      const { data: ci, error: ciError } = await supabase
+        .from("collection_items")
+        .select("id, user_id, duplicate_quantity")
+        .eq("id", collectionItemId)
+        .single();
+
+      if (ciError || !ci) {
+        return NextResponse.json({ error: "Elemento de colección no encontrado" }, { status: 404 });
+      }
+      if (ci.user_id !== user.id) {
+        return NextResponse.json({ error: "El elemento no te pertenece" }, { status: 403 });
+      }
+
+      // Check available quantity (trade commitments + marketplace reservations)
+      const { data: available } = await supabase
+        .rpc("get_available_quantity", { p_collection_item_id: collectionItemId });
+
+      if (!available || available <= 0) {
+        return NextResponse.json({
+          error: "No hay unidades disponibles para publicar (comprometidas en intercambios o mercado)",
+        }, { status: 409 });
+      }
+    }
+
     const { data, error } = await supabase
       .from("products")
       .insert({
@@ -77,6 +105,7 @@ export async function POST(req) {
         category: body.category || null,
         condition: body.condition || null,
         seller: user.id,
+        collection_item_id: collectionItemId,
         code: body.code || null,
         rarity: body.rarity || null,
         description: body.description || null,

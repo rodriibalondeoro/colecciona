@@ -212,6 +212,7 @@ CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user ON wallet_transactions(u
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS products (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  collection_item_id UUID REFERENCES collection_items(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   price NUMERIC(10,2) NOT NULL CHECK (price > 0),
   market_price NUMERIC(10,2) CHECK (market_price > 0),
@@ -2770,21 +2771,9 @@ BEGIN
     RAISE EXCEPTION 'Quantity (%) exceeds duplicates (%)', NEW.quantity, v_item.duplicate_quantity;
   END IF;
 
-  -- Check against already-committed quantities in active proposals
-  -- Commitment model: PROPOSED/COUNTERED → only proposer items committed
-  --                   ACCEPTED+ → both sides committed
-  --                   SUPERSEDED/CANCELLED/COMPLETED/DISPUTED → nothing committed
-  SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
-  FROM trade_proposal_items tpi
-  JOIN trade_proposals tp ON tp.id = tpi.proposal_id
-  WHERE tpi.collection_item_id = NEW.collection_item_id
-    AND tpi.user_id = NEW.user_id
-    AND (
-      (tp.status IN ('PROPOSED', 'COUNTERED') AND tpi.side = 'proposer')
-      OR
-      (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
-    )
-    AND (NEW.id IS NULL OR tpi.id != NEW.id);
+  -- Check against available quantity using unified function
+  -- Accounts for: trade commitments + marketplace reservations
+  v_committed := v_item.duplicate_quantity - get_available_quantity(NEW.collection_item_id);
 
   IF (NEW.quantity + v_committed) > v_item.duplicate_quantity THEN
     RAISE EXCEPTION 'Quantity (%) + already committed (%) exceeds available duplicates (%)',
@@ -2812,6 +2801,57 @@ DROP TRIGGER IF EXISTS trg_validate_trade_proposal_item_quantity ON trade_propos
 CREATE TRIGGER trg_validate_trade_proposal_item_quantity
   BEFORE INSERT OR UPDATE ON trade_proposal_items
   FOR EACH ROW EXECUTE FUNCTION validate_trade_proposal_item_quantity();
+
+-- ============================================================================
+-- UNIFIED AVAILABILITY — single source of truth for collection item availability
+-- ============================================================================
+
+-- Returns the real available quantity for a collection item
+-- AVAILABLE = duplicate_quantity - trade_commitments - marketplace_reservations
+CREATE OR REPLACE FUNCTION get_available_quantity(p_collection_item_id UUID)
+RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_item RECORD;
+  v_trade_committed INTEGER;
+  v_marketplace_reserved INTEGER;
+  v_available INTEGER;
+BEGIN
+  -- Get base item
+  SELECT * INTO v_item FROM collection_items WHERE id = p_collection_item_id;
+  IF NOT FOUND THEN RETURN 0; END IF;
+
+  -- Trade commitments: items locked in active trade proposals
+  -- PROPOSED/COUNTERED: only proposer items committed
+  -- ACCEPTED+: both sides committed
+  SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_trade_committed
+  FROM trade_proposal_items tpi
+  JOIN trade_proposals tp ON tp.id = tpi.proposal_id
+  WHERE tpi.collection_item_id = p_collection_item_id
+    AND tpi.user_id = v_item.user_id
+    AND (
+      (tp.status IN ('PROPOSED', 'COUNTERED') AND tpi.side = 'proposer')
+      OR
+      (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
+    );
+
+  -- Marketplace reservations: ACTIVE products linked to this item
+  -- Each product represents one unit reserved for sale
+  SELECT COALESCE(COUNT(*), 0) INTO v_marketplace_reserved
+  FROM products
+  WHERE collection_item_id = p_collection_item_id
+    AND seller = v_item.user_id
+    AND status IN ('ACTIVE', 'RESERVED');
+
+  v_available := v_item.duplicate_quantity - v_trade_committed - v_marketplace_reserved;
+
+  RETURN GREATEST(v_available, 0);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION get_available_quantity(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_available_quantity(UUID) TO authenticated;
 
 -- ============================================================================
 -- TRADE PROPOSALS RPCs — atomic creation with batch validation
@@ -2927,20 +2967,8 @@ BEGIN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
 
-    -- Availability: duplicate_quantity minus quantity committed in active proposals
-    -- Same logic as trigger: PROPOSED/COUNTERED → proposer only; ACCEPTED+ → both
-    SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
-    FROM trade_proposal_items tpi
-    JOIN trade_proposals tp ON tp.id = tpi.proposal_id
-    WHERE tpi.collection_item_id = v_item_id
-      AND tpi.user_id = v_caller
-      AND (
-        (tp.status IN ('PROPOSED', 'COUNTERED') AND tpi.side = 'proposer')
-        OR
-        (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
-      );
-
-    v_available := v_item_record.duplicate_quantity - v_committed;
+    -- Availability: use unified function (accounts for trades + marketplace)
+    v_available := get_available_quantity(v_item_id);
     IF v_quantity > v_available THEN
       RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: requested % but only % available',
         v_item_id, v_quantity, v_available;
@@ -3151,19 +3179,8 @@ BEGIN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
 
-    -- Check availability (same logic as trigger + create_trade_proposal)
-    SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
-    FROM trade_proposal_items tpi
-    JOIN trade_proposals tp ON tp.id = tpi.proposal_id
-    WHERE tpi.collection_item_id = v_item_id
-      AND tpi.user_id = v_caller
-      AND (
-        (tp.status IN ('PROPOSED', 'COUNTERED') AND tpi.side = 'proposer')
-        OR
-        (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
-      );
-
-    v_available := v_item_record.duplicate_quantity - v_committed;
+    -- Check availability using unified function
+    v_available := get_available_quantity(v_item_id);
     IF v_quantity > v_available THEN
       RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: requested % but only % available',
         v_item_id, v_quantity, v_available;
@@ -3329,21 +3346,9 @@ BEGIN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is no longer available', v_item.id;
     END IF;
 
-    -- Check availability: now that we're accepting, BOTH sides are committed
-    -- So count all items (proposer + receiver) in this and other active proposals
-    SELECT COALESCE(SUM(tpi2.quantity), 0) INTO v_committed
-    FROM trade_proposal_items tpi2
-    JOIN trade_proposals tp2 ON tp2.id = tpi2.proposal_id
-    WHERE tpi2.collection_item_id = v_item.id
-      AND tpi2.user_id = v_caller
-      AND (
-        (tp2.status IN ('PROPOSED', 'COUNTERED') AND tpi2.side = 'proposer')
-        OR
-        (tp2.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
-      )
-      AND tpi2.proposal_id != p_proposal_id;  -- Exclude this proposal's items
-
-    v_available := v_item.duplicate_quantity - v_committed;
+    -- Check availability using unified function
+    -- At ACCEPTED: both sides are committed, so check full availability
+    v_available := get_available_quantity(v_item.id);
     IF v_item.requested_quantity > v_available THEN
       RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: need % but only % available',
         v_item.id, v_item.requested_quantity, v_available;
