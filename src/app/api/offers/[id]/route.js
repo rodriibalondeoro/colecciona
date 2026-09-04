@@ -15,7 +15,10 @@ function mapRpcError(message) {
     case "NOT_SENDER": return { status: 403, code };
     case "OFFER_NOT_PENDING": return { status: 409, code };
     case "PRODUCT_UNAVAILABLE": return { status: 409, code };
+    case "PRODUCT_RACE": return { status: 409, code };
+    case "OFFER_RACE": return { status: 409, code };
     case "INVALID_AMOUNT": return { status: 400, code };
+    case "MESSAGE_TOO_LONG": return { status: 400, code };
     case "CANNOT_SELF_OFFER": return { status: 400, code };
     case "OFFER_EXISTS": return { status: 409, code };
     default: return { status: 500, code };
@@ -57,12 +60,21 @@ export async function PATCH(req, { params }) {
       break;
     }
     case "counter": {
-      if (!amount || amount <= 0) {
-        return NextResponse.json({ error: "amount es obligatorio para contraoferta" }, { status: 400 });
+      const parsedAmount = typeof amount === "string" ? Number(amount) : amount;
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        return NextResponse.json({ error: "Importe inválido" }, { status: 400 });
+      }
+      if (message !== undefined && message !== null) {
+        if (typeof message !== "string") {
+          return NextResponse.json({ error: "message debe ser texto" }, { status: 400 });
+        }
+        if (message.length > 1000) {
+          return NextResponse.json({ error: "Mensaje demasiado largo (máximo 1000 caracteres)" }, { status: 400 });
+        }
       }
       const result = await supabase.rpc("counter_offer", {
         p_offer_id: id,
-        p_amount: amount,
+        p_amount: parsedAmount,
         p_message: message || "",
       });
       rpcResult = result;

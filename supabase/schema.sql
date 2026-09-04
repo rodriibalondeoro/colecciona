@@ -3078,6 +3078,7 @@ DECLARE
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
   IF p_amount <= 0 THEN RAISE EXCEPTION '[INVALID_AMOUNT] Counter-offer amount must be positive'; END IF;
+  IF length(p_message) > 1000 THEN RAISE EXCEPTION '[MESSAGE_TOO_LONG] Message too long (max 1000 characters)'; END IF;
 
   -- 1. Read offer without lock to get product_id
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id;
