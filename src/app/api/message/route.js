@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -22,15 +22,58 @@ export async function POST(req) {
     if (!url || !key) {
       return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
     }
-    const supabase = createClient(url, key);
+
     const body = await req.json();
 
     if (!body.receiverId || !body.text) {
       return NextResponse.json({ error: "Faltan campos requeridos" }, { status: 400 });
     }
 
-    // Insert message
-    const { data: message, error } = await supabase
+    if (body.text.length > 5000) {
+      return NextResponse.json({ error: "Mensaje demasiado largo" }, { status: 400 });
+    }
+
+    // BLOCK self-messaging
+    if (body.receiverId === user.id) {
+      return NextResponse.json({ error: "No puedes enviarte mensajes a ti mismo" }, { status: 400 });
+    }
+
+    const token = extractToken(req);
+    if (!token) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
+
+    // Use authenticated client for message insert — enforces RLS
+    const userClient = createUserClient(token);
+    // Use service role only for notifications (server-side, no RLS needed)
+    const serviceClient = createClient(url, key);
+
+    // VALIDATE receiver exists
+    const { data: receiver, error: receiverError } = await serviceClient
+      .from("profiles")
+      .select("id")
+      .eq("id", body.receiverId)
+      .single();
+
+    if (receiverError || !receiver) {
+      return NextResponse.json({ error: "Destinatario no encontrado" }, { status: 404 });
+    }
+
+    // VALIDATE product exists (if provided)
+    if (body.productId) {
+      const { data: product, error: productError } = await serviceClient
+        .from("products")
+        .select("id")
+        .eq("id", body.productId)
+        .single();
+
+      if (productError || !product) {
+        return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
+      }
+    }
+
+    // Insert message via authenticated client (RLS enforced: auth.uid() = sender_id)
+    const { data: message, error } = await userClient
       .from("messages")
       .insert({
         sender_id: user.id,
@@ -46,12 +89,13 @@ export async function POST(req) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Create notification for recipient (server-side, reliable)
-    await supabase.from("notifications").insert({
+    // Create notification for recipient (server-side via service role)
+    await serviceClient.from("notifications").insert({
       user_id: body.receiverId,
       type: "message",
       title: "Nuevo mensaje",
-      body: body.text.length > 100 ? body.text.substring(0, 100) + "…" : body.text,
+      message: body.text.length > 100 ? body.text.substring(0, 100) + "…" : body.text,
+      data: { sender_id: user.id },
       link: `/messages`,
     });
 
