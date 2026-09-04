@@ -9,12 +9,16 @@
    FIX: sync_subscription_from_stripe() RPC function makes the version check
    atomic inside PostgreSQL. The DB decides whether to apply the update:
      - INSERT if no row exists (converges for lost created events)
-     - UPDATE only if incoming stripe_updated_at > existing
-     - UPDATE only if existing status is not terminal (canceled)
+     - UPDATE only if incoming stripe_updated_at > existing (version ordering)
+
+   SECURITY: SECURITY DEFINER + SET search_path = public.
+   Only service_role (backend) can call this function.
+   Revoke from PUBLIC, anon, authenticated.
    ========================================================================== */
 
 -- Atomic subscription sync: INSERT or conditional UPDATE.
 -- The database decides — not JavaScript.
+-- Version authority: stripe_updated_at. Newer always wins.
 CREATE OR REPLACE FUNCTION public.sync_subscription_from_stripe(
   p_user_id uuid,
   p_stripe_subscription_id text,
@@ -30,12 +34,14 @@ CREATE OR REPLACE FUNCTION public.sync_subscription_from_stripe(
 RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
   v_new_status text := LOWER(p_status);
-  v_is_terminal boolean;
 BEGIN
-  -- 1. UPSERT: insert if missing, update if incoming is newer and not terminal.
+  -- UPSERT: insert if missing, update if incoming is strictly newer.
+  -- stripe_updated_at is the sole version authority.
+  -- No terminal state check: if Stripe says a newer state exists, it wins.
   INSERT INTO public.subscriptions (
     user_id, stripe_subscription_id, stripe_customer_id,
     status, plan, amount,
@@ -58,26 +64,34 @@ BEGIN
     cancel_at           = EXCLUDED.cancel_at,
     stripe_updated_at    = EXCLUDED.stripe_updated_at
   WHERE
-    -- VERSION CHECK: only apply if incoming is strictly newer
-    EXCLUDED.stripe_updated_at > public.subscriptions.stripe_updated_at
-    -- TERMINAL STATE CHECK: never overwrite a canceled subscription
-    AND public.subscriptions.status != 'canceled';
+    -- VERSION CHECK: only apply if incoming is strictly newer.
+    -- Stripe is the source of truth. If a newer event exists, it wins.
+    EXCLUDED.stripe_updated_at > public.subscriptions.stripe_updated_at;
 
-  -- 2. Interpret result based on what actually happened.
-  --    INSERT = new row created → 'inserted'
-  --    UPDATE with status change → the new status
-  --    UPDATE with no status change → 'unchanged'
-  --    No-op (version stale or terminal) → 'unchanged'
+  -- Return current status after upsert (INSERT or UPDATE or no-op).
   SELECT status INTO v_new_status
   FROM public.subscriptions
   WHERE stripe_subscription_id = p_stripe_subscription_id;
 
-  SELECT (status != 'canceled') INTO v_is_terminal
-  FROM public.subscriptions
-  WHERE stripe_subscription_id = p_stripe_subscription_id;
-
-  -- If existing was already canceled and we're being asked to update,
-  -- the WHERE clause blocked it. Return 'unchanged' (no-op).
   RETURN v_new_status;
 END;
 $$;
+
+-- SECURITY: lock down function permissions.
+-- This function is backend-only (webhook → service_role).
+-- Revoke from all roles, grant only to service_role.
+REVOKE EXECUTE ON FUNCTION public.sync_subscription_from_stripe(
+  uuid, text, text, text, text, numeric, timestamptz, timestamptz, timestamptz, timestamptz
+) FROM PUBLIC;
+
+REVOKE EXECUTE ON FUNCTION public.sync_subscription_from_stripe(
+  uuid, text, text, text, text, numeric, timestamptz, timestamptz, timestamptz, timestamptz
+) FROM anon;
+
+REVOKE EXECUTE ON FUNCTION public.sync_subscription_from_stripe(
+  uuid, text, text, text, text, numeric, timestamptz, timestamptz, timestamptz, timestamptz
+) FROM authenticated;
+
+GRANT EXECUTE ON FUNCTION public.sync_subscription_from_stripe(
+  uuid, text, text, text, text, numeric, timestamptz, timestamptz, timestamptz, timestamptz
+) TO service_role;
