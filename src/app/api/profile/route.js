@@ -1,64 +1,62 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { verifyAuth } from "@/lib/serverAuth";
-
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
 export async function GET(req) {
-  if (!url || !serviceKey) {
-    return NextResponse.json({ profile: null }, { status: 500 });
+  const { user, error: authError } = await verifyAuth(req);
+  if (!user) {
+    return NextResponse.json({ error: authError || "No autenticado", profile: null }, { status: 401 });
   }
 
-  const supabase = createClient(url, serviceKey);
+  const token = extractToken(req);
+  if (!token) {
+    return NextResponse.json({ error: "No autenticado", profile: null }, { status: 401 });
+  }
 
-  const { user, error: authError } = await verifyAuth(req);
-  if (user) {
-    // Read public profile
-    const { data: profile } = await supabase
-      .from("profiles").select("*").eq("id", user.id).single();
+  // Use authenticated client — RLS enforced (owner-only reads)
+  const supabase = createUserClient(token);
 
-    // Read private data
-    const { data: priv } = await supabase
-      .from("user_private").select("*").eq("user_id", user.id).maybeSingle();
+  const { data: profile } = await supabase
+    .from("profiles").select("*").eq("id", user.id).single();
 
-    // Read wallet
-    const { data: wall } = await supabase
-      .from("wallet").select("*").eq("user_id", user.id).maybeSingle();
+  const { data: priv } = await supabase
+    .from("user_private").select("*").eq("user_id", user.id).maybeSingle();
 
-    if (profile) {
-      // Merge for backward compatibility (frontend expects one object)
-      return NextResponse.json({
-        profile: {
-          ...profile,
-          email: priv?.email || "",
-          phone: priv?.phone || "",
-          address_street: priv?.address_street || "",
-          address_city: priv?.address_city || "",
-          address_zip: priv?.address_zip || "",
-          address_country: priv?.address_country || "España",
-          address_complete: priv?.address_complete || false,
-          seller_shipping_methods: priv?.seller_shipping_methods || ["sm1"],
-          balance: wall?.balance || 0,
-        },
-      });
-    }
+  const { data: wall } = await supabase
+    .from("wallet").select("*").eq("user_id", user.id).maybeSingle();
+
+  if (profile) {
+    return NextResponse.json({
+      profile: {
+        ...profile,
+        email: priv?.email || "",
+        phone: priv?.phone || "",
+        address_street: priv?.address_street || "",
+        address_city: priv?.address_city || "",
+        address_zip: priv?.address_zip || "",
+        address_country: priv?.address_country || "España",
+        address_complete: priv?.address_complete || false,
+        seller_shipping_methods: priv?.seller_shipping_methods || ["sm1"],
+        balance: wall?.balance || 0,
+      },
+    });
   }
 
   return NextResponse.json({ error: authError || "No autenticado", profile: null }, { status: 401 });
 }
 
 export async function PATCH(req) {
-  if (!url || !serviceKey) {
-    return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
-  }
-
-  const supabase = createClient(url, serviceKey);
-
   const { user, error: authError } = await verifyAuth(req);
   if (!user) {
-    return NextResponse.json({ error: authError || "No autenticado" }, { status: 401 });
+    return NextResponse.json({ error: authError || "No autenticado", profile: null }, { status: 401 });
   }
+
+  const token = extractToken(req);
+  if (!token) {
+    return NextResponse.json({ error: "No autenticado", profile: null }, { status: 401 });
+  }
+
+  // Use authenticated client — RLS enforced (owner-only updates)
+  const supabase = createUserClient(token);
 
   const body = await req.json();
 
@@ -97,7 +95,7 @@ export async function PATCH(req) {
     );
   }
 
-  // Apply updates
+  // Apply profile updates
   let data = null;
 
   if (Object.keys(profileUpdates).length > 0) {
@@ -107,9 +105,14 @@ export async function PATCH(req) {
     data = updated;
   }
 
+  // Apply private updates — CHECK ERROR
   if (Object.keys(privateUpdates).length > 0) {
-    await supabase
+    const { error: privError } = await supabase
       .from("user_private").update(privateUpdates).eq("user_id", user.id);
+    if (privError) {
+      console.error("[Profile] user_private update error:", privError.message);
+      return NextResponse.json({ error: "Error guardando datos privados" }, { status: 500 });
+    }
   }
 
   // Fetch merged profile for response

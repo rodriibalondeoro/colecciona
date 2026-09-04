@@ -2251,6 +2251,19 @@ CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
 CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
 
 -- ============================================================================
+-- 12b. FAVORITES — user product favorites
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS favorites (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  UNIQUE(user_id, product_id)
+);
+CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_product ON favorites(product_id);
+
+-- ============================================================================
 -- 13. PRICE_HISTORY — market data
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS price_history (
@@ -2328,6 +2341,31 @@ CREATE TRIGGER prevent_self_admin_elevation
   BEFORE UPDATE ON public.profiles
   FOR EACH ROW
   EXECUTE FUNCTION public.prevent_self_admin_elevation();
+
+-- Atomic counter functions — avoid read-modify-write race conditions
+CREATE OR REPLACE FUNCTION public.increment_field(p_table TEXT, p_field TEXT, p_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  EXECUTE format('UPDATE %I SET %I = COALESCE(%I, 0) + 1 WHERE id = $1', p_table, p_field, p_field)
+  USING p_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.decrement_field(p_table TEXT, p_field TEXT, p_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  EXECUTE format('UPDATE %I SET %I = GREATEST(COALESCE(%I, 0) - 1, 0) WHERE id = $1', p_table, p_field, p_field)
+  USING p_id;
+END;
+$$;
 
 ALTER TABLE user_private ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "user_private_select_own" ON user_private;
@@ -2513,6 +2551,10 @@ DROP POLICY IF EXISTS "follows_insert_own" ON follows;
 CREATE POLICY "follows_insert_own" ON follows FOR INSERT WITH CHECK (auth.uid() = follower_id);
 DROP POLICY IF EXISTS "follows_delete_own" ON follows;
 CREATE POLICY "follows_delete_own" ON follows FOR DELETE USING (auth.uid() = follower_id);
+
+ALTER TABLE favorites ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "favorites_owner_all" ON favorites;
+CREATE POLICY "favorites_owner_all" ON favorites FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
 ALTER TABLE price_history ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "price_history_select_public" ON price_history;

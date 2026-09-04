@@ -1,9 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { verifyAuth } from "@/lib/serverAuth";
-
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
 async function resolveUser(req) {
   const { user } = await verifyAuth(req);
@@ -16,12 +12,24 @@ export async function POST(req) {
     const user = await resolveUser(req);
     if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
     const body = await req.json();
     const { targetUserId } = body;
     if (!targetUserId) return NextResponse.json({ error: "Falta targetUserId" }, { status: 400 });
     if (targetUserId === user.id) return NextResponse.json({ error: "No puedes seguirte" }, { status: 400 });
 
-    const supabase = createClient(url, key);
+    // RLS enforced: auth.uid() = follower_id
+    const supabase = createUserClient(token);
+
+    // Validate target user exists
+    const { data: targetProfile, error: targetError } = await supabase
+      .from("profiles").select("id").eq("id", targetUserId).single();
+
+    if (targetError || !targetProfile) {
+      return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
+    }
 
     const { data: existing } = await supabase
       .from("follows")
@@ -42,29 +50,28 @@ export async function POST(req) {
       if (insertError.code === "23505") {
         return NextResponse.json({ success: true, following: true });
       }
-      return NextResponse.json({ error: insertError.message }, { status: 500 });
+      // Hide internal error details
+      return NextResponse.json({ error: "No se pudo seguir al usuario" }, { status: 500 });
     }
 
-    // Actualizar contadores (best-effort, no deben fallar la operación)
+    // Atomic counter updates — avoid read-modify-write race condition
     try {
-      const { data: targetUser } = await supabase.from("profiles").select("followers").eq("id", targetUserId).single();
-      if (targetUser) {
-        await supabase.from("profiles").update({ followers: (targetUser.followers || 0) + 1 }).eq("id", targetUserId);
-      }
-      const { data: currentUser } = await supabase.from("profiles").select("following").eq("id", user.id).single();
-      if (currentUser) {
-        await supabase.from("profiles").update({ following: (currentUser.following || 0) + 1 }).eq("id", user.id);
-      }
+      await supabase.rpc("increment_field", { p_table: "profiles", p_field: "followers", p_id: targetUserId });
+      await supabase.rpc("increment_field", { p_table: "profiles", p_field: "following", p_id: user.id });
+    } catch (countErr) {
+      console.error("[Follow] Error actualizando contadores:", countErr);
+    }
+
+    // Notification (best-effort)
+    try {
       await supabase.from("notifications").insert({
         user_id: targetUserId,
         type: "follow",
         title: "Nuevo seguidor",
-        body: `Alguien empezó a seguirte`,
-        link: "/seller/",
-      }).catch(() => {});
-    } catch (countErr) {
-      console.error("[Follow] Error actualizando contadores:", countErr);
-    }
+        message: "Alguien empezó a seguirte",
+        link: `/seller/${user.id}`,
+      });
+    } catch {}
 
     return NextResponse.json({ success: true, following: true });
   } catch (err) {
@@ -78,11 +85,15 @@ export async function DELETE(req) {
     const user = await resolveUser(req);
     if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
     const { searchParams } = new URL(req.url);
     const targetUserId = searchParams.get("targetUserId");
     if (!targetUserId) return NextResponse.json({ error: "Falta targetUserId" }, { status: 400 });
 
-    const supabase = createClient(url, key);
+    // RLS enforced: auth.uid() = follower_id
+    const supabase = createUserClient(token);
 
     const { data: existing } = await supabase
       .from("follows")
@@ -97,13 +108,12 @@ export async function DELETE(req) {
 
     await supabase.from("follows").delete().eq("id", existing.id);
 
-    const { data: targetUser } = await supabase.from("profiles").select("followers").eq("id", targetUserId).single();
-    if (targetUser && (targetUser.followers || 0) > 0) {
-      await supabase.from("profiles").update({ followers: targetUser.followers - 1 }).eq("id", targetUserId);
-    }
-    const { data: currentUser } = await supabase.from("profiles").select("following").eq("id", user.id).single();
-    if (currentUser && (currentUser.following || 0) > 0) {
-      await supabase.from("profiles").update({ following: currentUser.following - 1 }).eq("id", user.id);
+    // Atomic counter updates
+    try {
+      await supabase.rpc("decrement_field", { p_table: "profiles", p_field: "followers", p_id: targetUserId });
+      await supabase.rpc("decrement_field", { p_table: "profiles", p_field: "following", p_id: user.id });
+    } catch (countErr) {
+      console.error("[Follow] Error actualizando contadores:", countErr);
     }
 
     return NextResponse.json({ success: true, following: false });
@@ -121,7 +131,10 @@ export async function GET(req) {
 
     if (!user) return NextResponse.json({ following: false });
 
-    const supabase = createClient(url, key);
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ following: false });
+
+    const supabase = createUserClient(token);
     const { data } = await supabase
       .from("follows")
       .select("id")
