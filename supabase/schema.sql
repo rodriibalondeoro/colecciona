@@ -4036,7 +4036,10 @@ DECLARE
   v_from INT;
   v_total INT;
   v_items JSONB;
+  v_requester UUID;
 BEGIN
+  -- SECURITY: derive requester from JWT, never trust caller-provided p_requester_id
+  v_requester := auth.uid();
   v_from := (p_page - 1) * p_limit;
 
   -- Count visible collections
@@ -4045,13 +4048,13 @@ BEGIN
   WHERE c.user_id = p_owner_id
     AND (
       c.visibility = 'public'
-      OR (c.visibility = 'followers' AND p_requester_id IS NOT NULL
+      OR (c.visibility = 'followers' AND v_requester IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM follows
-            WHERE follower_id = p_requester_id
+            WHERE follower_id = v_requester
               AND following_id = p_owner_id
           ))
-      OR (p_requester_id IS NOT NULL AND c.user_id = p_requester_id)
+      OR (v_requester IS NOT NULL AND c.user_id = v_requester)
     );
 
   -- Fetch page
@@ -4063,13 +4066,13 @@ BEGIN
     WHERE c.user_id = p_owner_id
       AND (
         c.visibility = 'public'
-        OR (c.visibility = 'followers' AND p_requester_id IS NOT NULL
+        OR (c.visibility = 'followers' AND v_requester IS NOT NULL
             AND EXISTS (
               SELECT 1 FROM follows
-              WHERE follower_id = p_requester_id
+              WHERE follower_id = v_requester
                 AND following_id = p_owner_id
             ))
-        OR (p_requester_id IS NOT NULL AND c.user_id = p_requester_id)
+        OR (v_requester IS NOT NULL AND c.user_id = v_requester)
       )
     ORDER BY c.updated_at DESC
     LIMIT p_limit OFFSET v_from
