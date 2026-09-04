@@ -2700,7 +2700,6 @@ BEGIN
       WHEN OLD.status = 'PROPOSED' AND NEW.status = 'SUPERSEDED' AND auth.uid() = OLD.receiver_id THEN true
       WHEN OLD.status = 'PROPOSED' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'COUNTERED' AND NEW.status = 'ACCEPTED' AND auth.uid() = OLD.proposer_id THEN true
-      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'SUPERSEDED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'COUNTERED' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'ACCEPTED' AND NEW.status = 'SHIPPING_PENDING' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
       WHEN OLD.status = 'SHIPPING_PENDING' AND NEW.status = 'SHIPPED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
@@ -2924,7 +2923,7 @@ BEGIN
     IF v_item_record.user_id != v_caller THEN
       RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to you', v_item_id;
     END IF;
-    IF v_item_record.status IN ('MISSING', 'FOR_SALE') THEN
+    IF v_item_record.status = 'MISSING' THEN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
 
@@ -2965,7 +2964,7 @@ BEGIN
     IF v_item_record.user_id != p_receiver_id THEN
       RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to receiver', v_item_id;
     END IF;
-    IF v_item_record.status IN ('MISSING', 'FOR_SALE') THEN
+    IF v_item_record.status = 'MISSING' THEN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
     -- NOTE: no availability check here — receiver items are not committed at PROPOSED
@@ -3083,8 +3082,8 @@ BEGIN
     RAISE EXCEPTION '[NOT_RECEIVER] Only the receiver can counter this proposal';
   END IF;
 
-  -- Must be PROPOSED or COUNTERED
-  IF v_old_proposal.status NOT IN ('PROPOSED', 'COUNTERED') THEN
+  -- Must be PROPOSED (COUNTERED is legacy — new versioning creates fresh PROPOSED)
+  IF v_old_proposal.status != 'PROPOSED' THEN
     RAISE EXCEPTION '[INVALID_STATUS] Cannot counter a % proposal', v_old_proposal.status;
   END IF;
 
@@ -3148,7 +3147,7 @@ BEGIN
     IF v_item_record.user_id != v_caller THEN
       RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to you', v_item_id;
     END IF;
-    IF v_item_record.status IN ('MISSING', 'FOR_SALE') THEN
+    IF v_item_record.status = 'MISSING' THEN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
 
@@ -3186,7 +3185,7 @@ BEGIN
     IF v_item_record.user_id != v_old_proposal.proposer_id THEN
       RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to the original proposer', v_item_id;
     END IF;
-    IF v_item_record.status IN ('MISSING', 'FOR_SALE') THEN
+    IF v_item_record.status = 'MISSING' THEN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
     -- NOTE: no availability check — receiver items not committed at PROPOSED
@@ -3325,8 +3324,8 @@ BEGIN
       RAISE EXCEPTION '[NOT_OWNER] Item % no longer belongs to you', v_item.id;
     END IF;
 
-    -- Check item still available
-    IF v_item.status IN ('MISSING', 'FOR_SALE') THEN
+    -- Check item still available (only MISSING prevents trade; FOR_SALE is allowed)
+    IF v_item.status = 'MISSING' THEN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is no longer available', v_item.id;
     END IF;
 
