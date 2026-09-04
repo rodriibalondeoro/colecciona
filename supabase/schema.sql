@@ -4303,8 +4303,8 @@ BEGIN
 END;
 $$;
 
+-- Backend-only: register route uses service_role, not exposed to users
 REVOKE ALL ON FUNCTION check_phone_exists(TEXT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION check_phone_exists(TEXT) TO authenticated;
 
 -- ============================================================================
 -- GET THREAD SUMMARIES — SQL-based thread computation (replaces global message load)
@@ -4319,46 +4319,43 @@ RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
+  v_user_id UUID;
   v_result JSONB;
 BEGIN
+  -- SECURITY: derive user from JWT, never trust caller-provided p_user_id
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
   WITH
-  -- Deduplicate: find the latest message per conversation partner + product
+  -- Last message per conversation (partner + product)
   thread_last AS (
     SELECT DISTINCT ON (partner_id, product_id)
-      id,
-      partner_id,
-      product_id,
-      text AS last_message,
-      created_at AS last_time,
-      is_read,
-      sender_id
+      id, partner_id, product_id, text AS last_message,
+      created_at AS last_time, sender_id
     FROM (
       SELECT
-        m.id,
-        m.product_id,
-        m.text,
-        m.created_at,
-        m.is_read,
-        m.sender_id,
-        CASE WHEN m.sender_id = p_user_id THEN m.receiver_id ELSE m.sender_id END AS partner_id
+        m.id, m.product_id, m.text, m.created_at, m.sender_id,
+        CASE WHEN m.sender_id = v_user_id THEN m.receiver_id ELSE m.sender_id END AS partner_id
       FROM messages m
-      WHERE m.sender_id = p_user_id OR m.receiver_id = p_user_id
+      WHERE m.sender_id = v_user_id OR m.receiver_id = v_user_id
     ) sub
     ORDER BY partner_id, product_id, created_at DESC
   ),
-  -- Count unread per thread
+  -- Unread count: count from FULL messages table, not from DISTINCT ON result
   unread_counts AS (
     SELECT
-      CASE WHEN sender_id = p_user_id THEN
-        (SELECT receiver_id FROM messages WHERE id = thread_last.id)
-      ELSE
-        sender_id
-      END AS partner_id,
-      product_id,
+      CASE WHEN m.sender_id = v_user_id THEN m.receiver_id ELSE m.sender_id END AS partner_id,
+      m.product_id,
       COUNT(*) AS unread_count
-    FROM thread_last
-    WHERE sender_id != p_user_id AND is_read = false
-    GROUP BY partner_id, product_id, sender_id, thread_last.id
+    FROM messages m
+    WHERE (m.sender_id = v_user_id OR m.receiver_id = v_user_id)
+      AND m.receiver_id = v_user_id
+      AND m.is_read = false
+    GROUP BY
+      CASE WHEN m.sender_id = v_user_id THEN m.receiver_id ELSE m.sender_id END,
+      m.product_id
   )
   SELECT jsonb_agg(
     jsonb_build_object(
