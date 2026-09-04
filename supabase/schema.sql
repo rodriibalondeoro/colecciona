@@ -2599,10 +2599,8 @@ CREATE POLICY "reviews_select_public" ON reviews FOR SELECT USING (true);
 ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "follows_select_public" ON follows;
 CREATE POLICY "follows_select_public" ON follows FOR SELECT USING (true);
-DROP POLICY IF EXISTS "follows_insert_own" ON follows;
-CREATE POLICY "follows_insert_own" ON follows FOR INSERT WITH CHECK (auth.uid() = follower_id);
-DROP POLICY IF EXISTS "follows_delete_own" ON follows;
-CREATE POLICY "follows_delete_own" ON follows FOR DELETE USING (auth.uid() = follower_id);
+-- NO INSERT/DELETE policies: writes go through SECURITY DEFINER RPCs
+-- (follow_user/unfollow_user) which atomically update counters.
 
 ALTER TABLE favorites ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "favorites_owner_all" ON favorites;
