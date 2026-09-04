@@ -4304,7 +4304,10 @@ END;
 $$;
 
 -- Backend-only: register route uses service_role, not exposed to users
+-- Explicit REVOKE from authenticated needed for existing databases that
+-- may have received the GRANT from a previous migration.
 REVOKE ALL ON FUNCTION check_phone_exists(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION check_phone_exists(TEXT) FROM authenticated;
 
 -- ============================================================================
 -- GET THREAD SUMMARIES — SQL-based thread computation (replaces global message load)
