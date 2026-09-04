@@ -2342,30 +2342,70 @@ CREATE TRIGGER prevent_self_admin_elevation
   FOR EACH ROW
   EXECUTE FUNCTION public.prevent_self_admin_elevation();
 
--- Atomic counter functions — avoid read-modify-write race conditions
-CREATE OR REPLACE FUNCTION public.increment_field(p_table TEXT, p_field TEXT, p_id UUID)
-RETURNS void
+-- Atomic follow/unfollow — single transaction, no counter inconsistency
+CREATE OR REPLACE FUNCTION public.follow_user(p_target_user_id UUID)
+RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  v_caller UUID := auth.uid();
 BEGIN
-  EXECUTE format('UPDATE %I SET %I = COALESCE(%I, 0) + 1 WHERE id = $1', p_table, p_field, p_field)
-  USING p_id;
+  IF v_caller IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
+  IF p_target_user_id = v_caller THEN
+    RAISE EXCEPTION 'Cannot follow yourself';
+  END IF;
+
+  -- Validate target exists
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = p_target_user_id) THEN
+    RAISE EXCEPTION 'User not found';
+  END IF;
+
+  -- Insert follow (idempotent: unique constraint handles duplicates)
+  INSERT INTO public.follows (follower_id, following_id)
+  VALUES (v_caller, p_target_user_id)
+  ON CONFLICT (follower_id, following_id) DO NOTHING;
+
+  -- Atomic counter updates
+  UPDATE public.profiles SET followers = COALESCE(followers, 0) + 1 WHERE id = p_target_user_id;
+  UPDATE public.profiles SET following = COALESCE(following, 0) + 1 WHERE id = v_caller;
+
+  RETURN jsonb_build_object('success', true, 'following', true);
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.decrement_field(p_table TEXT, p_field TEXT, p_id UUID)
-RETURNS void
+CREATE OR REPLACE FUNCTION public.unfollow_user(p_target_user_id UUID)
+RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  v_caller UUID := auth.uid();
 BEGIN
-  EXECUTE format('UPDATE %I SET %I = GREATEST(COALESCE(%I, 0) - 1, 0) WHERE id = $1', p_table, p_field, p_field)
-  USING p_id;
+  IF v_caller IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
+  -- Delete follow
+  DELETE FROM public.follows
+  WHERE follower_id = v_caller AND following_id = p_target_user_id;
+
+  -- Atomic counter updates (GREATEST prevents negative)
+  UPDATE public.profiles SET followers = GREATEST(COALESCE(followers, 0) - 1, 0) WHERE id = p_target_user_id;
+  UPDATE public.profiles SET following = GREATEST(COALESCE(following, 0) - 1, 0) WHERE id = v_caller;
+
+  RETURN jsonb_build_object('success', true, 'following', false);
 END;
 $$;
+
+-- Grant execute to authenticated (user clients can call these)
+GRANT EXECUTE ON FUNCTION public.follow_user(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.unfollow_user(UUID) TO authenticated;
 
 ALTER TABLE user_private ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "user_private_select_own" ON user_private;

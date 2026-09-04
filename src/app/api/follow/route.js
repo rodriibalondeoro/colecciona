@@ -20,51 +20,31 @@ export async function POST(req) {
     if (!targetUserId) return NextResponse.json({ error: "Falta targetUserId" }, { status: 400 });
     if (targetUserId === user.id) return NextResponse.json({ error: "No puedes seguirte" }, { status: 400 });
 
-    // RLS enforced: auth.uid() = follower_id
+    // Atomic: insert follow + increment both counters in one transaction
     const supabase = createUserClient(token);
+    const { data, error: rpcError } = await supabase.rpc("follow_user", {
+      p_target_user_id: targetUserId,
+    });
 
-    // Validate target user exists
-    const { data: targetProfile, error: targetError } = await supabase
-      .from("profiles").select("id").eq("id", targetUserId).single();
-
-    if (targetError || !targetProfile) {
-      return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
-    }
-
-    const { data: existing } = await supabase
-      .from("follows")
-      .select("id")
-      .eq("follower_id", user.id)
-      .eq("following_id", targetUserId)
-      .single();
-
-    if (existing) {
-      return NextResponse.json({ success: true, following: true });
-    }
-
-    const { error: insertError } = await supabase
-      .from("follows")
-      .insert({ follower_id: user.id, following_id: targetUserId });
-
-    if (insertError) {
-      if (insertError.code === "23505") {
-        return NextResponse.json({ success: true, following: true });
+    if (rpcError) {
+      if (rpcError.message?.includes("User not found")) {
+        return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
       }
-      // Hide internal error details
+      if (rpcError.message?.includes("Cannot follow yourself")) {
+        return NextResponse.json({ error: "No puedes seguirte" }, { status: 400 });
+      }
+      console.error("[Follow] RPC error:", rpcError.message);
       return NextResponse.json({ error: "No se pudo seguir al usuario" }, { status: 500 });
     }
 
-    // Atomic counter updates — avoid read-modify-write race condition
+    // Notification (best-effort, non-blocking)
+    const serviceClient = (await import("@/lib/serverAuth")).createServiceClient?.()
+      || (await import("@supabase/supabase-js")).createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      );
     try {
-      await supabase.rpc("increment_field", { p_table: "profiles", p_field: "followers", p_id: targetUserId });
-      await supabase.rpc("increment_field", { p_table: "profiles", p_field: "following", p_id: user.id });
-    } catch (countErr) {
-      console.error("[Follow] Error actualizando contadores:", countErr);
-    }
-
-    // Notification (best-effort)
-    try {
-      await supabase.from("notifications").insert({
+      await serviceClient.from("notifications").insert({
         user_id: targetUserId,
         type: "follow",
         title: "Nuevo seguidor",
@@ -92,28 +72,15 @@ export async function DELETE(req) {
     const targetUserId = searchParams.get("targetUserId");
     if (!targetUserId) return NextResponse.json({ error: "Falta targetUserId" }, { status: 400 });
 
-    // RLS enforced: auth.uid() = follower_id
+    // Atomic: delete follow + decrement both counters in one transaction
     const supabase = createUserClient(token);
+    const { data, error: rpcError } = await supabase.rpc("unfollow_user", {
+      p_target_user_id: targetUserId,
+    });
 
-    const { data: existing } = await supabase
-      .from("follows")
-      .select("id")
-      .eq("follower_id", user.id)
-      .eq("following_id", targetUserId)
-      .single();
-
-    if (!existing) {
-      return NextResponse.json({ success: true, following: false });
-    }
-
-    await supabase.from("follows").delete().eq("id", existing.id);
-
-    // Atomic counter updates
-    try {
-      await supabase.rpc("decrement_field", { p_table: "profiles", p_field: "followers", p_id: targetUserId });
-      await supabase.rpc("decrement_field", { p_table: "profiles", p_field: "following", p_id: user.id });
-    } catch (countErr) {
-      console.error("[Follow] Error actualizando contadores:", countErr);
+    if (rpcError) {
+      console.error("[Unfollow] RPC error:", rpcError.message);
+      return NextResponse.json({ error: "No se pudo dejar de seguir" }, { status: 500 });
     }
 
     return NextResponse.json({ success: true, following: false });
