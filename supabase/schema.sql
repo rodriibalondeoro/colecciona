@@ -2830,6 +2830,11 @@ BEGIN
   SELECT * INTO v_item FROM collection_items WHERE id = p_collection_item_id;
   IF NOT FOUND THEN RETURN 0; END IF;
 
+  -- Ownership check: only the owner (or system) can query availability
+  IF auth.uid() IS NOT NULL AND v_item.user_id <> auth.uid() THEN
+    RAISE EXCEPTION 'Not authorized to query this item';
+  END IF;
+
   -- Trade commitments: items locked in active trade proposals
   -- PROPOSED: only proposer items committed
   -- ACCEPTED+: both sides committed
