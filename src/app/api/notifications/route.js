@@ -1,22 +1,35 @@
 import { NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/serverSupabase";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
 export async function GET(req) {
-  const { user, error } = await verifyAuth(req);
-  if (error) return NextResponse.json({ notifications: [] });
+  try {
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
 
-  const supabase = getServerSupabase();
-  if (!supabase) return NextResponse.json({ notifications: [] });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-  const { data } = await supabase
-    .from("notifications")
-    .select("*")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(50);
+    const supabase = createUserClient(token);
 
-  return NextResponse.json({ notifications: data || [] });
+    const { data, error } = await supabase
+      .from("notifications")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error("[Notifications] Supabase error:", error.message);
+      return NextResponse.json({ error: "Error loading notifications" }, { status: 500 });
+    }
+
+    return NextResponse.json({ notifications: data || [] });
+  } catch (err) {
+    console.error("[Notifications] Error:", err);
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
+  }
 }
 
 // POST REMOVED: notifications are created server-side only via service_role.
@@ -31,20 +44,37 @@ export async function POST() {
 }
 
 export async function PATCH(req) {
-  const { user, error } = await verifyAuth(req);
-  if (error) return NextResponse.json({ error: "No auth" }, { status: 401 });
+  try {
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
 
-  const supabase = getServerSupabase();
-  if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-  const { id, all } = await req.json();
+    const supabase = createUserClient(token);
 
-  if (all) {
-    await supabase.from("notifications").update({ read: true }).eq("user_id", user.id).eq("read", false);
-  } else if (id) {
-    // IDOR FIX: always filter by user_id — users can only mark their own notifications
-    await supabase.from("notifications").update({ read: true }).eq("id", id).eq("user_id", user.id);
+    const { id, all } = await req.json();
+
+    if (all) {
+      const { error } = await supabase.from("notifications").update({ read: true }).eq("user_id", user.id).eq("read", false);
+      if (error) {
+        console.error("[Notifications] Supabase error:", error.message);
+        return NextResponse.json({ error: "Error updating notifications" }, { status: 500 });
+      }
+    } else if (id) {
+      // IDOR FIX: always filter by user_id — users can only mark their own notifications
+      const { error } = await supabase.from("notifications").update({ read: true }).eq("id", id).eq("user_id", user.id);
+      if (error) {
+        console.error("[Notifications] Supabase error:", error.message);
+        return NextResponse.json({ error: "Error updating notification" }, { status: 500 });
+      }
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("[Notifications] Error:", err);
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
-
-  return NextResponse.json({ success: true });
 }

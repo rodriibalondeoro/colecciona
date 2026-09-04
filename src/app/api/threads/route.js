@@ -1,25 +1,29 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { verifyAuth } from "@/lib/serverAuth";
-
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
 export async function GET(req) {
   try {
     const { user, error: authError } = await verifyAuth(req);
-    if (authError) return NextResponse.json({ threads: [] });
+    if (authError || !user) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
 
-    if (!url || !key) return NextResponse.json({ threads: [] });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const supabase = createClient(url, key);
+    const supabase = createUserClient(token);
 
     // Get all messages for this user
-    const { data: messages } = await supabase
+    const { data: messages, error: msgError } = await supabase
       .from("messages")
       .select("id, sender_id, receiver_id, product_id, text, created_at")
       .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
       .order("created_at", { ascending: true });
+
+    if (msgError) {
+      console.error("[API /threads] Supabase error:", msgError.message);
+      return NextResponse.json({ error: "Error loading threads" }, { status: 500 });
+    }
 
     if (!messages || messages.length === 0) {
       return NextResponse.json({ threads: [] });
@@ -89,6 +93,6 @@ export async function GET(req) {
     return NextResponse.json({ threads });
   } catch (err) {
     console.error("[API /threads] Error:", err);
-    return NextResponse.json({ threads: [] });
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
