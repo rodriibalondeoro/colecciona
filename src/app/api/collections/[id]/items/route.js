@@ -8,6 +8,41 @@ export async function GET(req, { params }) {
     const supabase = getServerSupabase();
     if (!supabase) return NextResponse.json({ items: [] });
 
+    // Visibility check: fetch collection and verify access
+    const { data: collection, error: colError } = await supabase
+      .from("collections")
+      .select("user_id, visibility")
+      .eq("id", id)
+      .single();
+
+    if (colError || !collection) {
+      return NextResponse.json({ error: "Colección no encontrada" }, { status: 404 });
+    }
+
+    const { user } = await verifyAuth(req);
+
+    if (collection.visibility === "private") {
+      if (!user || user.id !== collection.user_id) {
+        return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
+      }
+    } else if (collection.visibility === "followers") {
+      if (!user) {
+        return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
+      }
+      if (user.id !== collection.user_id) {
+        const { data: follow } = await supabase
+          .from("follows")
+          .select("id")
+          .eq("follower_id", user.id)
+          .eq("following_id", collection.user_id)
+          .maybeSingle();
+        if (!follow) {
+          return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
+        }
+      }
+    }
+    // public → no check needed
+
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
     const category = searchParams.get("category");
@@ -28,12 +63,15 @@ export async function GET(req, { params }) {
     if (search) query = query.ilike("card_name", `%${search}%`);
 
     const { data, error, count } = await query;
-    if (error) throw error;
+    if (error) {
+      console.error("[Collection Items] Supabase error:", error.message);
+      return NextResponse.json({ error: "Error loading items" }, { status: 500 });
+    }
 
     return NextResponse.json({ items: data || [], total: count || 0 });
   } catch (err) {
     console.error("[Collection Items GET]", err);
-    return NextResponse.json({ items: [] });
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
 

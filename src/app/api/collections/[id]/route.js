@@ -19,12 +19,30 @@ export async function GET(req, { params }) {
     }
 
     // Check visibility
+    const { user } = await verifyAuth(req);
+
     if (collection.visibility === "private") {
-      const { user } = await verifyAuth(req);
       if (!user || user.id !== collection.user_id) {
         return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
       }
+    } else if (collection.visibility === "followers") {
+      if (!user) {
+        return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
+      }
+      if (user.id !== collection.user_id) {
+        // Check if requester is a follower
+        const { data: follow } = await supabase
+          .from("follows")
+          .select("id")
+          .eq("follower_id", user.id)
+          .eq("following_id", collection.user_id)
+          .maybeSingle();
+        if (!follow) {
+          return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
+        }
+      }
     }
+    // public → no check needed
 
     // Get items
     const { data: items } = await supabase
