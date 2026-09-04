@@ -2141,7 +2141,7 @@ CREATE TABLE IF NOT EXISTS trade_proposal_items (
   proposal_id UUID NOT NULL REFERENCES trade_proposals(id) ON DELETE CASCADE,
   collection_item_id UUID NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  quantity INTEGER DEFAULT 1,
+  quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
   side TEXT NOT NULL CHECK (side IN ('proposer','receiver')),
   created_at TIMESTAMPTZ DEFAULT now()
 );
@@ -2860,6 +2860,18 @@ BEGIN
   SELECT array_agg((item->>'collection_item_id')::uuid) INTO v_receiver_item_ids
   FROM jsonb_array_elements(p_receiver_items) AS item;
 
+  -- Within-side duplicate check: no duplicate IDs within proposer_items
+  IF v_proposer_item_ids IS NOT NULL AND array_length(v_proposer_item_ids, 1) >
+     (SELECT count(DISTINCT id) FROM unnest(v_proposer_item_ids) AS id) THEN
+    RAISE EXCEPTION '[DUPLICATE_ITEMS] Duplicate items in proposer_items';
+  END IF;
+
+  -- Within-side duplicate check: no duplicate IDs within receiver_items
+  IF v_receiver_item_ids IS NOT NULL AND array_length(v_receiver_item_ids, 1) >
+     (SELECT count(DISTINCT id) FROM unnest(v_receiver_item_ids) AS id) THEN
+    RAISE EXCEPTION '[DUPLICATE_ITEMS] Duplicate items in receiver_items';
+  END IF;
+
   -- Cross-side duplicate check: same item cannot appear on both sides
   IF v_proposer_item_ids IS NOT NULL AND v_receiver_item_ids IS NOT NULL THEN
     SELECT array_agg(id) INTO v_overlap
@@ -2901,7 +2913,7 @@ BEGIN
     IF v_item_record.user_id != v_caller THEN
       RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to you', v_item_id;
     END IF;
-    IF v_item_record.status IN ('MISSING', 'TRADED') THEN
+    IF v_item_record.status IN ('MISSING', 'FOR_SALE') THEN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
 
@@ -2934,7 +2946,7 @@ BEGIN
     IF v_item_record.user_id != p_receiver_id THEN
       RAISE EXCEPTION '[NOT_OWNER] Item % does not belong to receiver', v_item_id;
     END IF;
-    IF v_item_record.status IN ('MISSING', 'TRADED') THEN
+    IF v_item_record.status IN ('MISSING', 'FOR_SALE') THEN
       RAISE EXCEPTION '[ITEM_UNAVAILABLE] Item % is not available', v_item_id;
     END IF;
 

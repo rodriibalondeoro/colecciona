@@ -13,6 +13,7 @@ function mapRpcError(message) {
     case "MESSAGE_TOO_LONG": return { status: 400 };
     case "NO_ITEMS": return { status: 400 };
     case "OVERLAP_ITEMS": return { status: 400 };
+    case "DUPLICATE_ITEMS": return { status: 400 };
     case "INVALID_ITEM": return { status: 400 };
     case "INVALID_QUANTITY": return { status: 400 };
     case "ITEM_NOT_FOUND": return { status: 404 };
@@ -82,7 +83,7 @@ export async function GET(req) {
     return NextResponse.json({ proposals: data || [], total: count || 0 });
   } catch (err) {
     console.error("[Trade Proposals GET]", err);
-    return NextResponse.json({ proposals: [] });
+    return NextResponse.json({ error: "Error loading trade proposals" }, { status: 500 });
   }
 }
 
