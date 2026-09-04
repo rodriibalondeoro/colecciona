@@ -1,19 +1,21 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const PRODUCT_STATUSES = new Set(["DRAFT", "ACTIVE"]);
-
-const TITLE_MAX = 200;
-const DESC_MAX = 2000;
-const VALID_CATEGORIES = new Set([
-  " Pokemon", "Yu-Gi-Oh!", "Magic", "One Piece", "Dragon Ball",
-  "Digimon", "Force of Valor", "Lorcana", "Other",
-]);
-const VALID_CONDITIONS = new Set(["NEW", "LIKE_NEW", "GOOD", "ACCEPTABLE", "POOR"]);
+function mapRpcError(message) {
+  if (!message) return { status: 500 };
+  const codeMatch = message.match(/^\[([A-Z_]+)\]/);
+  const code = codeMatch ? codeMatch[1] : null;
+  switch (code) {
+    case "AUTH_REQUIRED": return { status: 401 };
+    case "NOT_OWNER": return { status: 403 };
+    case "ITEM_NOT_FOUND": return { status: 404 };
+    case "INVALID_TITLE": return { status: 400 };
+    case "INVALID_PRICE": return { status: 400 };
+    case "INSUFFICIENT_QUANTITY": return { status: 409 };
+    default: return { status: 500 };
+  }
+}
 
 export async function POST(req) {
   try {
@@ -23,110 +25,47 @@ export async function POST(req) {
       return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
     }
 
-    if (!url || !key) {
-      return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
-    }
-
     const { user, error: authError } = await verifyAuth(req);
     if (authError) {
       return NextResponse.json({ error: authError }, { status: 401 });
     }
 
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
     const body = await req.json();
 
-    // SERVER-SIDE VALIDATION
-    if (!body.title || typeof body.title !== "string" || body.title.trim().length === 0) {
-      return NextResponse.json({ error: "Título es obligatorio" }, { status: 400 });
-    }
-    if (body.title.length > TITLE_MAX) {
-      return NextResponse.json({ error: `Título máximo ${TITLE_MAX} caracteres` }, { status: 400 });
-    }
+    // Call atomic RPC (locks collection_item, checks availability, inserts product)
+    const supabase = createUserClient(token);
+    const { data, error: rpcError } = await supabase.rpc("publish_product", {
+      p_title: body.title,
+      p_price: Number(body.price),
+      p_image: body.image || "",
+      p_category: body.category || "",
+      p_condition: body.condition || "",
+      p_code: body.code || null,
+      p_rarity: body.rarity || null,
+      p_description: body.description || null,
+      p_set_name: body.set || "",
+      p_language: body.language || "",
+      p_year: body.year || null,
+      p_collection_item_id: body.collection_item_id || null,
+    });
 
-    const price = Number(body.price);
-    if (!Number.isFinite(price) || price <= 0) {
-      return NextResponse.json({ error: "Precio debe ser un número positivo" }, { status: 400 });
-    }
-    if (price > 999999) {
-      return NextResponse.json({ error: "Precio máximo 999999" }, { status: 400 });
-    }
-
-    if (body.description && body.description.length > DESC_MAX) {
-      return NextResponse.json({ error: `Descripción máxima ${DESC_MAX} caracteres` }, { status: 400 });
-    }
-
-    if (body.image && typeof body.image === "string" && !body.image.startsWith("http")) {
-      return NextResponse.json({ error: "Imagen debe ser una URL válida" }, { status: 400 });
-    }
-
-    if (body.year) {
-      const year = Number(body.year);
-      if (!Number.isInteger(year) || year < 1900 || year > new Date().getFullYear() + 1) {
-        return NextResponse.json({ error: "Año inválido" }, { status: 400 });
-      }
+    if (rpcError) {
+      console.warn("[API /publish] RPC error:", rpcError.message);
+      const mapped = mapRpcError(rpcError.message);
+      return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
     }
 
-    const status = PRODUCT_STATUSES.has(body.status) ? body.status : "ACTIVE";
-    const supabase = createClient(url, key);
-
-    // Validate collection_item_id if provided (unified inventory)
-    let collectionItemId = body.collection_item_id || null;
-    if (collectionItemId) {
-      // Verify the collection item belongs to the seller
-      const { data: ci, error: ciError } = await supabase
-        .from("collection_items")
-        .select("id, user_id, duplicate_quantity")
-        .eq("id", collectionItemId)
-        .single();
-
-      if (ciError || !ci) {
-        return NextResponse.json({ error: "Elemento de colección no encontrado" }, { status: 404 });
-      }
-      if (ci.user_id !== user.id) {
-        return NextResponse.json({ error: "El elemento no te pertenece" }, { status: 403 });
-      }
-
-      // Check available quantity (trade commitments + marketplace reservations)
-      const { data: available } = await supabase
-        .rpc("get_available_quantity", { p_collection_item_id: collectionItemId });
-
-      if (!available || available <= 0) {
-        return NextResponse.json({
-          error: "No hay unidades disponibles para publicar (comprometidas en intercambios o mercado)",
-        }, { status: 409 });
-      }
-    }
-
-    const { data, error } = await supabase
-      .from("products")
-      .insert({
-        title: body.title.trim(),
-        price,
-        image: body.image || null,
-        category: body.category || null,
-        condition: body.condition || null,
-        seller: user.id,
-        collection_item_id: collectionItemId,
-        code: body.code || null,
-        rarity: body.rarity || null,
-        description: body.description || null,
-        set: body.set || null,
-        language: body.language || null,
-        year: body.year || null,
-        status,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error("[API /publish] Error de Supabase:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    // Check if any users have this card as MISSING and notify them
+    // Notify users who have this card as MISSING (best-effort)
     try {
       const cardTitle = body.title || "";
-      const { data: missingHolders } = await supabase
+      const serviceClient = (await import("@supabase/supabase-js")).createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      );
+      const { data: missingHolders } = await serviceClient
         .from("collection_items")
         .select("user_id, card_name")
         .eq("status", "MISSING")
@@ -138,16 +77,13 @@ export async function POST(req) {
           user_id: h.user_id,
           type: "price_alert",
           title: "Cromo de tu lista de faltas disponible",
-          message: `"${cardTitle}" acaba de ser publicado a ${price}€.`,
+          message: `"${cardTitle}" acaba de ser publicado a ${body.price}€.`,
           data: { product_id: data.id, card_name: h.card_name },
           read: false,
-          created_at: new Date().toISOString(),
         }));
-        await supabase.from("notifications").insert(notifications);
+        await serviceClient.from("notifications").insert(notifications);
       }
-    } catch (notifErr) {
-      console.warn("[API /publish] Error sending price alerts:", notifErr);
-    }
+    } catch {}
 
     return NextResponse.json({ success: true, product: data });
   } catch (err) {

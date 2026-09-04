@@ -2854,6 +2854,104 @@ REVOKE ALL ON FUNCTION get_available_quantity(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION get_available_quantity(UUID) TO authenticated;
 
 -- ============================================================================
+-- PUBLISH PRODUCT — atomic lock + availability check + insert
+-- ============================================================================
+
+-- Publishes a product, optionally linked to a collection item
+-- Locks collection_item to prevent race conditions with trades/marketplace
+CREATE OR REPLACE FUNCTION publish_product(
+  p_title TEXT,
+  p_price NUMERIC(10,2),
+  p_image TEXT DEFAULT '',
+  p_category TEXT DEFAULT '',
+  p_condition TEXT DEFAULT '',
+  p_code TEXT DEFAULT NULL,
+  p_rarity TEXT DEFAULT NULL,
+  p_description TEXT DEFAULT NULL,
+  p_set_name TEXT DEFAULT '',
+  p_language TEXT DEFAULT '',
+  p_year INTEGER DEFAULT NULL,
+  p_collection_item_id UUID DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_caller UUID := auth.uid();
+  v_product_id UUID;
+  v_item RECORD;
+  v_available INTEGER;
+  v_product JSONB;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+
+  -- Validate inputs
+  IF p_title IS NULL OR length(trim(p_title)) = 0 THEN
+    RAISE EXCEPTION '[INVALID_TITLE] Title is required';
+  END IF;
+  IF length(p_title) > 200 THEN
+    RAISE EXCEPTION '[INVALID_TITLE] Title too long (max 200 characters)';
+  END IF;
+  IF p_price IS NULL OR p_price <= 0 THEN
+    RAISE EXCEPTION '[INVALID_PRICE] Price must be positive';
+  END IF;
+  IF p_price > 999999 THEN
+    RAISE EXCEPTION '[INVALID_PRICE] Price too high (max 999999)';
+  END IF;
+
+  -- ==================== COLLECTION ITEM VALIDATION ====================
+  IF p_collection_item_id IS NOT NULL THEN
+    -- Lock collection_item FOR UPDATE (prevents race with trades/marketplace)
+    SELECT * INTO v_item FROM collection_items
+    WHERE id = p_collection_item_id FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION '[ITEM_NOT_FOUND] Collection item not found';
+    END IF;
+    IF v_item.user_id != v_caller THEN
+      RAISE EXCEPTION '[NOT_OWNER] Collection item does not belong to you';
+    END IF;
+
+    -- Check availability (locked, so no race condition)
+    v_available := get_available_quantity(p_collection_item_id);
+    IF v_available <= 0 THEN
+      RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] No units available (committed in trades or marketplace)';
+    END IF;
+  END IF;
+
+  -- ==================== INSERT PRODUCT ====================
+  INSERT INTO products (
+    title, price, image, category, condition, seller,
+    collection_item_id, code, rarity, description,
+    set_name, language, year, status
+  ) VALUES (
+    trim(p_title), p_price,
+    NULLIF(p_image, ''), NULLIF(p_category, ''), NULLIF(p_condition, ''),
+    v_caller, p_collection_item_id,
+    p_code, p_rarity, p_description,
+    NULLIF(p_set_name, ''), NULLIF(p_language, ''),
+    p_year, 'ACTIVE'
+  ) RETURNING id INTO v_product_id;
+
+  -- Return product
+  SELECT jsonb_build_object(
+    'id', p.id,
+    'title', p.title,
+    'price', p.price,
+    'status', p.status,
+    'collection_item_id', p.collection_item_id,
+    'created_at', p.created_at
+  ) INTO v_product
+  FROM products p WHERE p.id = v_product_id;
+
+  RETURN v_product;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION publish_product(TEXT, NUMERIC, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, INTEGER, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION publish_product(TEXT, NUMERIC, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, INTEGER, UUID) TO authenticated;
+
+-- ============================================================================
 -- TRADE PROPOSALS RPCs — atomic creation with batch validation
 -- ============================================================================
 
