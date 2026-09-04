@@ -157,6 +157,28 @@ export async function DELETE(req, { params }) {
       return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
     }
 
+    // Block deletion if collection has items with active trade proposals
+    const { data: items } = await supabase
+      .from("collection_items")
+      .select("id")
+      .eq("collection_id", id);
+
+    if (items && items.length > 0) {
+      const { data: activeItems } = await supabase
+        .from("trade_proposal_items")
+        .select("id, trade_proposals!inner(status)")
+        .in("collection_item_id", items.map(i => i.id))
+        .in("trade_proposals.status", ["PROPOSED", "ACCEPTED", "SHIPPING_PENDING", "SHIPPED", "RECEIVED"])
+        .limit(1);
+
+      if (activeItems && activeItems.length > 0) {
+        return NextResponse.json(
+          { error: "No se puede eliminar: tiene propuestas de intercambio activas" },
+          { status: 409 }
+        );
+      }
+    }
+
     const { error } = await supabase
       .from("collections")
       .delete()

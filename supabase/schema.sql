@@ -248,6 +248,7 @@ BEGIN
   -- Block changes to immutable fields
   IF OLD.seller IS DISTINCT FROM NEW.seller THEN RAISE EXCEPTION 'Cannot change seller'; END IF;
   IF OLD.created_at IS DISTINCT FROM NEW.created_at THEN RAISE EXCEPTION 'Cannot change created_at'; END IF;
+  IF OLD.collection_item_id IS DISTINCT FROM NEW.collection_item_id THEN RAISE EXCEPTION 'Cannot change collection_item_id after creation'; END IF;
 
   -- Block seller from modifying system/reservation fields
   IF auth.uid() = OLD.seller THEN
@@ -2348,6 +2349,29 @@ CREATE TRIGGER prevent_self_admin_elevation
   BEFORE UPDATE ON public.profiles
   FOR EACH ROW
   EXECUTE FUNCTION public.prevent_self_admin_elevation();
+
+-- Protect reputation metrics: only server functions can modify these fields
+CREATE OR REPLACE FUNCTION public.protect_profile_metrics()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  -- Only allow system (auth.uid() IS NULL) to change metrics
+  IF auth.uid() IS NOT NULL THEN
+    IF OLD.rating IS DISTINCT FROM NEW.rating THEN RAISE EXCEPTION 'Cannot modify rating directly'; END IF;
+    IF OLD.sales IS DISTINCT FROM NEW.sales THEN RAISE EXCEPTION 'Cannot modify sales directly'; END IF;
+    IF OLD.purchases IS DISTINCT FROM NEW.purchases THEN RAISE EXCEPTION 'Cannot modify purchases directly'; END IF;
+    IF OLD.followers IS DISTINCT FROM NEW.followers THEN RAISE EXCEPTION 'Cannot modify followers directly'; END IF;
+    IF OLD.following IS DISTINCT FROM NEW.following THEN RAISE EXCEPTION 'Cannot modify following directly'; END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_protect_profile_metrics ON public.profiles;
+CREATE TRIGGER trg_protect_profile_metrics
+  BEFORE UPDATE ON public.profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION public.protect_profile_metrics();
 
 -- Atomic follow/unfollow — single transaction, no counter inconsistency
 CREATE OR REPLACE FUNCTION public.follow_user(p_target_user_id UUID)

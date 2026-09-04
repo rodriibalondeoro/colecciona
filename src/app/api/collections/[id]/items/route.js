@@ -189,19 +189,17 @@ export async function PATCH(req, { params }) {
     if (status !== undefined) {
       updates.status = status;
       const qty = parseInt(total_quantity) || 1;
+      // total_quantity always equals owned_quantity — derived from status
       updates.total_quantity = qty;
-      // Cumulative model: owned = total, duplicates = extras, trade/sale = subsets
       switch (status) {
         case "OWNED": updates.owned_quantity = qty; updates.duplicate_quantity = 0; updates.trade_quantity = 0; updates.sale_quantity = 0; break;
-        case "MISSING": updates.owned_quantity = 0; updates.duplicate_quantity = 0; updates.trade_quantity = 0; updates.sale_quantity = 0; break;
+        case "MISSING": updates.owned_quantity = 0; updates.total_quantity = 0; updates.duplicate_quantity = 0; updates.trade_quantity = 0; updates.sale_quantity = 0; break;
         case "DUPLICATE": updates.owned_quantity = qty; updates.duplicate_quantity = qty; updates.trade_quantity = 0; updates.sale_quantity = 0; break;
         case "FOR_TRADE": updates.owned_quantity = qty; updates.duplicate_quantity = qty; updates.trade_quantity = qty; updates.sale_quantity = 0; break;
         case "FOR_SALE": updates.owned_quantity = qty; updates.duplicate_quantity = qty; updates.trade_quantity = 0; updates.sale_quantity = qty; break;
       }
     }
-    if (total_quantity !== undefined && status === undefined) {
-      updates.total_quantity = parseInt(total_quantity) || 1;
-    }
+    // total_quantity without status change is not allowed — it's derived from owned_quantity
     if (notes !== undefined) updates.notes = notes;
     if (priority !== undefined && ['low', 'normal', 'high', 'urgent'].includes(priority)) {
       updates.priority = priority;
@@ -251,6 +249,21 @@ export async function DELETE(req, { params }) {
 
     if (!existing || existing.user_id !== user.id) {
       return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
+    }
+
+    // Block deletion if item has active trade proposals
+    const { data: activeItems } = await supabase
+      .from("trade_proposal_items")
+      .select("id, trade_proposals!inner(status)")
+      .eq("collection_item_id", itemId)
+      .in("trade_proposals.status", ["PROPOSED", "ACCEPTED", "SHIPPING_PENDING", "SHIPPED", "RECEIVED"])
+      .limit(1);
+
+    if (activeItems && activeItems.length > 0) {
+      return NextResponse.json(
+        { error: "No se puede eliminar: tiene propuestas de intercambio activas" },
+        { status: 409 }
+      );
     }
 
     const { error } = await supabase
