@@ -38,20 +38,18 @@ export async function POST(req) {
     }
 
     // Notification (best-effort, non-blocking)
-    const serviceClient = (await import("@/lib/serverAuth")).createServiceClient?.()
-      || (await import("@supabase/supabase-js")).createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL,
-        process.env.SUPABASE_SERVICE_ROLE_KEY
-      );
-    try {
-      await serviceClient.from("notifications").insert({
-        user_id: targetUserId,
-        type: "follow",
-        title: "Nuevo seguidor",
-        message: "Alguien empezó a seguirte",
-        link: `/seller/${user.id}`,
-      });
-    } catch {}
+    const serviceClient = (await import("@supabase/supabase-js")).createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+    const { error: notifError } = await serviceClient.from("notifications").insert({
+      user_id: targetUserId,
+      type: "follow",
+      title: "Nuevo seguidor",
+      message: "Alguien empezó a seguirte",
+      data: { link: `/seller/${user.id}` },
+    });
+    if (notifError) console.warn("[Follow] Notification error:", notifError.message);
 
     return NextResponse.json({ success: true, following: true });
   } catch (err) {

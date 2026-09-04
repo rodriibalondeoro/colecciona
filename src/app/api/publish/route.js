@@ -65,14 +65,16 @@ export async function POST(req) {
         process.env.NEXT_PUBLIC_SUPABASE_URL,
         process.env.SUPABASE_SERVICE_ROLE_KEY
       );
-      const { data: missingHolders } = await serviceClient
+      const { data: missingHolders, error: queryError } = await serviceClient
         .from("collection_items")
         .select("user_id, card_name")
         .eq("status", "MISSING")
         .ilike("card_name", cardTitle)
         .neq("user_id", user.id);
 
-      if (missingHolders && missingHolders.length > 0) {
+      if (queryError) {
+        console.warn("[API /publish] Query error:", queryError.message);
+      } else if (missingHolders && missingHolders.length > 0) {
         const notifications = missingHolders.map(h => ({
           user_id: h.user_id,
           type: "price_alert",
@@ -81,7 +83,8 @@ export async function POST(req) {
           data: { product_id: data.id, card_name: h.card_name },
           read: false,
         }));
-        await serviceClient.from("notifications").insert(notifications);
+        const { error: insertError } = await serviceClient.from("notifications").insert(notifications);
+        if (insertError) console.warn("[API /publish] Notification error:", insertError.message);
       }
     } catch {}
 

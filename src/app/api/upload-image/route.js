@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { rateLimit } from "@/lib/rateLimit";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const BUCKET = "card-images";
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Map([
@@ -24,16 +21,16 @@ export async function POST(req) {
       }
     }
 
-    if (!url || !key) {
-      return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
-    }
-
     const { user, error: authError } = await verifyAuth(req);
     if (authError) {
       return NextResponse.json({ error: authError }, { status: 401 });
     }
 
-    const supabase = createClient(url, key);
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    // Use user client — storage RLS verifies owner = auth.uid()
+    const supabase = createUserClient(token);
 
     const formData = await req.formData();
     const file = formData.get("file");
@@ -61,7 +58,7 @@ export async function POST(req) {
       .upload(path, buffer, { contentType: file.type || "image/jpeg", upsert: false });
 
     if (error) {
-      console.error("[API /upload-image] Error de Supabase:", error);
+      console.error("[API /upload-image] Storage error:", error.message);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 

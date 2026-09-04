@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { users } from "@/data/mockData";
 import { createClient } from "@supabase/supabase-js";
+
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 export async function GET(req) {
   try {
@@ -12,48 +14,27 @@ export async function GET(req) {
       return NextResponse.json({ success: true, users: [] });
     }
 
-    const ql = q.toLowerCase();
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    let dbUsers = [];
-
-    if (url && key) {
-      const supabase = createClient(url, key);
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id, username, name, avatar, sales, purchases, rating, location, followers, following")
-        .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
-        .order("sales", { ascending: false })
-        .limit(limit);
-
-      if (!error && data) {
-        dbUsers = data.map((u) => ({ ...u, id: String(u.id) }));
-      } else {
-        console.warn("Falló búsqueda de usuarios en Supabase:", error);
-      }
+    if (!url || !anonKey) {
+      return NextResponse.json({ users: [] });
     }
 
-    // Fusiona usuarios reales + mock (demo), sin duplicados por username.
-    const merged = [];
-    const seen = new Set();
-    const push = (u) => {
-      const key = (u.username || "").toLowerCase();
-      if (!key || seen.has(key)) return;
-      const matches =
-        (u.username || "").toLowerCase().includes(ql) ||
-        (u.name || "").toLowerCase().includes(ql);
-      if (!matches) return;
-      seen.add(key);
-      merged.push(u);
-    };
+    // Public search: use anon key (RLS allows public SELECT on profiles)
+    const supabase = createClient(url, anonKey);
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, username, name, avatar, sales, purchases, rating, location, followers, following")
+      .or(`username.ilike.%${q}%,name.ilike.%${q}%`)
+      .order("sales", { ascending: false })
+      .limit(limit);
 
-    for (const u of dbUsers) push(u);
-    for (const u of users) push(u);
+    if (error) {
+      console.warn("[Users Search] Supabase error:", error.message);
+      return NextResponse.json({ users: [] });
+    }
 
-    return NextResponse.json({ success: true, users: merged.slice(0, limit) });
+    return NextResponse.json({ success: true, users: data || [] });
   } catch (error) {
-    console.error("Error en Users Search API:", error);
+    console.error("[Users Search] Error:", error);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
