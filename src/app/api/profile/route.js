@@ -60,13 +60,13 @@ export async function PATCH(req) {
 
   const body = await req.json();
 
-  // Public profile updates
+  // Public profile updates (with length limits)
   const profileUpdates = {};
-  if (body.name) profileUpdates.name = body.name;
-  if (body.username !== undefined) profileUpdates.username = String(body.username || "").replace("@", "");
-  if (body.bio !== undefined) profileUpdates.bio = body.bio;
-  if (body.location !== undefined) profileUpdates.location = body.location;
-  if (body.avatar_url !== undefined) profileUpdates.avatar = body.avatar_url;
+  if (body.name !== undefined) profileUpdates.name = String(body.name || "").trim().slice(0, 100);
+  if (body.username !== undefined) profileUpdates.username = String(body.username || "").replace("@", "").trim().slice(0, 30);
+  if (body.bio !== undefined) profileUpdates.bio = String(body.bio || "").trim().slice(0, 500);
+  if (body.location !== undefined) profileUpdates.location = String(body.location || "").trim().slice(0, 100);
+  if (body.avatar_url !== undefined) profileUpdates.avatar = String(body.avatar_url || "").slice(0, 500);
 
   // Private data updates
   const privateUpdates = {};
@@ -79,10 +79,11 @@ export async function PATCH(req) {
   }
 
   const addressFields = ["address_street", "address_city", "address_zip", "address_country"];
+  const addressLimits = { address_street: 200, address_city: 100, address_zip: 20, address_country: 50 };
   let addressChanged = false;
   for (const f of addressFields) {
     if (body[f] !== undefined) {
-      privateUpdates[f] = String(body[f] || "").trim();
+      privateUpdates[f] = String(body[f] || "").trim().slice(0, addressLimits[f] || 100);
       addressChanged = true;
     }
   }

@@ -1,9 +1,30 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { rateLimit } from "@/lib/rateLimit";
+
+const ALLOWED_CONDITIONS = new Set(["PSA10", "NM", "LP", "MP", "HP", "DMG"]);
+const ALLOWED_CATEGORIES = new Set([
+  "liga-este-26-27", "liga-oeste-26-27", "copa-26-27", "champions-26-27",
+  "nacional", "retro", "especial", "otro",
+]);
 
 export async function POST(req) {
   try {
-    const { category, condition, title } = await req.json();
+    const ip = req.headers.get("x-forwarded-for") || "unknown";
+    const rl = rateLimit(`pricing:${ip}`, { limit: 10, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
+    const { category, condition } = await req.json();
+
+    // Validate inputs
+    if (category && typeof category === "string" && !ALLOWED_CATEGORIES.has(category)) {
+      return NextResponse.json({ error: "Categoría no válida" }, { status: 400 });
+    }
+    if (condition && typeof condition === "string" && !ALLOWED_CONDITIONS.has(condition)) {
+      return NextResponse.json({ error: "Condición no válida" }, { status: 400 });
+    }
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

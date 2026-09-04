@@ -32,6 +32,15 @@ export async function POST(req) {
   try {
     const { productId, targetPrice } = await req.json();
 
+    // Validate inputs
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!productId || typeof productId !== "string" || !UUID_RE.test(productId)) {
+      return NextResponse.json({ error: "ID de producto inválido" }, { status: 400 });
+    }
+    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
+      return NextResponse.json({ error: "Precio objetivo inválido" }, { status: 400 });
+    }
+
     const supabase = getServerSupabase();
     if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 

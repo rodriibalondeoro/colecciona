@@ -4190,3 +4190,98 @@ $$;
 REVOKE ALL ON FUNCTION get_visible_collections(UUID, UUID, INT, INT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION get_visible_collections(UUID, UUID, INT, INT) TO authenticated;
 GRANT EXECUTE ON FUNCTION get_visible_collections(UUID, UUID, INT, INT) TO anon;
+
+-- ============================================================================
+-- FIND USER MATCHES — SQL-based trade matching (replaces global inventory load)
+-- Returns top 20 matches without loading all collection_items into Node.js
+-- ============================================================================
+CREATE OR REPLACE FUNCTION find_user_matches(p_user_id UUID, p_max_results INT DEFAULT 20)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_result JSONB;
+BEGIN
+  WITH
+  -- Current user's items available for trade
+  my_offers AS (
+    SELECT card_name, card_number, set_name, trade_quantity
+    FROM collection_items
+    WHERE user_id = p_user_id AND trade_quantity > 0
+  ),
+  -- Current user's missing items (what they want)
+  my_wants AS (
+    SELECT card_name, card_number, set_name
+    FROM collection_items
+    WHERE user_id = p_user_id AND status = 'MISSING'
+  ),
+  -- Other users' items available for trade
+  other_offers AS (
+    SELECT ci.user_id, ci.card_name, ci.card_number, ci.set_name, ci.trade_quantity
+    FROM collection_items ci
+    WHERE ci.user_id != p_user_id AND ci.trade_quantity > 0
+  ),
+  -- Other users' missing items (what they want)
+  other_wants AS (
+    SELECT ci.user_id, ci.card_name, ci.card_number, ci.set_name
+    FROM collection_items ci
+    WHERE ci.user_id != p_user_id AND ci.status = 'MISSING'
+  ),
+  -- Match score: how many items user can GIVE to each other user
+  give_scores AS (
+    SELECT ow.user_id,
+           COUNT(*) AS give_count,
+           jsonb_agg(jsonb_build_object('card_name', ow.card_name, 'set_name', ow.set_name)) AS give_items
+    FROM other_offers ow
+    JOIN my_wants mw ON mw.card_name = ow.card_name
+      AND (mw.card_number = ow.card_number OR (mw.card_number IS NULL AND ow.card_number IS NULL))
+      AND (mw.set_name = ow.set_name OR (mw.set_name IS NULL AND ow.set_name IS NULL))
+    GROUP BY ow.user_id
+  ),
+  -- Match score: how many items user can GET from each other user
+  get_scores AS (
+    SELECT ow.user_id,
+           COUNT(*) AS get_count,
+           jsonb_agg(jsonb_build_object('card_name', ow.card_name, 'set_name', ow.set_name)) AS get_items
+    FROM other_wants ow
+    JOIN my_offers mo ON mo.card_name = ow.card_name
+      AND (mo.card_number = ow.card_number OR (mo.card_number IS NULL AND ow.card_number IS NULL))
+      AND (mo.set_name = ow.set_name OR (mo.set_name IS NULL AND ow.set_name IS NULL))
+    GROUP BY ow.user_id
+  ),
+  -- Combined scores
+  combined AS (
+    SELECT
+      COALESCE(g.user_id, s.user_id) AS user_id,
+      COALESCE(g.give_count, 0) AS give_count,
+      COALESCE(s.get_count, 0) AS get_count,
+      COALESCE(g.give_count, 0) + COALESCE(s.get_count, 0) AS total_score,
+      COALESCE(g.give_items, '[]'::jsonb) AS give_items,
+      COALESCE(s.get_items, '[]'::jsonb) AS get_items
+    FROM give_scores g
+    FULL OUTER JOIN get_scores s ON g.user_id = s.user_id
+  )
+  SELECT jsonb_agg(
+    jsonb_build_object(
+      'user_id', c.user_id,
+      'score', c.total_score,
+      'give_count', c.give_count,
+      'get_count', c.get_count,
+      'give_items', c.give_items,
+      'get_items', c.get_items
+    )
+  )
+  INTO v_result
+  FROM (
+    SELECT * FROM combined
+    WHERE total_score > 0
+    ORDER BY total_score DESC
+    LIMIT p_max_results
+  ) c;
+
+  RETURN COALESCE(v_result, '[]'::jsonb);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION find_user_matches(UUID, INT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION find_user_matches(UUID, INT) TO authenticated;

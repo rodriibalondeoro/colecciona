@@ -17,7 +17,10 @@ export async function POST(req) {
 
     const body = await req.json();
     const { targetUserId } = body;
-    if (!targetUserId) return NextResponse.json({ error: "Falta targetUserId" }, { status: 400 });
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!targetUserId || typeof targetUserId !== "string" || !UUID_RE.test(targetUserId)) {
+      return NextResponse.json({ error: "ID de usuario inválido" }, { status: 400 });
+    }
     if (targetUserId === user.id) return NextResponse.json({ error: "No puedes seguirte" }, { status: 400 });
 
     // Atomic: insert follow + increment both counters in one transaction
@@ -68,7 +71,10 @@ export async function DELETE(req) {
 
     const { searchParams } = new URL(req.url);
     const targetUserId = searchParams.get("targetUserId");
-    if (!targetUserId) return NextResponse.json({ error: "Falta targetUserId" }, { status: 400 });
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!targetUserId || typeof targetUserId !== "string" || !UUID_RE.test(targetUserId)) {
+      return NextResponse.json({ error: "ID de usuario inválido" }, { status: 400 });
+    }
 
     // Atomic: delete follow + decrement both counters in one transaction
     const supabase = createUserClient(token);
