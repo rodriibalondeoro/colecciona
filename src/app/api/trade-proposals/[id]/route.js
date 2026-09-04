@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/serverSupabase";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
+import { createClient } from "@supabase/supabase-js";
 
 export async function GET(req, { params }) {
   try {
@@ -10,8 +10,10 @@ export async function GET(req, { params }) {
     }
 
     const { id } = await params;
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const supabase = createUserClient(token);
 
     const { data: proposal, error } = await supabase
       .from("trade_proposals")
@@ -57,12 +59,24 @@ export async function PATCH(req, { params }) {
     }
 
     const { id } = await params;
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const body = await req.json();
     const { status: newStatus, message } = body;
 
+    if (!newStatus) {
+      return NextResponse.json({ error: "status es obligatorio" }, { status: 400 });
+    }
+
+    // Validate message length
+    if (message && typeof message === "string" && message.length > 1000) {
+      return NextResponse.json({ error: "Mensaje demasiado largo (máximo 1000 caracteres)" }, { status: 400 });
+    }
+
+    const supabase = createUserClient(token);
+
+    // Read current proposal (RLS enforces participant check)
     const { data: proposal } = await supabase
       .from("trade_proposals")
       .select("*")
@@ -77,75 +91,49 @@ export async function PATCH(req, { params }) {
       return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
     }
 
-    // Validate status transitions
-    const validTransitions = {
-      PROPOSED: ["ACCEPTED", "COUNTERED", "CANCELLED"],
-      COUNTERED: ["ACCEPTED", "COUNTERED", "CANCELLED"],
-      ACCEPTED: ["SHIPPING_PENDING", "CANCELLED"],
-      SHIPPING_PENDING: ["SHIPPED", "CANCELLED"],
-      SHIPPED: ["RECEIVED", "DISPUTED"],
-      RECEIVED: ["COMPLETED", "DISPUTED"],
-    };
-
-    const allowed = validTransitions[proposal.status];
-    if (!allowed || !allowed.includes(newStatus)) {
-      return NextResponse.json({ error: `No se puede cambiar de ${proposal.status} a ${newStatus}` }, { status: 400 });
-    }
-
-    // Role-based restrictions
-    if (["ACCEPTED", "COUNTERED", "CANCELLED", "RECEIVED", "DISPUTED"].includes(newStatus)) {
-      if (proposal.receiver_id !== user.id && newStatus !== "CANCELLED") {
-        return NextResponse.json({ error: "Solo el destinatario puede realizar esta acción" }, { status: 403 });
-      }
-    }
-
-    if (["SHIPPED", "SHIPPING_PENDING"].includes(newStatus) && proposal.proposer_id !== user.id) {
-      return NextResponse.json({ error: "Solo el proponente puede marcar envío" }, { status: 403 });
-    }
-
-    const updates = { status: newStatus, updated_at: new Date().toISOString() };
-    if (newStatus === "ACCEPTED") updates.accepted_at = new Date().toISOString();
-    if (newStatus === "SHIPPED") updates.shipped_at = new Date().toISOString();
-    if (newStatus === "RECEIVED") updates.received_at = new Date().toISOString();
-    if (newStatus === "COMPLETED") updates.completed_at = new Date().toISOString();
+    // Build update — DB trigger validates transitions + permissions
+    const updates = { status: newStatus };
+    if (message) updates.message = message;
 
     const { error: updateError } = await supabase
       .from("trade_proposals")
       .update(updates)
       .eq("id", id);
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      console.warn("[Trade Proposal PATCH] Update error:", updateError.message);
+      // DB trigger raises exceptions for invalid transitions
+      return NextResponse.json({ error: updateError.message }, { status: 400 });
+    }
 
-    // Log history
-    await supabase.from("trade_history").insert({
-      proposal_id: id,
-      actor_id: user.id,
-      action: `status_changed_to_${newStatus}`,
-      old_status: proposal.status,
-      new_status: newStatus,
-      details: { message: message || null },
-    });
-
-    // Notify the other party
+    // Notify the other party (best-effort, non-blocking)
     const otherUserId = user.id === proposal.proposer_id ? proposal.receiver_id : proposal.proposer_id;
     const statusLabels = {
       ACCEPTED: "aceptó tu propuesta",
       COUNTERED: "te envió una contraoferta",
       CANCELLED: "canceló la propuesta",
       SHIPPED: "marcó como enviado",
+      SHIPPING_PENDING: "confirmó envío pendiente",
       RECEIVED: "confirmó recepción",
       COMPLETED: "completó el intercambio",
       DISPUTED: "abrió una disputa",
     };
 
     if (statusLabels[newStatus]) {
-      await supabase.from("notifications").insert({
-        user_id: otherUserId,
-        type: "trade_update",
-        title: "Actualización de intercambio",
-        body: `${user.name || "Alguien"} ${statusLabels[newStatus]}`,
-        link: `/intercambios`,
-      });
+      // Use service_role for notification (user client can't insert for other users)
+      try {
+        const serviceClient = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL,
+          process.env.SUPABASE_SERVICE_ROLE_KEY
+        );
+        await serviceClient.from("notifications").insert({
+          user_id: otherUserId,
+          type: "trade_update",
+          title: "Actualización de intercambio",
+          message: `${user.name || "Alguien"} ${statusLabels[newStatus]}`,
+          data: { link: "/intercambios" },
+        });
+      } catch {}
     }
 
     return NextResponse.json({ ok: true, status: newStatus });

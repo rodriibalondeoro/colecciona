@@ -2803,6 +2803,172 @@ CREATE TRIGGER trg_validate_trade_proposal_item_quantity
   BEFORE INSERT OR UPDATE ON trade_proposal_items
   FOR EACH ROW EXECUTE FUNCTION validate_trade_proposal_item_quantity();
 
+-- ============================================================================
+-- TRADE PROPOSALS RPCs — atomic creation with batch validation
+-- ============================================================================
+
+-- Atomic trade proposal creation: validates, locks, inserts in one transaction
+CREATE OR REPLACE FUNCTION create_trade_proposal(
+  p_receiver_id UUID,
+  p_message TEXT DEFAULT NULL,
+  p_proposer_items JSONB DEFAULT '[]'::jsonb,
+  p_receiver_items JSONB DEFAULT '[]'::jsonb
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_caller UUID := auth.uid();
+  v_proposal_id UUID;
+  v_proposal JSONB;
+  v_item JSONB;
+  v_item_id UUID;
+  v_quantity INTEGER;
+  v_item_record RECORD;
+  v_committed INTEGER;
+  v_available INTEGER;
+BEGIN
+  -- Auth check
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+
+  -- Receiver validation
+  IF p_receiver_id IS NULL THEN RAISE EXCEPTION 'Receiver required'; END IF;
+  IF p_receiver_id = v_caller THEN RAISE EXCEPTION 'Cannot trade with yourself'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = p_receiver_id) THEN
+    RAISE EXCEPTION 'Receiver not found';
+  END IF;
+
+  -- Message length
+  IF length(p_message) > 1000 THEN
+    RAISE EXCEPTION 'Message too long (max 1000 characters)';
+  END IF;
+
+  -- Must have at least one item
+  IF jsonb_array_length(p_proposer_items) = 0 AND jsonb_array_length(p_receiver_items) = 0 THEN
+    RAISE EXCEPTION 'At least one item required';
+  END IF;
+
+  -- ==================== PROPOSER ITEMS ====================
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_proposer_items)
+  LOOP
+    v_item_id := (v_item->>'collection_item_id')::uuid;
+    v_quantity := COALESCE((v_item->>'quantity')::integer, 1);
+
+    -- Format checks
+    IF v_item_id IS NULL THEN RAISE EXCEPTION 'Invalid item ID'; END IF;
+    IF v_quantity < 1 THEN RAISE EXCEPTION 'Quantity must be >= 1'; END IF;
+
+    -- Lock and validate item
+    SELECT * INTO v_item_record FROM collection_items WHERE id = v_item_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Item % not found', v_item_id; END IF;
+    IF v_item_record.user_id != v_caller THEN
+      RAISE EXCEPTION 'Item % does not belong to you', v_item_id;
+    END IF;
+    IF v_item_record.status IN ('MISSING', 'TRADED') THEN
+      RAISE EXCEPTION 'Item % is not available', v_item_id;
+    END IF;
+
+    -- Batch availability: duplicate_quantity - trade_quantity
+    v_available := v_item_record.duplicate_quantity - v_item_record.trade_quantity;
+    IF v_quantity > v_available THEN
+      RAISE EXCEPTION 'Item %: requested % but only % available', v_item_id, v_quantity, v_available;
+    END IF;
+  END LOOP;
+
+  -- ==================== RECEIVER ITEMS ====================
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_receiver_items)
+  LOOP
+    v_item_id := (v_item->>'collection_item_id')::uuid;
+    v_quantity := COALESCE((v_item->>'quantity')::integer, 1);
+
+    IF v_item_id IS NULL THEN RAISE EXCEPTION 'Invalid receiver item ID'; END IF;
+    IF v_quantity < 1 THEN RAISE EXCEPTION 'Quantity must be >= 1'; END IF;
+
+    SELECT * INTO v_item_record FROM collection_items WHERE id = v_item_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Item % not found', v_item_id; END IF;
+    IF v_item_record.user_id != p_receiver_id THEN
+      RAISE EXCEPTION 'Item % does not belong to receiver', v_item_id;
+    END IF;
+    IF v_item_record.status IN ('MISSING', 'TRADED') THEN
+      RAISE EXCEPTION 'Item % is not available', v_item_id;
+    END IF;
+
+    v_available := v_item_record.duplicate_quantity - v_item_record.trade_quantity;
+    IF v_quantity > v_available THEN
+      RAISE EXCEPTION 'Item %: requested % but only % available', v_item_id, v_quantity, v_available;
+    END IF;
+  END LOOP;
+
+  -- ==================== INSERT PROPOSAL ====================
+  INSERT INTO trade_proposals (proposer_id, receiver_id, status, message)
+  VALUES (v_caller, p_receiver_id, 'PROPOSED', p_message)
+  RETURNING id INTO v_proposal_id;
+
+  -- ==================== INSERT ITEMS ====================
+  -- Proposer items
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_proposer_items)
+  LOOP
+    INSERT INTO trade_proposal_items (proposal_id, collection_item_id, user_id, quantity, side)
+    VALUES (
+      v_proposal_id,
+      (v_item->>'collection_item_id')::uuid,
+      v_caller,
+      COALESCE((v_item->>'quantity')::integer, 1),
+      'proposer'
+    );
+  END LOOP;
+
+  -- Receiver items
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_receiver_items)
+  LOOP
+    INSERT INTO trade_proposal_items (proposal_id, collection_item_id, user_id, quantity, side)
+    VALUES (
+      v_proposal_id,
+      (v_item->>'collection_item_id')::uuid,
+      p_receiver_id,
+      COALESCE((v_item->>'quantity')::integer, 1),
+      'receiver'
+    );
+  END LOOP;
+
+  -- ==================== NOTIFICATION ====================
+  INSERT INTO notifications (user_id, type, title, message, data, read)
+  VALUES (
+    p_receiver_id,
+    'trade_proposal',
+    'Nueva propuesta de intercambio',
+    'Te propusieron un intercambio',
+    jsonb_build_object('link', '/intercambios'),
+    false
+  );
+
+  -- Return proposal with items
+  SELECT jsonb_build_object(
+    'id', tp.id,
+    'proposer_id', tp.proposer_id,
+    'receiver_id', tp.receiver_id,
+    'status', tp.status,
+    'message', tp.message,
+    'created_at', tp.created_at,
+    'items', (
+      SELECT jsonb_agg(jsonb_build_object(
+        'id', tpi.id,
+        'collection_item_id', tpi.collection_item_id,
+        'quantity', tpi.quantity,
+        'side', tpi.side
+      ))
+      FROM trade_proposal_items tpi WHERE tpi.proposal_id = tp.id
+    )
+  ) INTO v_proposal
+  FROM trade_proposals tp WHERE tp.id = v_proposal_id;
+
+  RETURN v_proposal;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION create_trade_proposal(UUID, TEXT, JSONB, JSONB) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION create_trade_proposal(UUID, TEXT, JSONB, JSONB) TO authenticated;
+
 -- Reviews RPC: validates order COMPLETED, participant, no duplicate
 CREATE OR REPLACE FUNCTION create_review(
   p_order_id UUID, p_rating INTEGER, p_comment TEXT DEFAULT NULL

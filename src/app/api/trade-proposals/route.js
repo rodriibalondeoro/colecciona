@@ -1,6 +1,33 @@
 import { NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/serverSupabase";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
+
+function mapRpcError(message) {
+  if (!message) return { status: 500 };
+  if (message.includes("not found")) return { status: 404 };
+  if (message.includes("does not belong")) return { status: 403 };
+  if (message.includes("not available")) return { status: 409 };
+  if (message.includes("yourself")) return { status: 400 };
+  if (message.includes("not authenticated")) return { status: 401 };
+  return { status: 500 };
+}
+
+function validateItems(items, side) {
+  if (!items?.length) return null;
+
+  const ids = items.map((i) => i.collection_item_id);
+  const uniqueIds = new Set(ids);
+  if (uniqueIds.size !== ids.length) {
+    return `${side}: duplicate IDs not allowed`;
+  }
+
+  for (const item of items) {
+    if (!Number.isInteger(item.quantity) || item.quantity < 1) {
+      return `${side}: quantity must be a positive integer`;
+    }
+  }
+
+  return null;
+}
 
 export async function GET(req) {
   try {
@@ -9,23 +36,28 @@ export async function GET(req) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ proposals: [] });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ proposals: [] });
+
+    const supabase = createUserClient(token);
 
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "20");
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "20")));
     const from = (page - 1) * limit;
 
     let query = supabase
       .from("trade_proposals")
-      .select(`
+      .select(
+        `
         *,
         proposer:profiles!trade_proposals_proposer_id_fkey(id, name, username, avatar, rating),
         receiver:profiles!trade_proposals_receiver_id_fkey(id, name, username, avatar, rating),
         items:trade_proposal_items(*)
-      `, { count: "exact" })
+      `,
+        { count: "exact" }
+      )
       .or(`proposer_id.eq.${user.id},receiver_id.eq.${user.id}`)
       .order("created_at", { ascending: false })
       .range(from, from + limit - 1);
@@ -42,26 +74,6 @@ export async function GET(req) {
   }
 }
 
-function validateItems(items, expectedUserId, side) {
-  if (!items?.length) return null;
-
-  // 1. Check for duplicate IDs
-  const ids = items.map(i => i.collection_item_id);
-  const uniqueIds = new Set(ids);
-  if (uniqueIds.size !== ids.length) {
-    return `${side}: IDs duplicados no están permitidos`;
-  }
-
-  // 2. Check quantities are positive integers
-  for (const item of items) {
-    if (!Number.isInteger(item.quantity) || item.quantity < 1) {
-      return `${side}: cantidad debe ser un entero positivo`;
-    }
-  }
-
-  return null; // items format OK, deeper validation follows in main function
-}
-
 export async function POST(req) {
   try {
     const { user, error: authError } = await verifyAuth(req);
@@ -69,8 +81,8 @@ export async function POST(req) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const body = await req.json();
     const { receiver_id, message, proposer_items, receiver_items } = body;
@@ -87,147 +99,43 @@ export async function POST(req) {
       return NextResponse.json({ error: "Debes incluir al menos un elemento" }, { status: 400 });
     }
 
-    // Validate item format (duplicates, quantities)
-    const proposerFmtError = validateItems(proposer_items, user.id, "proposer");
+    // Validate item format
+    const proposerFmtError = validateItems(proposer_items, "proposer");
     if (proposerFmtError) {
       return NextResponse.json({ error: proposerFmtError }, { status: 400 });
     }
-    const receiverFmtError = validateItems(receiver_items, receiver_id, "receiver");
+    const receiverFmtError = validateItems(receiver_items, "receiver");
     if (receiverFmtError) {
       return NextResponse.json({ error: receiverFmtError }, { status: 400 });
     }
 
-    // Verify all proposer items belong to the right user and are available
-    if (proposer_items?.length) {
-      const itemIds = proposer_items.map(i => i.collection_item_id);
-      const { data: items } = await supabase
-        .from("collection_items")
-        .select("id, user_id, status, owned_quantity, trade_quantity")
-        .in("id", itemIds);
-
-      // COUNT CHECK: requested IDs must match found IDs
-      if (!items || items.length !== itemIds.length) {
-        const foundIds = new Set(items?.map(i => i.id) || []);
-        const missing = itemIds.filter(id => !foundIds.has(id));
-        return NextResponse.json({
-          error: `Algunos elementos no existen: ${missing.join(", ")}`,
-          status: 400,
-        });
-      }
-
-      for (const item of items) {
-        if (item.user_id !== user.id) {
-          return NextResponse.json({ error: `Elemento ${item.id} no te pertenece` }, { status: 400 });
-        }
-        if (item.status === "MISSING" || item.status === "TRADED") {
-          return NextResponse.json({ error: `Elemento ${item.id} no está disponible` }, { status: 400 });
-        }
-        const requested = proposer_items.find(i => i.collection_item_id === item.id)?.quantity || 1;
-        const available = (item.owned_quantity || 0) - (item.trade_quantity || 0);
-        if (requested > available) {
-          return NextResponse.json({
-            error: `Elemento ${item.id}: solicitas ${requested} pero solo tienes ${available} disponibles`,
-            status: 400,
-          });
-        }
-      }
+    // Message length
+    if (message && typeof message === "string" && message.length > 1000) {
+      return NextResponse.json({ error: "Mensaje demasiado largo (máximo 1000 caracteres)" }, { status: 400 });
     }
 
-    // Verify all receiver items belong to the receiver and are available
-    if (receiver_items?.length) {
-      const itemIds = receiver_items.map(i => i.collection_item_id);
-      const { data: items } = await supabase
-        .from("collection_items")
-        .select("id, user_id, status, owned_quantity, trade_quantity")
-        .in("id", itemIds);
-
-      // COUNT CHECK
-      if (!items || items.length !== itemIds.length) {
-        const foundIds = new Set(items?.map(i => i.id) || []);
-        const missing = itemIds.filter(id => !foundIds.has(id));
-        return NextResponse.json({
-          error: `Algunos elementos del destinatario no existen: ${missing.join(", ")}`,
-          status: 400,
-        });
-      }
-
-      for (const item of items) {
-        if (item.user_id !== receiver_id) {
-          return NextResponse.json({ error: `Elemento ${item.id} no pertenece al destinatario` }, { status: 400 });
-        }
-        if (item.status === "MISSING" || item.status === "TRADED") {
-          return NextResponse.json({ error: `Elemento ${item.id} no está disponible` }, { status: 400 });
-        }
-        const requested = receiver_items.find(i => i.collection_item_id === item.id)?.quantity || 1;
-        const available = (item.owned_quantity || 0) - (item.trade_quantity || 0);
-        if (requested > available) {
-          return NextResponse.json({
-            error: `Elemento ${item.id}: solicitas ${requested} pero el destinatario solo tiene ${available} disponibles`,
-            status: 400,
-          });
-        }
-      }
-    }
-
-    // Create proposal
-    const { data: proposal, error: proposalError } = await supabase
-      .from("trade_proposals")
-      .insert({
-        proposer_id: user.id,
-        receiver_id,
-        status: "PROPOSED",
-        message: message || null,
-      })
-      .select()
-      .single();
-
-    if (proposalError) throw proposalError;
-
-    // Insert proposer items
-    if (proposer_items?.length) {
-      await supabase.from("trade_proposal_items").insert(
-        proposer_items.map(i => ({
-          proposal_id: proposal.id,
-          collection_item_id: i.collection_item_id,
-          user_id: user.id,
-          quantity: i.quantity || 1,
-          side: "proposer",
-        }))
-      );
-    }
-
-    // Insert receiver items
-    if (receiver_items?.length) {
-      await supabase.from("trade_proposal_items").insert(
-        receiver_items.map(i => ({
-          proposal_id: proposal.id,
-          collection_item_id: i.collection_item_id,
-          user_id: receiver_id,
-          quantity: i.quantity || 1,
-          side: "receiver",
-        }))
-      );
-    }
-
-    // Log history
-    await supabase.from("trade_history").insert({
-      proposal_id: proposal.id,
-      actor_id: user.id,
-      action: "created",
-      new_status: "PROPOSED",
-      details: { message: message || null },
+    // Call atomic RPC — all validation, inserts, and notifications in one transaction
+    const supabase = createUserClient(token);
+    const { data, error: rpcError } = await supabase.rpc("create_trade_proposal", {
+      p_receiver_id: receiver_id,
+      p_message: message || null,
+      p_proposer_items: (proposer_items || []).map((i) => ({
+        collection_item_id: i.collection_item_id,
+        quantity: i.quantity || 1,
+      })),
+      p_receiver_items: (receiver_items || []).map((i) => ({
+        collection_item_id: i.collection_item_id,
+        quantity: i.quantity || 1,
+      })),
     });
 
-    // Send notification
-    await supabase.from("notifications").insert({
-      user_id: receiver_id,
-      type: "trade_proposal",
-      title: "Nueva propuesta de intercambio",
-      body: `${user.name || "Alguien"} te propuso un intercambio`,
-      link: `/intercambios`,
-    });
+    if (rpcError) {
+      console.warn("[Trade Proposals POST] RPC error:", rpcError.message);
+      const mapped = mapRpcError(rpcError.message);
+      return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
+    }
 
-    return NextResponse.json({ proposal });
+    return NextResponse.json({ proposal: data });
   } catch (err) {
     console.error("[Trade Proposals POST]", err);
     return NextResponse.json({ error: err.message }, { status: 500 });
