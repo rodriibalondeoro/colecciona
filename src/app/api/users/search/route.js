@@ -15,7 +15,8 @@ export async function GET(req) {
     }
 
     if (!url || !anonKey) {
-      return NextResponse.json({ users: [] });
+      console.error("[Users Search] Supabase not configured");
+      return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
     }
 
     // Public search: use anon key (RLS allows public SELECT on profiles)
