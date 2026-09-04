@@ -93,14 +93,15 @@ export async function POST(req) {
       );
     }
 
-    // 6. Notify seller
+    // 6. Notify seller (best-effort)
     if (order.seller_id) {
-      await supabase.from("notifications").insert({
+      const { error: notifError } = await supabase.from("notifications").insert({
         user_id: order.seller_id,
         type: "payment_received",
         title: "Pago recibido",
-        body: "El pago de tu venta ha sido capturado y los fondos están disponibles.",
+        message: "El pago de tu venta ha sido capturado y los fondos están disponibles.",
       });
+      if (notifError) console.warn("[Capture] Notification error:", notifError.message);
     }
 
     return NextResponse.json({
