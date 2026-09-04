@@ -3542,8 +3542,8 @@ BEGIN
   IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
   IF p_proposal_id IS NULL THEN RAISE EXCEPTION '[PROPOSAL_REQUIRED] Proposal ID required'; END IF;
 
-  -- Read proposal
-  SELECT * INTO v_proposal FROM trade_proposals WHERE id = p_proposal_id;
+  -- Read + lock proposal (serializes concurrent transitions)
+  SELECT * INTO v_proposal FROM trade_proposals WHERE id = p_proposal_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[PROPOSAL_NOT_FOUND] Proposal not found'; END IF;
 
   -- Only participants
@@ -3552,7 +3552,10 @@ BEGIN
   END IF;
 
   -- Update status (trigger validates transition + permissions)
-  UPDATE trade_proposals SET status = p_new_status WHERE id = p_proposal_id;
+  UPDATE trade_proposals SET status = p_new_status WHERE id = p_proposal_id AND status = v_proposal.status;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION '[INVALID_STATUS] Proposal state changed concurrently';
+  END IF;
 
   -- Notify the other party
   INSERT INTO notifications (user_id, type, title, message, data, read)
