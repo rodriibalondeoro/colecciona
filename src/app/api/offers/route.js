@@ -19,6 +19,7 @@ function mapRpcError(message) {
     case "PRODUCT_UNAVAILABLE": return { status: 409 };
     case "OFFER_NOT_PENDING": return { status: 409 };
     case "INVALID_AMOUNT": return { status: 400 };
+    case "MESSAGE_TOO_LONG": return { status: 400 };
     default: return { status: 500 };
   }
 }
@@ -77,11 +78,27 @@ export async function POST(req) {
     return NextResponse.json({ error: "productId y amount son obligatorios" }, { status: 400 });
   }
 
+  // Validate amount is a finite positive number
+  const parsedAmount = typeof amount === "string" ? Number(amount) : amount;
+  if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+    return NextResponse.json({ error: "Importe inválido" }, { status: 400 });
+  }
+
+  // Validate message length (max 1000 chars)
+  if (message !== undefined && message !== null) {
+    if (typeof message !== "string") {
+      return NextResponse.json({ error: "message debe ser texto" }, { status: 400 });
+    }
+    if (message.length > 1000) {
+      return NextResponse.json({ error: "Mensaje demasiado largo (máximo 1000 caracteres)" }, { status: 400 });
+    }
+  }
+
   const supabase = createUserClient(token);
 
   const { data, error: rpcError } = await supabase.rpc("create_offer", {
     p_product_id: productId,
-    p_amount: amount,
+    p_amount: parsedAmount,
     p_message: message || "",
   });
 
