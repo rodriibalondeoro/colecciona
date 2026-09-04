@@ -82,22 +82,16 @@ export async function POST(req) {
       return NextResponse.json({ error: insertError.message }, { status: 500 });
     }
 
-    // Update rating using SQL AVG (scales better than loading all reviews into JS)
-    const { data: avgResult } = await supabase
-      .rpc("update_reviewer_rating", { p_user_id: reviewedId });
-
-    // Fallback: direct SQL AVG if RPC not available
-    if (!avgResult) {
-      const { data: allReviews } = await supabase
-        .from("reviews")
-        .select("rating")
-        .eq("target_user_id", reviewedId);
-
-      if (allReviews && allReviews.length > 0) {
-        const avg = allReviews.reduce((acc, r) => acc + r.rating, 0) / allReviews.length;
-        const rounded = Math.round(avg * 100) / 100;
-        await supabase.from("profiles").update({ rating: rounded }).eq("id", reviewedId);
-      }
+    // Update rating via SQL AVG RPC (service_role — backend only)
+    const serviceClient = (await import("@supabase/supabase-js")).createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+    const { error: ratingError } = await serviceClient.rpc("update_reviewer_rating", {
+      p_user_id: reviewedId,
+    });
+    if (ratingError) {
+      console.error("[Reviews] Failed to update rating:", ratingError.message);
     }
 
     await supabase.from("notifications").insert({

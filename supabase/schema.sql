@@ -3662,7 +3662,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION update_reviewer_rating(UUID) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION update_reviewer_rating(UUID) TO authenticated;
+-- NOT granted to authenticated: backend-only via service_role in /api/reviews
 
 -- ============================================================================
 -- OFFERS RPCs — atomic price negotiation
