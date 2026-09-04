@@ -236,16 +236,29 @@ export async function POST(req) {
 
     // --- Premium Subscription Events ---
     // CRITICAL: Premium controls user privileges — DB failure must trigger retry.
-    // Any sync error sets criticalError → 500 → Stripe retry.
+    // VERSIONING: Stripe may deliver events out of order. We use stripe_updated_at
+    // to only apply updates if the incoming event is newer than what's in DB.
+    // 'deleted' (canceled) is always a terminal state — never overwritten.
     case "customer.subscription.created": {
       const sub = event.data.object;
       const userId = sub.metadata?.user_id;
       console.log(`[Webhook] Subscription created: ${sub.id} for user ${userId}`);
 
-      // Identity is critical: without user_id we cannot sync privileges.
       if (!userId) {
         console.error("[Webhook] Subscription missing user_id metadata:", sub.id);
         criticalError = `Subscription ${sub.id} missing user identity`;
+        break;
+      }
+
+      // Check if row already exists with a newer version (from updated/deleted event)
+      const { data: existing } = await supabase
+        .from("subscriptions")
+        .select("stripe_updated_at")
+        .eq("stripe_subscription_id", sub.id)
+        .single();
+
+      if (existing?.stripe_updated_at && sub.updated * 1000 <= new Date(existing.stripe_updated_at).getTime()) {
+        console.log(`[Webhook] Subscription created: ${sub.id} — stale event (existing is newer), ignoring`);
         break;
       }
 
@@ -258,6 +271,7 @@ export async function POST(req) {
         amount: (sub.items?.data?.[0]?.price?.unit_amount || 499) / 100,
         current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
         current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+        stripe_updated_at: new Date(sub.updated * 1000).toISOString(),
       }, { onConflict: "stripe_subscription_id" });
       if (error) {
         console.error("[Webhook] Subscription upsert error:", error.message);
@@ -276,8 +290,24 @@ export async function POST(req) {
         break;
       }
 
-      // UPSERT (not UPDATE): converges even if the created webhook was lost
-      // and this subscription has no row yet. Prevents silent 0-row update → 200.
+      // Check current state: canceled is terminal — never overwrite.
+      const { data: current } = await supabase
+        .from("subscriptions")
+        .select("status, stripe_updated_at")
+        .eq("stripe_subscription_id", sub.id)
+        .single();
+
+      if (current?.status === "canceled") {
+        console.log(`[Webhook] Subscription updated: ${sub.id} — already canceled (terminal), ignoring`);
+        break;
+      }
+
+      // VERSION CHECK: only apply if incoming event is newer than what's in DB.
+      if (current?.stripe_updated_at && sub.updated * 1000 <= new Date(current.stripe_updated_at).getTime()) {
+        console.log(`[Webhook] Subscription updated: ${sub.id} — stale event (existing is newer), ignoring`);
+        break;
+      }
+
       const { error } = await supabase.from("subscriptions").upsert({
         user_id: userId,
         stripe_subscription_id: sub.id,
@@ -288,6 +318,7 @@ export async function POST(req) {
         current_period_start: new Date(sub.current_period_start * 1000).toISOString(),
         current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
         cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
+        stripe_updated_at: new Date(sub.updated * 1000).toISOString(),
       }, { onConflict: "stripe_subscription_id" });
       if (error) {
         console.error("[Webhook] Subscription update error:", error.message);
@@ -306,7 +337,20 @@ export async function POST(req) {
         break;
       }
 
-      // UPSERT with canceled status: converges even if no row exists yet.
+      // Check current state: if already canceled, this is a no-op (idempotent).
+      const { data: current } = await supabase
+        .from("subscriptions")
+        .select("status")
+        .eq("stripe_subscription_id", sub.id)
+        .single();
+
+      if (current?.status === "canceled") {
+        console.log(`[Webhook] Subscription deleted: ${sub.id} — already canceled, skipping`);
+        break;
+      }
+
+      // UPSERT canceled status: converges even if no row exists yet.
+      // 'deleted' always wins over 'updated' because canceled is terminal.
       const { error } = await supabase.from("subscriptions").upsert({
         user_id: userId,
         stripe_subscription_id: sub.id,
@@ -317,6 +361,7 @@ export async function POST(req) {
         current_period_start: sub.current_period_start ? new Date(sub.current_period_start * 1000).toISOString() : null,
         current_period_end: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null,
         cancel_at: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
+        stripe_updated_at: new Date(sub.updated * 1000).toISOString(),
       }, { onConflict: "stripe_subscription_id" });
       if (error) {
         console.error("[Webhook] Subscription delete error:", error.message);
