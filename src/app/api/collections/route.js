@@ -13,6 +13,8 @@ export async function GET(req) {
     const limit = parseInt(searchParams.get("limit") || "20");
     const from = (page - 1) * limit;
 
+    const { user } = await verifyAuth(req);
+
     let query = supabase
       .from("collections")
       .select("*, item_count:collection_items(count)", { count: "exact" })
@@ -20,14 +22,25 @@ export async function GET(req) {
       .range(from, from + limit - 1);
 
     if (userId) {
-      query = query.eq("user_id", userId);
-    } else {
-      const { user } = await verifyAuth(req);
-      if (user) {
-        query = query.eq("user_id", user.id);
+      // Viewing another user's collections — apply visibility rules
+      if (user && user.id === userId) {
+        // Owner sees all their own collections
+        query = query.eq("user_id", userId);
+      } else if (user) {
+        // Authenticated user viewing someone else: public + followers (if following)
+        query = query
+          .eq("user_id", userId)
+          .or(`visibility.eq.public,and(visibility.eq.followers,exists(select 1 from follows where follower_id = '${user.id}' and following_id = '${userId}'))`);
       } else {
-        query = query.eq("visibility", "public");
+        // Unauthenticated: only public
+        query = query.eq("user_id", userId).eq("visibility", "public");
       }
+    } else if (user) {
+      // No userId param: show own collections
+      query = query.eq("user_id", user.id);
+    } else {
+      // No userId, no auth: only public
+      query = query.eq("visibility", "public");
     }
 
     const { data, error, count } = await query;

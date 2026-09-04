@@ -30,6 +30,12 @@ export async function POST(req) {
     return NextResponse.json({ error: "recipientId y title son obligatorios" }, { status: 400 });
   }
 
+  // SECURITY: users can only create notifications for OTHER users (not self-spam)
+  // Server-side notifications (message, offer, etc.) should use serviceRole directly.
+  if (recipientId === user.id) {
+    return NextResponse.json({ error: "No puedes crear notificaciones para ti mismo" }, { status: 400 });
+  }
+
   const supabase = getServerSupabase();
   if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 
@@ -58,7 +64,8 @@ export async function PATCH(req) {
   if (all) {
     await supabase.from("notifications").update({ read: true }).eq("user_id", user.id).eq("read", false);
   } else if (id) {
-    await supabase.from("notifications").update({ read: true }).eq("id", id);
+    // IDOR FIX: always filter by user_id — users can only mark their own notifications
+    await supabase.from("notifications").update({ read: true }).eq("id", id).eq("user_id", user.id);
   }
 
   return NextResponse.json({ success: true });

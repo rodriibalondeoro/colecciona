@@ -42,6 +42,26 @@ export async function GET(req) {
   }
 }
 
+function validateItems(items, expectedUserId, side) {
+  if (!items?.length) return null;
+
+  // 1. Check for duplicate IDs
+  const ids = items.map(i => i.collection_item_id);
+  const uniqueIds = new Set(ids);
+  if (uniqueIds.size !== ids.length) {
+    return `${side}: IDs duplicados no están permitidos`;
+  }
+
+  // 2. Check quantities are positive integers
+  for (const item of items) {
+    if (!Number.isInteger(item.quantity) || item.quantity < 1) {
+      return `${side}: cantidad debe ser un entero positivo`;
+    }
+  }
+
+  return null; // items format OK, deeper validation follows in main function
+}
+
 export async function POST(req) {
   try {
     const { user, error: authError } = await verifyAuth(req);
@@ -67,30 +87,85 @@ export async function POST(req) {
       return NextResponse.json({ error: "Debes incluir al menos un elemento" }, { status: 400 });
     }
 
-    // Verify all items belong to the right users
+    // Validate item format (duplicates, quantities)
+    const proposerFmtError = validateItems(proposer_items, user.id, "proposer");
+    if (proposerFmtError) {
+      return NextResponse.json({ error: proposerFmtError }, { status: 400 });
+    }
+    const receiverFmtError = validateItems(receiver_items, receiver_id, "receiver");
+    if (receiverFmtError) {
+      return NextResponse.json({ error: receiverFmtError }, { status: 400 });
+    }
+
+    // Verify all proposer items belong to the right user and are available
     if (proposer_items?.length) {
       const itemIds = proposer_items.map(i => i.collection_item_id);
       const { data: items } = await supabase
         .from("collection_items")
-        .select("id, user_id, status")
+        .select("id, user_id, status, owned_quantity, trade_quantity")
         .in("id", itemIds);
 
-      const invalid = (items || []).find(i => i.user_id !== user.id || i.status === "MISSING");
-      if (invalid) {
-        return NextResponse.json({ error: "Algunos elementos no están disponibles" }, { status: 400 });
+      // COUNT CHECK: requested IDs must match found IDs
+      if (!items || items.length !== itemIds.length) {
+        const foundIds = new Set(items?.map(i => i.id) || []);
+        const missing = itemIds.filter(id => !foundIds.has(id));
+        return NextResponse.json({
+          error: `Algunos elementos no existen: ${missing.join(", ")}`,
+          status: 400,
+        });
+      }
+
+      for (const item of items) {
+        if (item.user_id !== user.id) {
+          return NextResponse.json({ error: `Elemento ${item.id} no te pertenece` }, { status: 400 });
+        }
+        if (item.status === "MISSING" || item.status === "TRADED") {
+          return NextResponse.json({ error: `Elemento ${item.id} no está disponible` }, { status: 400 });
+        }
+        const requested = proposer_items.find(i => i.collection_item_id === item.id)?.quantity || 1;
+        const available = (item.owned_quantity || 0) - (item.trade_quantity || 0);
+        if (requested > available) {
+          return NextResponse.json({
+            error: `Elemento ${item.id}: solicitas ${requested} pero solo tienes ${available} disponibles`,
+            status: 400,
+          });
+        }
       }
     }
 
+    // Verify all receiver items belong to the receiver and are available
     if (receiver_items?.length) {
       const itemIds = receiver_items.map(i => i.collection_item_id);
       const { data: items } = await supabase
         .from("collection_items")
-        .select("id, user_id, status")
+        .select("id, user_id, status, owned_quantity, trade_quantity")
         .in("id", itemIds);
 
-      const invalid = (items || []).find(i => i.user_id !== receiver_id || i.status === "MISSING");
-      if (invalid) {
-        return NextResponse.json({ error: "Algunos elementos del destinatario no están disponibles" }, { status: 400 });
+      // COUNT CHECK
+      if (!items || items.length !== itemIds.length) {
+        const foundIds = new Set(items?.map(i => i.id) || []);
+        const missing = itemIds.filter(id => !foundIds.has(id));
+        return NextResponse.json({
+          error: `Algunos elementos del destinatario no existen: ${missing.join(", ")}`,
+          status: 400,
+        });
+      }
+
+      for (const item of items) {
+        if (item.user_id !== receiver_id) {
+          return NextResponse.json({ error: `Elemento ${item.id} no pertenece al destinatario` }, { status: 400 });
+        }
+        if (item.status === "MISSING" || item.status === "TRADED") {
+          return NextResponse.json({ error: `Elemento ${item.id} no está disponible` }, { status: 400 });
+        }
+        const requested = receiver_items.find(i => i.collection_item_id === item.id)?.quantity || 1;
+        const available = (item.owned_quantity || 0) - (item.trade_quantity || 0);
+        if (requested > available) {
+          return NextResponse.json({
+            error: `Elemento ${item.id}: solicitas ${requested} pero el destinatario solo tiene ${available} disponibles`,
+            status: 400,
+          });
+        }
       }
     }
 
