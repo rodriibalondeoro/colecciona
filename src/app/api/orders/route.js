@@ -1,16 +1,19 @@
 import { NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/serverSupabase";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
 export async function GET(req) {
   try {
-    const { user, error } = await verifyAuth(req);
-    if (error) return NextResponse.json({ orders: [] });
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
 
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ orders: [] });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const { data } = await supabase
+    const supabase = createUserClient(token);
+
+    const { data, error } = await supabase
       .from("orders")
       .select(`
         *,
@@ -21,9 +24,14 @@ export async function GET(req) {
       .or(`buyer_id.eq.${user.id},seller_id.eq.${user.id}`)
       .order("created_at", { ascending: false });
 
+    if (error) {
+      console.error("[Orders] Supabase error:", error.message);
+      return NextResponse.json({ error: "Error loading orders" }, { status: 500 });
+    }
+
     return NextResponse.json({ orders: data || [] });
   } catch (err) {
-    console.error("Error fetching orders:", err);
-    return NextResponse.json({ orders: [] });
+    console.error("[Orders] Error:", err);
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }

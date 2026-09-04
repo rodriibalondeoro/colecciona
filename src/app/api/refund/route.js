@@ -121,6 +121,12 @@ export async function POST(req) {
     });
     if (bindError) {
       console.error(`[Refund] Failed to bind active refund for order ${orderId}:`, bindError.message);
+      // Stripe refund is created but identity binding failed.
+      // Return 500 — webhook/reconciliation will attempt recovery via metadata.order_id.
+      return NextResponse.json(
+        { error: "Refund created but identity binding failed — reconciliation will recover" },
+        { status: 500 }
+      );
     }
 
     // 7. Persist refund evidence (pending state — webhook updates to succeeded)
