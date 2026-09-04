@@ -32,6 +32,11 @@ export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const type = searchParams.get("type") || "all";
 
+  const allowedTypes = ["all", "received", "sent"];
+  if (!allowedTypes.includes(type)) {
+    return NextResponse.json({ offers: [] }, { status: 400 });
+  }
+
   let dbQuery = supabase
     .from("offers")
     .select(`
@@ -78,10 +83,23 @@ export async function POST(req) {
     return NextResponse.json({ error: "productId y amount son obligatorios" }, { status: 400 });
   }
 
-  // Validate amount is a finite positive number
+  // Validate productId is UUID
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (typeof productId !== "string" || !UUID_RE.test(productId)) {
+    return NextResponse.json({ error: "productId inválido" }, { status: 400 });
+  }
+
+  // Validate amount is a finite positive number with max 2 decimals
   const parsedAmount = typeof amount === "string" ? Number(amount) : amount;
   if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
     return NextResponse.json({ error: "Importe inválido" }, { status: 400 });
+  }
+  if (parsedAmount > 999999.99) {
+    return NextResponse.json({ error: "Importe demasiado alto" }, { status: 400 });
+  }
+  const decimalPart = parsedAmount.toString().split(".")[1];
+  if (decimalPart && decimalPart.length > 2) {
+    return NextResponse.json({ error: "Importe máximo 2 decimales" }, { status: 400 });
   }
 
   // Validate message length (max 1000 chars)

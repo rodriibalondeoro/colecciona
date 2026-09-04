@@ -4,20 +4,31 @@ import { rateLimit } from "@/lib/rateLimit";
 
 // GET /api/favorites - get current user's favorites
 export async function GET(req) {
-  const { user, error } = await verifyAuth(req);
-  if (error) return NextResponse.json({ favorites: [] });
+  try {
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
 
-  const token = extractToken(req);
-  if (!token) return NextResponse.json({ favorites: [] });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-  // RLS enforced: auth.uid() = user_id
-  const supabase = createUserClient(token);
-  const { data } = await supabase
-    .from("favorites")
-    .select("product_id")
-    .eq("user_id", user.id);
+    const { searchParams } = new URL(req.url);
+    const limit = Math.min(500, Math.max(1, parseInt(searchParams.get("limit") || "200", 10)));
 
-  return NextResponse.json({ favorites: (data || []).map(f => f.product_id) });
+    // RLS enforced: auth.uid() = user_id
+    const supabase = createUserClient(token);
+    const { data } = await supabase
+      .from("favorites")
+      .select("product_id")
+      .eq("user_id", user.id)
+      .limit(limit);
+
+    return NextResponse.json({ favorites: (data || []).map(f => f.product_id) });
+  } catch (err) {
+    console.error("[Favorites] GET error:", err);
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
+  }
 }
 
 // POST /api/favorites - toggle favorite
