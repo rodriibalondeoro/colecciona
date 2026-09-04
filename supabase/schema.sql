@@ -212,7 +212,6 @@ CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user ON wallet_transactions(u
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS products (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  collection_item_id UUID REFERENCES collection_items(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   price NUMERIC(10,2) NOT NULL CHECK (price > 0),
   market_price NUMERIC(10,2) CHECK (market_price > 0),
@@ -2071,6 +2070,10 @@ CREATE INDEX IF NOT EXISTS idx_collection_items_status ON collection_items(statu
 CREATE INDEX IF NOT EXISTS idx_collection_items_card_name ON collection_items(card_name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_items_unique_card ON collection_items(collection_id, card_name, card_number);
 
+-- Add FK from products to collection_items (deferred to avoid circular dependency)
+ALTER TABLE products ADD CONSTRAINT fk_products_collection_item
+  FOREIGN KEY (collection_item_id) REFERENCES collection_items(id) ON DELETE SET NULL;
+
 -- Auto-update collection totals
 CREATE OR REPLACE FUNCTION update_collection_totals()
 RETURNS TRIGGER AS $$
@@ -2697,11 +2700,8 @@ BEGIN
       WHEN OLD.status = 'DRAFT' AND NEW.status = 'PROPOSED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'DRAFT' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'PROPOSED' AND NEW.status = 'ACCEPTED' AND auth.uid() = OLD.receiver_id THEN true
-      WHEN OLD.status = 'PROPOSED' AND NEW.status = 'COUNTERED' AND auth.uid() = OLD.receiver_id THEN true
       WHEN OLD.status = 'PROPOSED' AND NEW.status = 'SUPERSEDED' AND auth.uid() = OLD.receiver_id THEN true
       WHEN OLD.status = 'PROPOSED' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
-      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'ACCEPTED' AND auth.uid() = OLD.proposer_id THEN true
-      WHEN OLD.status = 'COUNTERED' AND NEW.status = 'CANCELLED' AND auth.uid() = OLD.proposer_id THEN true
       WHEN OLD.status = 'ACCEPTED' AND NEW.status = 'SHIPPING_PENDING' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
       WHEN OLD.status = 'SHIPPING_PENDING' AND NEW.status = 'SHIPPED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
       WHEN OLD.status = 'SHIPPED' AND NEW.status = 'RECEIVED' AND auth.uid() = OLD.receiver_id THEN true
@@ -2759,7 +2759,6 @@ AS $$
 DECLARE
   v_item RECORD;
   v_proposal RECORD;
-  v_committed INTEGER;
 BEGIN
   SELECT * INTO v_item FROM collection_items WHERE id = NEW.collection_item_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Collection item not found'; END IF;
@@ -2771,14 +2770,9 @@ BEGIN
     RAISE EXCEPTION 'Quantity (%) exceeds duplicates (%)', NEW.quantity, v_item.duplicate_quantity;
   END IF;
 
-  -- Check against available quantity using unified function
-  -- Accounts for: trade commitments + marketplace reservations
-  v_committed := v_item.duplicate_quantity - get_available_quantity(NEW.collection_item_id);
-
-  IF (NEW.quantity + v_committed) > v_item.duplicate_quantity THEN
-    RAISE EXCEPTION 'Quantity (%) + already committed (%) exceeds available duplicates (%)',
-      NEW.quantity, v_committed, v_item.duplicate_quantity;
-  END IF;
+  -- NOTE: Availability check is handled by RPCs (create_trade_proposal,
+  -- counter_offer_proposal, accept_trade_proposal) which LOCK the collection_item
+  -- BEFORE checking availability. This trigger only validates basic invariants.
 
   -- Validate side matches participant role
   SELECT * INTO v_proposal FROM trade_proposals WHERE id = NEW.proposal_id;
@@ -2823,7 +2817,7 @@ BEGIN
   IF NOT FOUND THEN RETURN 0; END IF;
 
   -- Trade commitments: items locked in active trade proposals
-  -- PROPOSED/COUNTERED: only proposer items committed
+  -- PROPOSED: only proposer items committed
   -- ACCEPTED+: both sides committed
   SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_trade_committed
   FROM trade_proposal_items tpi
@@ -2831,7 +2825,7 @@ BEGIN
   WHERE tpi.collection_item_id = p_collection_item_id
     AND tpi.user_id = v_item.user_id
     AND (
-      (tp.status IN ('PROPOSED', 'COUNTERED') AND tpi.side = 'proposer')
+      (tp.status = 'PROPOSED' AND tpi.side = 'proposer')
       OR
       (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
     );
@@ -3418,8 +3412,8 @@ BEGIN
     RAISE EXCEPTION '[NOT_RECEIVER] Only the receiver can accept this proposal';
   END IF;
 
-  -- Must be PROPOSED or COUNTERED
-  IF v_proposal.status NOT IN ('PROPOSED', 'COUNTERED') THEN
+  -- Must be PROPOSED
+  IF v_proposal.status != 'PROPOSED' THEN
     RAISE EXCEPTION '[INVALID_STATUS] Cannot accept a % proposal', v_proposal.status;
   END IF;
 
