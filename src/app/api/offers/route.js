@@ -25,10 +25,13 @@ function mapRpcError(message) {
 }
 
 export async function GET(req) {
-  const { user, error } = await verifyAuth(req);
-  if (error) return NextResponse.json({ offers: [] }, { status: 401 });
+  const { user, error: authError } = await verifyAuth(req);
+  if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-  const supabase = createClient(url, serviceKey);
+  const token = extractToken(req);
+  if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+  const supabase = createUserClient(token);
   const { searchParams } = new URL(req.url);
   const type = searchParams.get("type") || "all";
 
@@ -121,8 +124,11 @@ export async function POST(req) {
   });
 
   if (rpcError) {
-    console.warn("[Offers API] create_offer error:", rpcError.message);
+    console.error("[Offers API] create_offer error:", rpcError.message);
     const mapped = mapRpcError(rpcError.message);
+    if (mapped.status === 500) {
+      return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
+    }
     return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
   }
 
