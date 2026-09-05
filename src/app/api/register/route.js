@@ -27,12 +27,21 @@ export async function POST(req) {
     const username = String(body.username || "").replace("@", "").trim().slice(0, 30);
     const password = String(body.password || "");
 
-    if (!email || !email.includes("@")) {
+    // Email format validation (basic, more permissive than strict RFC)
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return NextResponse.json({ error: "Email obligatorio y válido" }, { status: 400 });
     }
 
     if (password.length < 6 || password.length > 128) {
       return NextResponse.json({ error: "La contraseña debe tener entre 6 y 128 caracteres" }, { status: 400 });
+    }
+
+    // Username format: alphanumeric + underscore + dot, 3-30 chars
+    if (!/^[a-zA-Z0-9._]{3,30}$/.test(username)) {
+      return NextResponse.json(
+        { error: "El nombre de usuario debe tener 3-30 caracteres (letras, números, . o _)" },
+        { status: 400 }
+      );
     }
 
     // 1 número = 1 cuenta: check phone uniqueness via SQL (no download all phones)
@@ -85,13 +94,17 @@ export async function POST(req) {
         .update({ phone })
         .eq("user_id", userId);
     } else {
-      // Fallback: usuario puede que ya existiera
-      const { data: existing } = await supabase.from("profiles").select("id").eq("username", username).maybeSingle();
-      if (existing) {
-        userId = existing.id;
-      } else if (error) {
-        return NextResponse.json({ error: "No se pudo crear el usuario" }, { status: 500 });
+      // createUser failed — distinguish duplicate email/username from generic error.
+      // SECURITY: NEVER return another user's data on failed registration.
+      const msg = String(error?.message || "").toLowerCase();
+      if (msg.includes("already") || msg.includes("duplicate") || msg.includes("exists") || msg.includes("unique")) {
+        return NextResponse.json(
+          { error: "Ya existe una cuenta con este email o nombre de usuario", code: "ACCOUNT_EXISTS" },
+          { status: 409 }
+        );
       }
+      console.error("[API /register] createUser error:", error?.message);
+      return NextResponse.json({ error: "No se pudo crear el usuario" }, { status: 500 });
     }
 
     if (!userId) {

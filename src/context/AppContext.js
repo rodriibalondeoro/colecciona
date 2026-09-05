@@ -69,14 +69,13 @@ export function AppProvider({ children }) {
     }
   }); // Set of product ids
 
-  // Migrate favorites to per-user storage
-  const migrateFavoritesRef = useRef(false);
+  // Migrate favorites to per-user storage (re-runs per user login)
   useEffect(() => {
-    if (!session?.id || migrateFavoritesRef.current) return;
-    migrateFavoritesRef.current = true;
+    const userId = session?.id || session?.user?.id;
+    if (!userId) return;
     try {
       const globalKey = "colecciona_favorites";
-      const userKey = `colecciona_favorites_${session.id}`;
+      const userKey = `colecciona_favorites_${userId}`;
       const userStored = localStorage.getItem(userKey);
       const globalStored = localStorage.getItem(globalKey);
       if (userStored) {
@@ -88,9 +87,14 @@ export function AppProvider({ children }) {
           setFavorites(new Set(globalFavs));
         }
         localStorage.removeItem(globalKey);
+      } else {
+        // No favorites for this user yet — ensure a clean state
+        setFavorites(new Set());
       }
-    } catch {}
-  }, [session]);
+    } catch {
+      setFavorites(new Set());
+    }
+  }, [session?.id, session?.user?.id]);
 
   // ── Notifications ──
   const [notifications, setNotifications] = useState([]);
@@ -123,6 +127,8 @@ export function AppProvider({ children }) {
       setOffers([]);
       setOrders([]);
       setSales([]);
+      setFavorites(new Set()); // clear old user's favorites (reloaded by migration effect)
+      setCart([]); // clear old user's cart (reloaded by cart lazy-load effect)
     }
     prevSessionIdRef.current = currentId;
   }, [session]);
