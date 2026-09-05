@@ -83,7 +83,7 @@ export async function PATCH(req, { params }) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
-    const rl = rateLimit(`trade-proposal-detail:${user.id}`, { limit: 10, windowMs: 60000 });
+    const rl = await rateLimit(`trade-proposal-detail:${user.id}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }

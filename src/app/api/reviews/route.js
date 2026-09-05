@@ -9,7 +9,7 @@ export async function POST(req) {
     const { user, error } = await verifyAuth(req);
     if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const rl = rateLimit(`reviews:${user.id}`, { limit: 5, windowMs: 60000 });
+    const rl = await rateLimit(`reviews:${user.id}`, { limit: 5, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }

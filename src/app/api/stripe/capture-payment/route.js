@@ -13,7 +13,7 @@ export async function POST(req) {
 
   try {
     const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`capture-payment:${ip}`, { limit: 5, windowMs: 60000 });
+    const rl = await rateLimit(`capture-payment:${ip}`, { limit: 5, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }

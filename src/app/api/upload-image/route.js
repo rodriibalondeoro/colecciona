@@ -15,7 +15,7 @@ export async function POST(req) {
     const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
     const isDev = process.env.NODE_ENV !== "production";
     if (!isDev) {
-      const rl = rateLimit(`upload:${ip}`, { limit: 5, windowMs: 60000 });
+      const rl = await rateLimit(`upload:${ip}`, { limit: 5, windowMs: 60000 });
       if (!rl.allowed) {
         return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
       }

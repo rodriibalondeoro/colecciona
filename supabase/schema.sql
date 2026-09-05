@@ -4429,3 +4429,69 @@ $$;
 
 REVOKE ALL ON FUNCTION get_thread_summaries(UUID, INT, INT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION get_thread_summaries(UUID, INT, INT) TO authenticated;
+
+-- ============================================================================
+-- RATE LIMITS — distributed rate limiting via Supabase
+-- Replaces in-memory Map for multi-instance consistency
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT NOT NULL,
+  count INT NOT NULL DEFAULT 1,
+  window_start TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (key)
+);
+
+ALTER TABLE rate_limits ENABLE ROW LEVEL SECURITY;
+-- No RLS policies: only accessible via SECURITY DEFINER RPC
+
+-- Atomic check-and-increment rate limit
+CREATE OR REPLACE FUNCTION check_rate_limit(
+  p_key TEXT,
+  p_limit INT DEFAULT 30,
+  p_window_ms INT DEFAULT 60000
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_record RECORD;
+  v_allowed BOOLEAN;
+  v_remaining INT;
+  v_reset_at TIMESTAMPTZ;
+BEGIN
+  -- Lock the row to prevent concurrent increments
+  SELECT count, window_start INTO v_record
+  FROM rate_limits WHERE key = p_key FOR UPDATE;
+
+  IF NOT FOUND THEN
+    -- First request in this window
+    INSERT INTO rate_limits (key, count, window_start)
+    VALUES (p_key, 1, now());
+    v_allowed := TRUE;
+    v_remaining := p_limit - 1;
+    v_reset_at := now() + (p_window_ms || ' ms')::interval;
+  ELSIF now() > v_record.window_start + (p_window_ms || ' ms')::interval THEN
+    -- Window expired, reset
+    UPDATE rate_limits SET count = 1, window_start = now() WHERE key = p_key;
+    v_allowed := TRUE;
+    v_remaining := p_limit - 1;
+    v_reset_at := now() + (p_window_ms || ' ms')::interval;
+  ELSE
+    -- Within window, increment
+    UPDATE rate_limits SET count = count + 1 WHERE key = p_key;
+    v_record.count := v_record.count + 1;
+    v_allowed := v_record.count <= p_limit;
+    v_remaining := GREATEST(0, p_limit - v_record.count);
+    v_reset_at := v_record.window_start + (p_window_ms || ' ms')::interval;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'allowed', v_allowed,
+    'remaining', v_remaining,
+    'reset_at', v_reset_at
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION check_rate_limit(TEXT, INT, INT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION check_rate_limit(TEXT, INT, INT) TO authenticated;

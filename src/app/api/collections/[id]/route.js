@@ -83,7 +83,7 @@ export async function PUT(req, { params }) {
     const { user, error: authError } = await verifyAuth(req);
     if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const rl = rateLimit(`collection-detail:${user.id}`, { limit: 10, windowMs: 60000 });
+    const rl = await rateLimit(`collection-detail:${user.id}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
@@ -156,7 +156,7 @@ export async function DELETE(req, { params }) {
     const { user, error: authError } = await verifyAuth(req);
     if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const rl = rateLimit(`collection-detail:${user.id}`, { limit: 10, windowMs: 60000 });
+    const rl = await rateLimit(`collection-detail:${user.id}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }

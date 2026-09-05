@@ -34,7 +34,7 @@ export async function GET(req) {
 // POST /api/favorites - toggle favorite
 export async function POST(req) {
   const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-  const rl = rateLimit(`favorites:${ip}`, { limit: 20, windowMs: 60000 });
+  const rl = await rateLimit(`favorites:${ip}`, { limit: 20, windowMs: 60000 });
   if (!rl.allowed) {
     return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
   }

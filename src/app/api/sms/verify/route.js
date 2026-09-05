@@ -75,7 +75,7 @@ async function migrateMockUser(supabase, oldUser, tempPassword) {
 export async function POST(req) {
   try {
     const ip = req.headers.get("x-forwarded-for") || "unknown";
-    const rl = rateLimit(`sms-verify:${ip}`, { limit: 5, windowMs: 60000 });
+    const rl = await rateLimit(`sms-verify:${ip}`, { limit: 5, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiados intentos. Espera un momento." }, { status: 429 });
     }

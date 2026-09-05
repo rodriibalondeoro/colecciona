@@ -13,7 +13,7 @@ export async function POST(req) {
     if (authError) return NextResponse.json({ error: authError }, { status: 401 });
 
     const ip = req.headers.get("x-forwarded-for") || "unknown";
-    const rl = rateLimit(`checkout:${ip}`, { limit: 3, windowMs: 60000 });
+    const rl = await rateLimit(`checkout:${ip}`, { limit: 3, windowMs: 60000 });
     if (!rl.allowed) return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
 
     const body = await req.json().catch(() => null);

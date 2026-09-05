@@ -10,7 +10,7 @@ const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 export async function POST(req) {
   try {
     const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`refund:${ip}`, { limit: 3, windowMs: 60000 });
+    const rl = await rateLimit(`refund:${ip}`, { limit: 3, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }

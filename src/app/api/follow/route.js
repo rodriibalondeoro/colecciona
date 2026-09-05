@@ -13,7 +13,7 @@ export async function POST(req) {
     const user = await resolveUser(req);
     if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const rl = rateLimit(`follow:${user.id}`, { limit: 10, windowMs: 60000 });
+    const rl = await rateLimit(`follow:${user.id}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
@@ -73,7 +73,7 @@ export async function DELETE(req) {
     const user = await resolveUser(req);
     if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const rl = rateLimit(`follow:${user.id}`, { limit: 10, windowMs: 60000 });
+    const rl = await rateLimit(`follow:${user.id}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }

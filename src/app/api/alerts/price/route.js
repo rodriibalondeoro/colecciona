@@ -44,7 +44,7 @@ export async function POST(req) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
-    const rl = rateLimit(`price-alerts:${user.id}`, { limit: 10, windowMs: 60000 });
+    const rl = await rateLimit(`price-alerts:${user.id}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
@@ -100,7 +100,7 @@ export async function DELETE(req) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
-    const rl = rateLimit(`price-alerts:${user.id}`, { limit: 10, windowMs: 60000 });
+    const rl = await rateLimit(`price-alerts:${user.id}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }

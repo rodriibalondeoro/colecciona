@@ -20,7 +20,7 @@ function mapRpcError(message) {
 export async function POST(req) {
   try {
     const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`publish:${ip}`, { limit: 10, windowMs: 60000 });
+    const rl = await rateLimit(`publish:${ip}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
     }

@@ -9,7 +9,7 @@ const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 export async function POST(req) {
   try {
     const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`register:${ip}`, { limit: 5, windowMs: 60000 });
+    const rl = await rateLimit(`register:${ip}`, { limit: 5, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiados registros. Espera un momento." }, { status: 429 });
     }

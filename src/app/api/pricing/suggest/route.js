@@ -11,7 +11,7 @@ const ALLOWED_CATEGORIES = new Set([
 export async function POST(req) {
   try {
     const ip = req.headers.get("x-forwarded-for") || "unknown";
-    const rl = rateLimit(`pricing:${ip}`, { limit: 10, windowMs: 60000 });
+    const rl = await rateLimit(`pricing:${ip}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
