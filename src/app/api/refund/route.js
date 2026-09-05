@@ -2,12 +2,19 @@ import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
+import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function POST(req) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rl = rateLimit(`refund:${ip}`, { limit: 3, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
     const { user, error: authError } = await verifyAuth(req);
     if (authError) {
       return NextResponse.json({ error: authError }, { status: 401 });

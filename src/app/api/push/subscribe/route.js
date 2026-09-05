@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
+import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function POST(req) {
+  const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+  const rl = rateLimit(`push-subscribe:${ip}`, { limit: 5, windowMs: 60000 });
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+  }
+
   const { user, error } = await verifyAuth(req);
   if (error) return NextResponse.json({ error: "No auth" }, { status: 401 });
 
@@ -40,6 +47,12 @@ export async function POST(req) {
 }
 
 export async function DELETE(req) {
+  const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+  const rl = rateLimit(`push-subscribe:${ip}`, { limit: 5, windowMs: 60000 });
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+  }
+
   const { user, error: authError } = await verifyAuth(req);
   if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 

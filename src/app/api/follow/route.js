@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
+import { rateLimit } from "@/lib/rateLimit";
 
 async function resolveUser(req) {
   const { user } = await verifyAuth(req);
@@ -9,6 +10,12 @@ async function resolveUser(req) {
 
 export async function POST(req) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rl = rateLimit(`follow:${ip}`, { limit: 10, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
     const user = await resolveUser(req);
     if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
@@ -64,6 +71,12 @@ export async function POST(req) {
 
 export async function DELETE(req) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rl = rateLimit(`follow:${ip}`, { limit: 10, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
     const user = await resolveUser(req);
     if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 

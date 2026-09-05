@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
+import { rateLimit } from "@/lib/rateLimit";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ALLOWED_ITEM_STATUS = ["OWNED", "MISSING", "DUPLICATE", "FOR_TRADE", "FOR_SALE"];
@@ -75,6 +76,12 @@ export async function GET(req, { params }) {
 
 export async function POST(req, { params }) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rl = rateLimit(`collection-items:${ip}`, { limit: 20, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
     const { user, error: authError } = await verifyAuth(req);
     if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
@@ -152,6 +159,12 @@ export async function POST(req, { params }) {
 
 export async function PATCH(req, { params }) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rl = rateLimit(`collection-items:${ip}`, { limit: 20, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
     const { user, error: authError } = await verifyAuth(req);
     if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
@@ -219,6 +232,12 @@ export async function PATCH(req, { params }) {
 
 export async function DELETE(req, { params }) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rl = rateLimit(`collection-items:${ip}`, { limit: 20, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
     const { user, error: authError } = await verifyAuth(req);
     if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 

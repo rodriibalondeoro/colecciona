@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
+import { rateLimit } from "@/lib/rateLimit";
 
 export async function GET(req) {
   const { user, error: authError } = await verifyAuth(req);
@@ -46,6 +47,12 @@ export async function GET(req) {
 
 export async function PATCH(req) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rl = rateLimit(`profile:${ip}`, { limit: 10, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
     const { user, error: authError } = await verifyAuth(req);
     if (authError || !user) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });

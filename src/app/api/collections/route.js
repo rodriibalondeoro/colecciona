@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
+import { rateLimit } from "@/lib/rateLimit";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ALLOWED_VISIBILITY = ["public", "followers", "private"];
@@ -67,6 +68,12 @@ export async function GET(req) {
 
 export async function POST(req) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
+    const rl = rateLimit(`collections:${ip}`, { limit: 10, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
     const { user, error: authError } = await verifyAuth(req);
     if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
