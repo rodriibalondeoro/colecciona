@@ -102,7 +102,11 @@ export async function POST(req, { params }) {
       return NextResponse.json({ error: "El nombre del cromo es obligatorio" }, { status: 400 });
     }
 
-    const status = ALLOWED_ITEM_STATUS.includes(itemStatus) ? itemStatus : "OWNED";
+    if (!ALLOWED_ITEM_STATUS.includes(itemStatus)) {
+      return NextResponse.json({ error: `Estado no válido: ${itemStatus}` }, { status: 400 });
+    }
+
+    const status = itemStatus;
     const qty = Math.max(1, parseInt(total_quantity) || 1);
     let ownedQty = 0, dupQty = 0, tradeQty = 0, saleQty = 0;
 
