@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getOtp, deleteOtp } from "@/lib/otpStore";
 import { normalizePhone } from "@/lib/phone";
+import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -73,7 +74,16 @@ async function migrateMockUser(supabase, oldUser, tempPassword) {
 
 export async function POST(req) {
   try {
-    const { otpKey, code } = await req.json();
+    const ip = req.headers.get("x-forwarded-for") || "unknown";
+    const rl = rateLimit(`sms-verify:${ip}`, { limit: 5, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiados intentos. Espera un momento." }, { status: 429 });
+    }
+
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+
+    const { otpKey, code } = body;
 
     if (!otpKey || !code) {
       return NextResponse.json({ error: "Teléfono y código son obligatorios" }, { status: 400 });

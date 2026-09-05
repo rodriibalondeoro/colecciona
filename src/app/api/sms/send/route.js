@@ -2,13 +2,23 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { setOtp } from "@/lib/otpStore";
 import { normalizePhone } from "@/lib/phone";
+import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function POST(req) {
   try {
-    const { phone, email } = await req.json();
+    const ip = req.headers.get("x-forwarded-for") || "unknown";
+    const rl = rateLimit(`sms:${ip}`, { limit: 3, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiados intentos. Espera un momento." }, { status: 429 });
+    }
+
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+
+    const { phone, email } = body;
 
     // Clave del OTP: teléfono (normalizado) o email si no hay teléfono.
     let otpKey = phone ? normalizePhone(phone) : null;

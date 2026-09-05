@@ -45,20 +45,21 @@ export async function GET(req) {
 }
 
 export async function PATCH(req) {
-  const { user, error: authError } = await verifyAuth(req);
-  if (!user) {
-    return NextResponse.json({ error: authError || "No autenticado", profile: null }, { status: 401 });
-  }
+  try {
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
 
-  const token = extractToken(req);
-  if (!token) {
-    return NextResponse.json({ error: "No autenticado", profile: null }, { status: 401 });
-  }
+    const token = extractToken(req);
+    if (!token) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
 
-  // Use authenticated client — RLS enforced (owner-only updates)
-  const supabase = createUserClient(token);
+    const supabase = createUserClient(token);
 
-  const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
 
   // Public profile updates (with length limits)
   const profileUpdates = {};
@@ -102,7 +103,10 @@ export async function PATCH(req) {
   if (Object.keys(profileUpdates).length > 0) {
     const { data: updated, error: e1 } = await supabase
       .from("profiles").update(profileUpdates).eq("id", user.id).select().single();
-    if (e1) return NextResponse.json({ error: e1.message }, { status: 500 });
+    if (e1) {
+      console.error("[Profile] profiles update error:", e1.message);
+      return NextResponse.json({ error: "Error actualizando el perfil" }, { status: 500 });
+    }
     data = updated;
   }
 
@@ -135,4 +139,8 @@ export async function PATCH(req) {
       balance: wall?.balance || 0,
     },
   });
+  } catch (err) {
+    console.error("[Profile] PATCH error:", err);
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
+  }
 }
