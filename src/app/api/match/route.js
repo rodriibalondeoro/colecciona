@@ -34,6 +34,7 @@ export async function GET(req) {
         .in("id", userIds);
       if (profilesError) {
         console.error("[Match] Profiles error:", profilesError.message);
+        return NextResponse.json({ error: "Error loading profiles" }, { status: 500 });
       }
       profiles = data || [];
     }
