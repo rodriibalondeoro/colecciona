@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS wallet (
 CREATE TABLE IF NOT EXISTS wallet_transactions (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('SALE','COMMISSION','REFUND','REFUND_REVERSAL','WITHDRAWAL','DEPOSIT','ADJUSTMENT')),
+  type TEXT NOT NULL CHECK (type IN ('SALE','COMMISSION','REFUND','REFUND_REVERSAL','REFUND_SHORTFALL','WITHDRAWAL','DEPOSIT','ADJUSTMENT')),
   amount NUMERIC(10,2) NOT NULL,
   balance_before NUMERIC(10,2) NOT NULL,
   balance_after NUMERIC(10,2) NOT NULL,
@@ -1496,47 +1496,73 @@ BEGIN
       active_stripe_refund_id = NULL
   WHERE id = p_order_id;
 
-  -- Wallet debit: BEST-EFFORT (order status is already REFUNDED regardless).
-  -- If seller has insufficient funds (spent earnings), the debit is logged as
-  -- a deficit (negative amount) and the platform absorbs the difference.
-  -- The order is NEVER held hostage by wallet state.
+  -- Wallet debit: EXPLICIT balance check (no EXCEPTION WHEN OTHERS).
+  -- Real errors (missing wallet, CHECK violations, bugs) propagate naturally.
+  -- Only the expected insufficient-funds case is handled as business logic.
   DECLARE
     v_seller_earnings NUMERIC := v_order.subtotal - v_order.commission;
     v_balance_before NUMERIC;
     v_debit_amount NUMERIC;
+    v_shortfall NUMERIC;
   BEGIN
     IF v_seller_earnings > 0 THEN
       SELECT balance INTO v_balance_before FROM wallet WHERE user_id = v_order.seller_id;
       v_balance_before := COALESCE(v_balance_before, 0);
 
-      -- Debit what's available (can be negative = deficit tracked in ledger)
-      v_debit_amount := LEAST(v_seller_earnings, v_balance_before);
+      -- Case 1: wallet has sufficient balance → full debit
+      IF v_balance_before >= v_seller_earnings THEN
+        v_debit_amount := v_seller_earnings;
 
-      IF v_debit_amount > 0 THEN
         UPDATE wallet
         SET balance = balance - v_debit_amount,
             available_balance = available_balance - v_debit_amount
         WHERE user_id = v_order.seller_id;
-      END IF;
 
-      -- Ledger: always records the full reversal (positive or negative amount)
-      INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, reference_id, reference_type, description)
-      VALUES (
-        v_order.seller_id,
-        'REFUND_REVERSAL',
-        -v_seller_earnings,
-        v_balance_before,
-        v_balance_before - v_debit_amount,
-        p_order_id,
-        'order',
-        'Reembolso — reversión de ingresos por venta'
-      );
+        INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, reference_id, reference_type, description)
+        VALUES (
+          v_order.seller_id, 'REFUND_REVERSAL', -v_seller_earnings,
+          v_balance_before, v_balance_before - v_debit_amount,
+          p_order_id, 'order', 'Reembolso — reversión de ingresos por venta'
+        );
+
+      -- Case 2: partial balance → debit what exists + shortfall ledger
+      ELSIF v_balance_before > 0 THEN
+        v_debit_amount := v_balance_before;
+        v_shortfall := v_seller_earnings - v_debit_amount;
+
+        UPDATE wallet
+        SET balance = 0,
+            available_balance = 0
+        WHERE user_id = v_order.seller_id;
+
+        -- Ledger: what was recovered
+        INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, reference_id, reference_type, description)
+        VALUES (
+          v_order.seller_id, 'REFUND_REVERSAL', -v_debit_amount,
+          v_balance_before, 0,
+          p_order_id, 'order', 'Reembolso — reversión parcial (saldo insuficiente)'
+        );
+
+        -- Ledger: what the platform absorbs
+        INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, reference_id, reference_type, description)
+        VALUES (
+          v_order.seller_id, 'REFUND_SHORTFALL', -v_shortfall,
+          0, 0,
+          p_order_id, 'order', 'Reembolso — déficit absorbido por la plataforma'
+        );
+
+      -- Case 3: no balance → full shortfall (platform absorbs everything)
+      ELSE
+        v_shortfall := v_seller_earnings;
+
+        INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, reference_id, reference_type, description)
+        VALUES (
+          v_order.seller_id, 'REFUND_SHORTFALL', -v_shortfall,
+          0, 0,
+          p_order_id, 'order', 'Reembolso — déficit total absorbido por la plataforma'
+        );
+      END IF;
     END IF;
-  EXCEPTION WHEN OTHERS THEN
-    -- Wallet debit failed (e.g., CHECK constraint, missing row).
-    -- Order is already REFUNDED — this is a platform accounting issue,
-    -- not a refund-blocking issue. Log and continue.
-    RAISE NOTICE 'Wallet debit failed for order %: %', p_order_id, SQLERRM;
   END;
 
   -- Notify buyer
@@ -1894,8 +1920,9 @@ $$;
 --
 -- REFUND (full):
 --   refund_amount    = total_paid                     (Stripe refunds buyer)
---   wallet_debit     = seller_earnings                (best-effort; deficit = platform loss)
---   platform_loss    = commission + Stripe fees        (platform absorbs)
+--   wallet_debit     = min(seller_earnings, balance)  (explicit 3-case check)
+--   refund_shortfall = seller_earnings - wallet_debit  (platform absorbs)
+--   platform_loss    = commission + refund_shortfall + Stripe fees
 --   Stripe fees      = NOT refunded by Stripe          (platform cost)
 --
 -- Example: 10€ card + 2.50€ shipping, standard (8% commission):
@@ -1906,8 +1933,9 @@ $$;
 --   Refund: buyer gets 12.50€, platform loses 0.80€ + 0.35€ = 1.15€
 --
 -- WALLET LEDGER (wallet_transactions):
---   SALE            → +seller_earnings on confirm_payment (PAID)
---   REFUND_REVERSAL → -seller_earnings on mark_order_refunded (REFUNDED)
+--   SALE              → +seller_earnings on confirm_payment (PAID)
+--   REFUND_REVERSAL   → -recovered amount on mark_order_refunded (REFUNDED)
+--   REFUND_SHORTFALL  → -unrecovered deficit on mark_order_refunded (REFUNDED)
 --   Ledger is append-only (no UPDATE/DELETE). Immutability enforced by RLS.
 CREATE TABLE IF NOT EXISTS orders (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,

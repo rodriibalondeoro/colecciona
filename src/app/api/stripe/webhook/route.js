@@ -63,7 +63,12 @@ export async function POST(req) {
   ];
 
   if (CRITICAL_EVENTS.includes(event.type)) {
-    // Atomic claim: INSERT with UNIQUE constraint. If conflict, another request claimed it.
+    // Claim with retry support:
+    // 1. Try INSERT (new event → claim succeeds)
+    // 2. On unique violation → check existing status:
+    //    - completed → return 200 (already processed, no retry)
+    //    - processing → return 200 (another request handling it)
+    //    - failed → UPDATE to "processing" (allow Stripe retry)
     const { error: dedupError } = await supabase
       .from("webhook_events")
       .insert({
@@ -73,13 +78,36 @@ export async function POST(req) {
       });
 
     if (dedupError) {
-      // Unique violation = event already claimed/processed
       if (dedupError.code === "23505") {
-        console.log(`[Webhook] Duplicate event ${event.id} (${event.type}) — skipping`);
-        return NextResponse.json({ received: true, duplicate: true });
+        // Unique violation — check if we can retry
+        const { data: existing } = await supabase
+          .from("webhook_events")
+          .select("status")
+          .eq("stripe_event_id", event.id)
+          .single();
+
+        if (!existing || existing.status === "completed") {
+          console.log(`[Webhook] Event ${event.id} already completed — skipping`);
+          return NextResponse.json({ received: true, duplicate: true });
+        }
+
+        if (existing.status === "processing") {
+          console.log(`[Webhook] Event ${event.id} being processed by another request — skipping`);
+          return NextResponse.json({ received: true, duplicate: true });
+        }
+
+        if (existing.status === "failed") {
+          // Allow retry: reclaim the event
+          console.log(`[Webhook] Retrying failed event ${event.id}`);
+          await supabase
+            .from("webhook_events")
+            .update({ status: "processing", processed_at: null })
+            .eq("stripe_event_id", event.id);
+        }
+      } else {
+        // Other DB error — log but continue processing (transient DB issue)
+        console.error(`[Webhook] Dedup DB error for ${event.id}:`, dedupError.message);
       }
-      // Other DB error — log but continue processing (transient DB issue)
-      console.error(`[Webhook] Dedup DB error for ${event.id}:`, dedupError.message);
     }
   }
 
