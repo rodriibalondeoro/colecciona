@@ -4163,6 +4163,12 @@ DECLARE
 BEGIN
   -- SECURITY: derive requester from JWT, never trust caller-provided p_requester_id
   v_requester := auth.uid();
+
+  -- Parameter validation
+  IF p_page < 1 THEN p_page := 1; END IF;
+  IF p_limit < 1 THEN p_limit := 20; END IF;
+  IF p_limit > 100 THEN p_limit := 100; END IF;
+
   v_from := (p_page - 1) * p_limit;
 
   -- Count visible collections
@@ -4232,6 +4238,10 @@ BEGIN
   IF v_user_id IS NULL THEN
     RAISE EXCEPTION 'Not authenticated';
   END IF;
+
+  -- Parameter validation
+  IF p_max_results < 1 THEN p_max_results := 20; END IF;
+  IF p_max_results > 100 THEN p_max_results := 100; END IF;
 
   WITH
   -- Current user's items available for trade
@@ -4361,6 +4371,11 @@ BEGIN
   IF v_user_id IS NULL THEN
     RAISE EXCEPTION 'Not authenticated';
   END IF;
+
+  -- Parameter validation
+  IF p_limit < 1 THEN p_limit := 20; END IF;
+  IF p_limit > 100 THEN p_limit := 100; END IF;
+  IF p_offset < 0 THEN p_offset := 0; END IF;
 
   WITH
   -- Last message per conversation (partner + product)
