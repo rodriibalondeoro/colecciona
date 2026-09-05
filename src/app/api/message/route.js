@@ -23,7 +23,8 @@ export async function POST(req) {
       return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
     }
 
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
 
     // Validate types explicitly
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -95,7 +96,7 @@ export async function POST(req) {
 
     if (error) {
       console.error("[API /message] Error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error interno" }, { status: 500 });
     }
 
     // Create notification for recipient (server-side via service role)

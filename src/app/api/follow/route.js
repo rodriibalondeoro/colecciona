@@ -15,7 +15,8 @@ export async function POST(req) {
     const token = extractToken(req);
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
     const { targetUserId } = body;
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!targetUserId || typeof targetUserId !== "string" || !UUID_RE.test(targetUserId)) {

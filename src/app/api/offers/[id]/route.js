@@ -33,7 +33,8 @@ export async function PATCH(req, { params }) {
   if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
   const { id } = await params;
-  const body = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
   const { action, amount, message } = body;
 
   if (!action) {

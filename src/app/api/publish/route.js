@@ -33,7 +33,8 @@ export async function POST(req) {
     const token = extractToken(req);
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
 
     // Call atomic RPC (locks collection_item, checks availability, inserts product)
     const supabase = createUserClient(token);

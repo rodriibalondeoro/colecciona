@@ -95,7 +95,8 @@ export async function POST(req, { params }) {
       return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
     }
 
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
     const { card_name, card_number, card_code, set_name, category, image_url, status: itemStatus, total_quantity, notes, priority } = body;
 
     if (!card_name || typeof card_name !== "string" || !card_name.trim()) {
@@ -139,7 +140,7 @@ export async function POST(req, { params }) {
 
     if (error) {
       console.error("[Collection Items POST] Error:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error interno" }, { status: 500 });
     }
 
     return NextResponse.json({ item: data });
@@ -159,7 +160,8 @@ export async function PATCH(req, { params }) {
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const supabase = createUserClient(token);
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
     const { itemId, status, total_quantity, notes, priority } = body;
 
     if (!itemId || typeof itemId !== "string" || !UUID_RE.test(itemId)) {
@@ -205,7 +207,7 @@ export async function PATCH(req, { params }) {
 
     if (error) {
       console.error("[Collection Items PATCH] Error:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error interno" }, { status: 500 });
     }
 
     return NextResponse.json({ item: data });
@@ -254,7 +256,7 @@ export async function DELETE(req, { params }) {
     const { error } = await supabase.from("collection_items").delete().eq("id", itemId);
     if (error) {
       console.error("[Collection Items DELETE] Error:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error interno" }, { status: 500 });
     }
 
     return NextResponse.json({ success: true });

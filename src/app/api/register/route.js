@@ -18,7 +18,8 @@ export async function POST(req) {
       return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
     }
     const supabase = createClient(url, key);
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
 
     const email = (body.email || "").trim().slice(0, 254);
     const phone = normalizePhone(body.phone);
@@ -89,7 +90,7 @@ export async function POST(req) {
       if (existing) {
         userId = existing.id;
       } else if (error) {
-        return NextResponse.json({ error: error.message || "No se pudo crear el usuario" }, { status: 500 });
+        return NextResponse.json({ error: "No se pudo crear el usuario" }, { status: 500 });
       }
     }
 

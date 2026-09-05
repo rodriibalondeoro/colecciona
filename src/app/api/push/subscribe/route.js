@@ -9,7 +9,9 @@ export async function POST(req) {
   const { user, error } = await verifyAuth(req);
   if (error) return NextResponse.json({ error: "No auth" }, { status: 401 });
 
-  const { subscription } = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  const { subscription } = body;
   if (!subscription?.endpoint) {
     return NextResponse.json({ error: "Suscripción inválida" }, { status: 400 });
   }
@@ -31,7 +33,7 @@ export async function POST(req) {
 
   if (insertError) {
     console.warn("[Push API] Error guardando suscripción:", insertError.message);
-    return NextResponse.json({ error: insertError.message }, { status: 500 });
+    return NextResponse.json({ error: "Error guardando la suscripción" }, { status: 500 });
   }
 
   return NextResponse.json({ success: true, subscription: data });

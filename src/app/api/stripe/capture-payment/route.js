@@ -16,7 +16,9 @@ export async function POST(req) {
       return NextResponse.json({ error: authError }, { status: 401 });
     }
 
-    const { paymentIntentId } = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+    const { paymentIntentId } = body;
 
     if (!paymentIntentId) {
       return NextResponse.json({ error: "paymentIntentId es obligatorio" }, { status: 400 });

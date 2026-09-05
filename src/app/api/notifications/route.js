@@ -55,7 +55,9 @@ export async function PATCH(req) {
 
     const supabase = createUserClient(token);
 
-    const { id, all } = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+    const { id, all } = body;
 
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

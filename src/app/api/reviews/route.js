@@ -8,7 +8,8 @@ export async function POST(req) {
     const { user, error } = await verifyAuth(req);
     if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
     const supabase = getServerSupabase();
     if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 
@@ -79,7 +80,7 @@ export async function POST(req) {
       .single();
 
     if (insertError) {
-      return NextResponse.json({ error: insertError.message }, { status: 500 });
+      return NextResponse.json({ error: "Error creando la reseña" }, { status: 500 });
     }
 
     // Update rating via SQL AVG RPC (service_role — backend only)

@@ -13,7 +13,9 @@ export async function POST(req) {
       return NextResponse.json({ error: authError }, { status: 401 });
     }
 
-    const { orderId, reason } = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+    const { orderId, reason } = body;
 
     if (!orderId) {
       return NextResponse.json({ error: "orderId is required" }, { status: 400 });

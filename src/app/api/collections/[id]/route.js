@@ -91,7 +91,8 @@ export async function PUT(req, { params }) {
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const supabase = createUserClient(token);
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
     const { name, description, category, subcategory, cover_image, year, publisher, total_items, visibility } = body;
 
     const updates = {};
@@ -134,7 +135,7 @@ export async function PUT(req, { params }) {
 
     if (error) {
       console.error("[Collection PUT] Error:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error interno" }, { status: 500 });
     }
 
     return NextResponse.json({ collection: data });
@@ -186,7 +187,7 @@ export async function DELETE(req, { params }) {
     const { error } = await supabase.from("collections").delete().eq("id", id);
     if (error) {
       console.error("[Collection DELETE] Error:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error interno" }, { status: 500 });
     }
 
     return NextResponse.json({ success: true });

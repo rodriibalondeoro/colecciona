@@ -16,7 +16,9 @@ export async function POST(req) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
 
-    const { category, condition } = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+    const { category, condition } = body;
 
     // Validate inputs
     if (category && typeof category === "string" && !ALLOWED_CATEGORIES.has(category)) {
@@ -91,6 +93,6 @@ export async function POST(req) {
     });
   } catch (err) {
     console.error("[Pricing Suggest Error]", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "Error calculando precio" }, { status: 500 });
   }
 }
