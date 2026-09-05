@@ -64,7 +64,7 @@ export async function GET(req, { params }) {
     // Get history
     const { data: history } = await supabase
       .from("trade_history")
-      .select("*, actor:users(name, username)")
+      .select("*, actor:profiles(name, username)")
       .eq("proposal_id", id)
       .order("created_at", { ascending: true });
 

@@ -1,18 +1,32 @@
 import { NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/serverSupabase";
+import { createClient } from "@supabase/supabase-js";
+
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 export async function GET(req, { params }) {
   try {
     const { id } = await params;
 
-    const supabase = getServerSupabase();
-    if (!supabase) {
+    // Validate UUID
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
+      return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+    }
+
+    if (!url || !anonKey) {
       return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
     }
 
+    // Public product: use anon key (RLS allows public SELECT on ACTIVE products)
+    const supabase = createClient(url, anonKey);
+
     const { data, error } = await supabase
       .from("products")
-      .select("*, seller:users(id, username, name, avatar, bio, level, level_name, sales, purchases, rating, location, followers, following, seller_shipping_methods)")
+      .select(`
+        *,
+        seller:profiles!products_seller_fkey(id, username, name, avatar, rating, sales, location)
+      `)
       .eq("id", id)
       .eq("status", "ACTIVE")
       .single();
@@ -23,7 +37,7 @@ export async function GET(req, { params }) {
 
     return NextResponse.json({ success: true, product: data });
   } catch (error) {
-    console.error("Error en Product Detail API:", error);
+    console.error("[Product Detail] Error:", error);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }

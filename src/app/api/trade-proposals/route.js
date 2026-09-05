@@ -27,16 +27,26 @@ function mapRpcError(message) {
 function validateItems(items, side) {
   if (!items?.length) return null;
 
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  if (!Array.isArray(items)) return `${side}: items must be an array`;
+
+  for (const item of items) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return `${side}: each item must be an object`;
+    }
+    if (!item.collection_item_id || typeof item.collection_item_id !== "string" || !UUID_RE.test(item.collection_item_id)) {
+      return `${side}: invalid collection_item_id`;
+    }
+    if (!Number.isInteger(item.quantity) || item.quantity < 1) {
+      return `${side}: quantity must be a positive integer`;
+    }
+  }
+
   const ids = items.map((i) => i.collection_item_id);
   const uniqueIds = new Set(ids);
   if (uniqueIds.size !== ids.length) {
     return `${side}: duplicate IDs not allowed`;
-  }
-
-  for (const item of items) {
-    if (!Number.isInteger(item.quantity) || item.quantity < 1) {
-      return `${side}: quantity must be a positive integer`;
-    }
   }
 
   return null;
@@ -50,14 +60,20 @@ export async function GET(req) {
     }
 
     const token = extractToken(req);
-    if (!token) return NextResponse.json({ proposals: [] });
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const supabase = createUserClient(token);
 
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
-    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "20")));
+    const ALLOWED_STATUSES = ["DRAFT", "PROPOSED", "ACCEPTED", "SHIPPING_PENDING", "SHIPPED", "RECEIVED", "COMPLETED", "CANCELLED", "DISPUTED"];
+
+    if (status && !ALLOWED_STATUSES.includes(status)) {
+      return NextResponse.json({ error: "Estado no válido" }, { status: 400 });
+    }
+
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "20", 10) || 20));
     const from = (page - 1) * limit;
 
     let query = supabase
@@ -103,8 +119,9 @@ export async function POST(req) {
     const body = await req.json();
     const { receiver_id, message, proposer_items, receiver_items } = body;
 
-    if (!receiver_id) {
-      return NextResponse.json({ error: "Destinatario requerido" }, { status: 400 });
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!receiver_id || typeof receiver_id !== "string" || !UUID_RE.test(receiver_id)) {
+      return NextResponse.json({ error: "Destinatario inválido" }, { status: 400 });
     }
 
     if (receiver_id === user.id) {
