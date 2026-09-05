@@ -1113,6 +1113,11 @@ BEGIN
   WHERE product_id = ANY(v_product_ids)
     AND status = 'pending';
 
+  -- Finalize the accepted offer (if any) for the sold products.
+  UPDATE offers SET status = 'completed'
+  WHERE product_id = ANY(v_product_ids)
+    AND status = 'accepted';
+
   RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'products_sold', v_expected_count);
 END;
 $$;
@@ -2302,7 +2307,7 @@ CREATE TABLE IF NOT EXISTS offers (
   buyer_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   amount NUMERIC(10,2) NOT NULL CHECK (amount > 0),
   original_price NUMERIC(10,2) NOT NULL CHECK (original_price > 0),
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected','countered','cancelled','expired')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','rejected','countered','cancelled','expired','completed')),
   message TEXT,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
@@ -2316,6 +2321,11 @@ CREATE INDEX IF NOT EXISTS idx_offers_buyer ON offers(buyer_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_offers_accepted_per_product
   ON offers (product_id)
   WHERE status = 'accepted';
+
+-- Migration: add 'completed' to offers.status CHECK for existing databases
+ALTER TABLE offers DROP CONSTRAINT IF EXISTS offers_status_check;
+ALTER TABLE offers ADD CONSTRAINT offers_status_check
+  CHECK (status IN ('pending','accepted','rejected','countered','cancelled','expired','completed'));
 
 -- ============================================================================
 -- 11. REVIEWS — buyer+seller reviews per order
@@ -2705,6 +2715,8 @@ BEGIN
       WHEN OLD.status = 'pending' AND NEW.status = 'cancelled' THEN true
       -- System expires: pending → expired (stale offers) or accepted → expired (reservation expired)
       WHEN OLD.status IN ('pending','accepted') AND NEW.status = 'expired' THEN true
+      -- System completes: accepted → completed (sale finalized via confirm_payment)
+      WHEN OLD.status = 'accepted' AND NEW.status = 'completed' THEN true
       ELSE false
     END;
     IF NOT allowed THEN
