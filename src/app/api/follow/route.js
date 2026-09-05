@@ -100,6 +100,11 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const targetUserId = searchParams.get("targetUserId");
 
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!targetUserId || typeof targetUserId !== "string" || !UUID_RE.test(targetUserId)) {
+      return NextResponse.json({ following: false });
+    }
+
     if (!user) return NextResponse.json({ following: false });
 
     const token = extractToken(req);

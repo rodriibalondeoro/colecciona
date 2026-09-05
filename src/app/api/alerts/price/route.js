@@ -1,18 +1,21 @@
 import { NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/serverSupabase";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(req) {
   try {
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ alerts: [] });
-
-    const { user } = await verifyAuth(req);
-    if (!user) {
-      return NextResponse.json({ alerts: [] });
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
-    const { data: alerts } = await supabase
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const supabase = createUserClient(token);
+
+    const { data: alerts, error } = await supabase
       .from("price_alerts")
       .select(`
         id, target_price, active, triggered, created_at,
@@ -21,19 +24,31 @@ export async function GET(req) {
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
 
+    if (error) {
+      console.error("[Price Alerts] Supabase error:", error.message);
+      return NextResponse.json({ error: "Error loading alerts" }, { status: 500 });
+    }
+
     return NextResponse.json({ alerts: alerts || [] });
   } catch (err) {
     console.error("[Price Alerts GET Error]", err);
-    return NextResponse.json({ alerts: [] });
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
 
 export async function POST(req) {
   try {
-    const { productId, targetPrice } = await req.json();
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
+      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    }
 
-    // Validate inputs
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const body = await req.json();
+    const { productId, targetPrice } = body;
+
     if (!productId || typeof productId !== "string" || !UUID_RE.test(productId)) {
       return NextResponse.json({ error: "ID de producto inválido" }, { status: 400 });
     }
@@ -41,13 +56,7 @@ export async function POST(req) {
       return NextResponse.json({ error: "Precio objetivo inválido" }, { status: 400 });
     }
 
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
-
-    const { user } = await verifyAuth(req);
-    if (!user) {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
+    const supabase = createUserClient(token);
 
     // Verificar premium
     const { data: sub } = await supabase
@@ -66,7 +75,10 @@ export async function POST(req) {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("[Price Alerts] Supabase error:", error.message);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
 
     return NextResponse.json({ alert: data });
   } catch (err) {
@@ -77,24 +89,35 @@ export async function POST(req) {
 
 export async function DELETE(req) {
   try {
-    const { searchParams } = new URL(req.url);
-    const alertId = searchParams.get("id");
-
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
-
-    const { user } = await verifyAuth(req);
-    if (!user) {
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
 
-    await supabase
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const { searchParams } = new URL(req.url);
+    const alertId = searchParams.get("id");
+
+    if (!alertId || typeof alertId !== "string" || !UUID_RE.test(alertId)) {
+      return NextResponse.json({ error: "ID de alerta inválido" }, { status: 400 });
+    }
+
+    const supabase = createUserClient(token);
+
+    const { error } = await supabase
       .from("price_alerts")
       .delete()
       .eq("id", alertId)
       .eq("user_id", user.id);
 
-    return NextResponse.json({ ok: true });
+    if (error) {
+      console.error("[Price Alerts] Delete error:", error.message);
+      return NextResponse.json({ error: "Error eliminando alerta" }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[Price Alerts DELETE Error]", err);
     return NextResponse.json({ error: err.message }, { status: 500 });

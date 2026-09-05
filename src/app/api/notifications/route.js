@@ -72,6 +72,8 @@ export async function PATCH(req) {
         console.error("[Notifications] Supabase error:", error.message);
         return NextResponse.json({ error: "Error updating notification" }, { status: 500 });
       }
+    } else {
+      return NextResponse.json({ error: "Parámetros inválidos: usa 'all: true' o un 'id' UUID válido" }, { status: 400 });
     }
 
     return NextResponse.json({ success: true });
