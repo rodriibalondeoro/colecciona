@@ -167,6 +167,24 @@ CREATE INDEX IF NOT EXISTS idx_profiles_is_admin ON profiles(id, is_admin) WHERE
 -- Subtle: deleted_at cannot be empty if present
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
+-- Centralized account-deletion guard: raises for any authenticated caller
+-- whose account has been anonymized/deleted. Added to all user-facing write RPCs
+-- as defense-in-depth on top of the auth ban (blocks stale sessions/tokens).
+CREATE OR REPLACE FUNCTION assert_not_deleted()
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND deleted_at IS NOT NULL) THEN
+      RAISE EXCEPTION '[ACCOUNT_DELETED] Account has been deleted';
+    END IF;
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION assert_not_deleted() FROM PUBLIC;
+
 -- ============================================================================
 -- 2. USER_PRIVATE — private user data (owner only)
 -- ============================================================================
@@ -343,6 +361,7 @@ DECLARE
   updated_count INTEGER;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  PERFORM assert_not_deleted();
   IF auth.uid() <> p_buyer_id THEN RAISE EXCEPTION 'Cannot reserve products for another user'; END IF;
 
   SELECT count(DISTINCT id) INTO expected_count FROM unnest(p_product_ids) AS ids(id);
@@ -1269,6 +1288,7 @@ DECLARE
   v_order RECORD;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[ORDER_NOT_FOUND] Order not found'; END IF;
@@ -1296,6 +1316,7 @@ DECLARE
   v_order RECORD;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[ORDER_NOT_FOUND] Order not found'; END IF;
@@ -1329,6 +1350,7 @@ DECLARE
   v_order RECORD;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[ORDER_NOT_FOUND] Order not found'; END IF;
@@ -1357,6 +1379,7 @@ DECLARE
   v_notify_id UUID;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[ORDER_NOT_FOUND] Order not found'; END IF;
@@ -1636,6 +1659,7 @@ DECLARE
   v_found_count INTEGER := 0;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  PERFORM assert_not_deleted();
   IF array_length(p_product_ids, 1) IS NULL THEN RAISE EXCEPTION 'No products provided'; END IF;
 
   -- Deduplicate product IDs to prevent double-counting
@@ -2507,6 +2531,7 @@ BEGIN
   IF v_caller IS NULL THEN
     RAISE EXCEPTION 'Not authenticated';
   END IF;
+  PERFORM assert_not_deleted();
 
   IF p_target_user_id = v_caller THEN
     RAISE EXCEPTION 'Cannot follow yourself';
@@ -2549,6 +2574,7 @@ BEGIN
   IF v_caller IS NULL THEN
     RAISE EXCEPTION 'Not authenticated';
   END IF;
+  PERFORM assert_not_deleted();
 
   -- Delete follow
   DELETE FROM public.follows
@@ -3056,6 +3082,7 @@ DECLARE
   v_product JSONB;
 BEGIN
   IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   -- Validate inputs
   IF p_title IS NULL OR length(trim(p_title)) = 0 THEN
@@ -3154,6 +3181,7 @@ DECLARE
 BEGIN
   -- Auth check
   IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   -- Receiver validation
   IF p_receiver_id IS NULL THEN RAISE EXCEPTION '[RECEIVER_REQUIRED] Receiver required'; END IF;
@@ -3369,6 +3397,7 @@ DECLARE
   v_new_proposal JSONB;
 BEGIN
   IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
   IF p_proposal_id IS NULL THEN RAISE EXCEPTION '[PROPOSAL_REQUIRED] Proposal ID required'; END IF;
 
   -- Read and lock old proposal
@@ -3579,6 +3608,7 @@ DECLARE
   v_result JSONB;
 BEGIN
   IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
   IF p_proposal_id IS NULL THEN RAISE EXCEPTION '[PROPOSAL_REQUIRED] Proposal ID required'; END IF;
 
   -- Read and lock proposal
@@ -3699,6 +3729,7 @@ DECLARE
   v_result JSONB;
 BEGIN
   IF v_caller IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
   IF p_proposal_id IS NULL THEN RAISE EXCEPTION '[PROPOSAL_REQUIRED] Proposal ID required'; END IF;
 
   -- Read + lock proposal (serializes concurrent transitions)
@@ -3898,6 +3929,7 @@ DECLARE
   v_order RECORD; v_reviewed_id UUID; v_existing UUID; v_review_id UUID; v_avg NUMERIC;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  PERFORM assert_not_deleted();
   IF p_rating < 1 OR p_rating > 5 THEN RAISE EXCEPTION 'Rating must be 1-5'; END IF;
 
   SELECT id, status, buyer_id, seller_id INTO v_order FROM orders WHERE id = p_order_id;
@@ -3962,6 +3994,7 @@ DECLARE
   v_offer_id UUID;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
   IF p_amount <= 0 THEN RAISE EXCEPTION '[INVALID_AMOUNT] Offer amount must be positive'; END IF;
   IF length(p_message) > 1000 THEN RAISE EXCEPTION '[MESSAGE_TOO_LONG] Message too long (max 1000 characters)'; END IF;
 
@@ -4016,6 +4049,7 @@ DECLARE
   v_updated_count INTEGER;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   -- 1. Read offer without lock to get product_id
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id;
@@ -4118,6 +4152,7 @@ DECLARE
   v_offer RECORD;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
@@ -4150,6 +4185,7 @@ DECLARE
   v_offer RECORD;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   SELECT * INTO v_offer FROM offers WHERE id = p_offer_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '[OFFER_NOT_FOUND] Offer not found'; END IF;
@@ -4178,6 +4214,7 @@ DECLARE
   v_new_offer_id UUID;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION '[AUTH_REQUIRED] Authentication required'; END IF;
+  PERFORM assert_not_deleted();
   IF p_amount <= 0 THEN RAISE EXCEPTION '[INVALID_AMOUNT] Counter-offer amount must be positive'; END IF;
   IF length(p_message) > 1000 THEN RAISE EXCEPTION '[MESSAGE_TOO_LONG] Message too long (max 1000 characters)'; END IF;
 
