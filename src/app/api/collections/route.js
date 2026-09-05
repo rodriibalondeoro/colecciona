@@ -1,20 +1,25 @@
 import { NextResponse } from "next/server";
 import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ALLOWED_VISIBILITY = ["public", "followers", "private"];
+
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
     const userId = searchParams.get("userId");
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = Math.min(100, parseInt(searchParams.get("limit") || "20"));
+
+    if (userId && typeof userId === "string" && !UUID_RE.test(userId)) {
+      return NextResponse.json({ error: "userId inválido" }, { status: 400 });
+    }
+
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "20", 10) || 20));
 
     const { user } = await verifyAuth(req);
 
     if (!userId) {
-      // No userId: show own collections (auth required)
-      if (!user) {
-        return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-      }
+      if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
       const token = extractToken(req);
       if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
@@ -34,7 +39,6 @@ export async function GET(req) {
       return NextResponse.json({ collections: data || [], total: count || 0, page, limit });
     }
 
-    // Viewing someone's collections — RPC handles visibility logic
     const token = extractToken(req);
     const supabase = token
       ? createUserClient(token)
@@ -45,7 +49,6 @@ export async function GET(req) {
 
     const { data, error } = await supabase.rpc("get_visible_collections", {
       p_owner_id: userId,
-      p_requester_id: user?.id || null,
       p_page: page,
       p_limit: limit,
     });
@@ -65,33 +68,39 @@ export async function GET(req) {
 export async function POST(req) {
   try {
     const { user, error: authError } = await verifyAuth(req);
-    if (authError || !user) {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
+    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const token = extractToken(req);
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const supabase = createUserClient(token);
-
     const body = await req.json();
     const { name, description, category, subcategory, cover_image, year, publisher, total_items, visibility } = body;
 
-    if (!name || !name.trim()) {
+    if (!name || typeof name !== "string" || !name.trim()) {
       return NextResponse.json({ error: "El nombre es obligatorio" }, { status: 400 });
+    }
+    if (visibility && !ALLOWED_VISIBILITY.includes(visibility)) {
+      return NextResponse.json({ error: "Visibilidad no válida" }, { status: 400 });
+    }
+    if (year !== undefined && year !== null && (!Number.isInteger(year) || year < 1900 || year > 2100)) {
+      return NextResponse.json({ error: "Año inválido" }, { status: 400 });
+    }
+    if (total_items !== undefined && (!Number.isInteger(total_items) || total_items < 0)) {
+      return NextResponse.json({ error: "total_items inválido" }, { status: 400 });
     }
 
     const { data, error } = await supabase
       .from("collections")
       .insert({
         user_id: user.id,
-        name: name.trim(),
-        description: description || null,
-        category: category || null,
-        subcategory: subcategory || null,
-        cover_image: cover_image || null,
+        name: name.trim().slice(0, 100),
+        description: String(description || "").slice(0, 500),
+        category: String(category || "").slice(0, 50),
+        subcategory: String(subcategory || "").slice(0, 50),
+        cover_image: String(cover_image || "").slice(0, 500),
         year: year || null,
-        publisher: publisher || null,
+        publisher: String(publisher || "").slice(0, 100),
         total_items: total_items || 0,
         visibility: visibility || "private",
       })

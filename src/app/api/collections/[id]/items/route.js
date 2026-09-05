@@ -1,55 +1,54 @@
 import { NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/serverSupabase";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ALLOWED_ITEM_STATUS = ["OWNED", "MISSING", "DUPLICATE", "FOR_TRADE", "FOR_SALE"];
 
 export async function GET(req, { params }) {
   try {
     const { id } = await params;
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ items: [] });
-
-    // Visibility check: fetch collection and verify access
-    const { data: collection, error: colError } = await supabase
-      .from("collections")
-      .select("user_id, visibility")
-      .eq("id", id)
-      .single();
-
-    if (colError || !collection) {
-      return NextResponse.json({ error: "Colección no encontrada" }, { status: 404 });
+    if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
+      return NextResponse.json({ error: "ID inválido" }, { status: 400 });
     }
+
+    const token = extractToken(req);
+    const supabase = token
+      ? createUserClient(token)
+      : (await import("@supabase/supabase-js")).createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+        );
+
+    // Visibility check
+    const { data: collection, error: colError } = await supabase
+      .from("collections").select("user_id, visibility").eq("id", id).single();
+
+    if (colError || !collection) return NextResponse.json({ error: "Colección no encontrada" }, { status: 404 });
 
     const { user } = await verifyAuth(req);
 
     if (collection.visibility === "private") {
-      if (!user || user.id !== collection.user_id) {
-        return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
-      }
+      if (!user || user.id !== collection.user_id) return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
     } else if (collection.visibility === "followers") {
-      if (!user) {
-        return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
-      }
+      if (!user) return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
       if (user.id !== collection.user_id) {
         const { data: follow } = await supabase
-          .from("follows")
-          .select("id")
-          .eq("follower_id", user.id)
-          .eq("following_id", collection.user_id)
-          .maybeSingle();
-        if (!follow) {
-          return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
-        }
+          .from("follows").select("id")
+          .eq("follower_id", user.id).eq("following_id", collection.user_id).maybeSingle();
+        if (!follow) return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
       }
     }
-    // public → no check needed
 
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
-    const category = searchParams.get("category");
     const search = searchParams.get("search");
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "50");
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "50", 10) || 50));
     const from = (page - 1) * limit;
+
+    if (status && !ALLOWED_ITEM_STATUS.includes(status)) {
+      return NextResponse.json({ error: "Estado no válido" }, { status: 400 });
+    }
 
     let query = supabase
       .from("collection_items")
@@ -59,8 +58,7 @@ export async function GET(req, { params }) {
       .range(from, from + limit - 1);
 
     if (status) query = query.eq("status", status);
-    if (category) query = query.eq("category", category);
-    if (search) query = query.ilike("card_name", `%${search}%`);
+    if (search) query = query.ilike("card_name", `%${search.slice(0, 100)}%`);
 
     const { data, error, count } = await query;
     if (error) {
@@ -78,20 +76,20 @@ export async function GET(req, { params }) {
 export async function POST(req, { params }) {
   try {
     const { user, error: authError } = await verifyAuth(req);
-    if (authError || !user) {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
+    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const { id } = await params;
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+    if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
+      return NextResponse.json({ error: "ID de colección inválido" }, { status: 400 });
+    }
 
-    // Verify collection ownership
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const supabase = createUserClient(token);
+
     const { data: collection } = await supabase
-      .from("collections")
-      .select("user_id")
-      .eq("id", id)
-      .single();
+      .from("collections").select("user_id").eq("id", id).single();
 
     if (!collection || collection.user_id !== user.id) {
       return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
@@ -100,86 +98,72 @@ export async function POST(req, { params }) {
     const body = await req.json();
     const { card_name, card_number, card_code, set_name, category, image_url, status: itemStatus, total_quantity, notes, priority } = body;
 
-    if (!card_name || !card_name.trim()) {
+    if (!card_name || typeof card_name !== "string" || !card_name.trim()) {
       return NextResponse.json({ error: "El nombre del cromo es obligatorio" }, { status: 400 });
     }
 
+    const status = ALLOWED_ITEM_STATUS.includes(itemStatus) ? itemStatus : "OWNED";
     const qty = Math.max(1, parseInt(total_quantity) || 1);
-    let status = itemStatus || "OWNED";
-    let ownedQty = 0;
-    let dupQty = 0;
-    let tradeQty = 0;
-    let saleQty = 0;
+    let ownedQty = 0, dupQty = 0, tradeQty = 0, saleQty = 0;
 
-    // Cumulative model: owned = total, duplicates = extras, trade/sale = subsets of duplicates
     switch (status) {
       case "OWNED": ownedQty = qty; break;
       case "MISSING": ownedQty = 0; break;
       case "DUPLICATE": ownedQty = qty; dupQty = qty; break;
       case "FOR_TRADE": ownedQty = qty; dupQty = qty; tradeQty = qty; break;
       case "FOR_SALE": ownedQty = qty; dupQty = qty; saleQty = qty; break;
-      default: ownedQty = qty;
     }
 
     const priorityVal = ['low', 'normal', 'high', 'urgent'].includes(priority) ? priority : 'normal';
 
-    // Use upsert for unique constraint
     const { data, error } = await supabase
       .from("collection_items")
       .upsert({
-        collection_id: id,
-        user_id: user.id,
-        card_name: card_name.trim(),
-        card_number: card_number || null,
-        card_code: card_code || null,
-        set_name: set_name || null,
-        category: category || null,
-        image_url: image_url || null,
-        status,
-        total_quantity: qty,
-        owned_quantity: ownedQty,
-        duplicate_quantity: dupQty,
-        trade_quantity: tradeQty,
-        sale_quantity: saleQty,
-        notes: notes || null,
+        collection_id: id, user_id: user.id,
+        card_name: card_name.trim().slice(0, 200),
+        card_number: String(card_number || "").slice(0, 50),
+        card_code: String(card_code || "").slice(0, 50),
+        set_name: String(set_name || "").slice(0, 100),
+        category: String(category || "").slice(0, 50),
+        image_url: String(image_url || "").slice(0, 500),
+        status, total_quantity: qty, owned_quantity: ownedQty,
+        duplicate_quantity: dupQty, trade_quantity: tradeQty, sale_quantity: saleQty,
+        notes: String(notes || "").slice(0, 1000),
         priority: priorityVal,
       }, { onConflict: "collection_id,card_name,card_number" })
-      .select()
-      .single();
+      .select().single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("[Collection Items POST] Error:", error.message);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
 
     return NextResponse.json({ item: data });
   } catch (err) {
     console.error("[Collection Items POST]", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
 
 export async function PATCH(req, { params }) {
   try {
     const { user, error: authError } = await verifyAuth(req);
-    if (authError || !user) {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
+    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const { id } = await params;
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
+    const supabase = createUserClient(token);
     const body = await req.json();
     const { itemId, status, total_quantity, notes, priority } = body;
 
-    if (!itemId) {
-      return NextResponse.json({ error: "itemId requerido" }, { status: 400 });
+    if (!itemId || typeof itemId !== "string" || !UUID_RE.test(itemId)) {
+      return NextResponse.json({ error: "itemId inválido" }, { status: 400 });
     }
 
-    // Verify ownership
     const { data: existing } = await supabase
-      .from("collection_items")
-      .select("user_id, collection_id")
-      .eq("id", itemId)
-      .single();
+      .from("collection_items").select("user_id").eq("id", itemId).single();
 
     if (!existing || existing.user_id !== user.id) {
       return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
@@ -187,9 +171,11 @@ export async function PATCH(req, { params }) {
 
     const updates = {};
     if (status !== undefined) {
+      if (!ALLOWED_ITEM_STATUS.includes(status)) {
+        return NextResponse.json({ error: "Estado no válido" }, { status: 400 });
+      }
+      const qty = Math.max(1, parseInt(total_quantity) || 1);
       updates.status = status;
-      const qty = parseInt(total_quantity) || 1;
-      // total_quantity always equals owned_quantity — derived from status
       updates.total_quantity = qty;
       switch (status) {
         case "OWNED": updates.owned_quantity = qty; updates.duplicate_quantity = 0; updates.trade_quantity = 0; updates.sale_quantity = 0; break;
@@ -199,53 +185,51 @@ export async function PATCH(req, { params }) {
         case "FOR_SALE": updates.owned_quantity = qty; updates.duplicate_quantity = qty; updates.trade_quantity = 0; updates.sale_quantity = qty; break;
       }
     }
-    // total_quantity without status change is not allowed — it's derived from owned_quantity
-    if (notes !== undefined) updates.notes = notes;
+    if (notes !== undefined) updates.notes = String(notes || "").slice(0, 1000);
     if (priority !== undefined && ['low', 'normal', 'high', 'urgent'].includes(priority)) {
       updates.priority = priority;
     }
+
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: "No hay cambios" }, { status: 400 });
+    }
+
     updates.updated_at = new Date().toISOString();
 
     const { data, error } = await supabase
-      .from("collection_items")
-      .update(updates)
-      .eq("id", itemId)
-      .select()
-      .single();
+      .from("collection_items").update(updates).eq("id", itemId).select().single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("[Collection Items PATCH] Error:", error.message);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
 
     return NextResponse.json({ item: data });
   } catch (err) {
     console.error("[Collection Items PATCH]", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
 
 export async function DELETE(req, { params }) {
   try {
     const { user, error: authError } = await verifyAuth(req);
-    if (authError || !user) {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
+    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const { id } = await params;
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
+    const supabase = createUserClient(token);
     const { searchParams } = new URL(req.url);
     const itemId = searchParams.get("itemId");
 
-    if (!itemId) {
-      return NextResponse.json({ error: "itemId requerido" }, { status: 400 });
+    if (!itemId || typeof itemId !== "string" || !UUID_RE.test(itemId)) {
+      return NextResponse.json({ error: "itemId inválido" }, { status: 400 });
     }
 
-    // Verify ownership
     const { data: existing } = await supabase
-      .from("collection_items")
-      .select("user_id")
-      .eq("id", itemId)
-      .single();
+      .from("collection_items").select("user_id").eq("id", itemId).single();
 
     if (!existing || existing.user_id !== user.id) {
       return NextResponse.json({ error: "Sin acceso" }, { status: 403 });
@@ -260,22 +244,18 @@ export async function DELETE(req, { params }) {
       .limit(1);
 
     if (activeItems && activeItems.length > 0) {
-      return NextResponse.json(
-        { error: "No se puede eliminar: tiene propuestas de intercambio activas" },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: "No se puede eliminar: tiene propuestas de intercambio activas" }, { status: 409 });
     }
 
-    const { error } = await supabase
-      .from("collection_items")
-      .delete()
-      .eq("id", itemId);
+    const { error } = await supabase.from("collection_items").delete().eq("id", itemId);
+    if (error) {
+      console.error("[Collection Items DELETE] Error:", error.message);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
 
-    if (error) throw error;
-
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[Collection Items DELETE]", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
