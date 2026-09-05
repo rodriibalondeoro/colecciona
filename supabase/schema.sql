@@ -2123,6 +2123,30 @@ CREATE TRIGGER trg_validate_collection_item_quantities
   BEFORE INSERT OR UPDATE ON collection_items
   FOR EACH ROW EXECUTE FUNCTION validate_collection_item_quantities();
 
+-- Enforce ownership consistency: collection_items.user_id must match collections.user_id
+CREATE OR REPLACE FUNCTION validate_collection_item_owner()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_collection_owner UUID;
+BEGIN
+  SELECT user_id INTO v_collection_owner FROM collections WHERE id = NEW.collection_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Collection % not found', NEW.collection_id;
+  END IF;
+  IF v_collection_owner != NEW.user_id THEN
+    RAISE EXCEPTION 'collection_items.user_id (%) must match collections.user_id (%)',
+      NEW.user_id, v_collection_owner;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validate_collection_item_owner ON collection_items;
+CREATE TRIGGER trg_validate_collection_item_owner
+  BEFORE INSERT OR UPDATE ON collection_items
+  FOR EACH ROW EXECUTE FUNCTION validate_collection_item_owner();
+
 -- ============================================================================
 -- 8. TRADE_PROPOSALS — card-for-card exchanges
 -- ============================================================================
