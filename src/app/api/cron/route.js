@@ -386,6 +386,32 @@ export async function GET(req) {
       }
     }
 
+    // 5. Expire stale pending offers (> 48h) — prevents offers lingering on SOLD/old products
+    const { error: offerCleanupError } = await supabase.rpc("cleanup_expired_offers");
+    if (offerCleanupError) {
+      console.error("[Cron] Error expiring offers:", offerCleanupError.message);
+    } else {
+      console.log("[Cron] Expired stale pending offers");
+    }
+
+    // 6. Release expired reservations (products RESERVED past reserved_until)
+    const { error: reservationError } = await supabase.rpc("cleanup_expired_reservations");
+    if (reservationError) {
+      console.error("[Cron] Error releasing expired reservations:", reservationError.message);
+      results.errors.push({ action: "release_expired_reservations", error: reservationError.message });
+    } else {
+      console.log("[Cron] Released expired reservations");
+    }
+
+    // 7. Cancel abandoned PENDING orders (> 30 min) + release their products
+    const { error: abandonedError } = await supabase.rpc("cleanup_abandoned_pending_orders");
+    if (abandonedError) {
+      console.error("[Cron] Error cancelling abandoned orders:", abandonedError.message);
+      results.errors.push({ action: "cleanup_abandoned_pending_orders", error: abandonedError.message });
+    } else {
+      console.log("[Cron] Cleaned abandoned PENDING orders");
+    }
+
     return NextResponse.json({ message: "Cron completed", results });
   } catch (err) {
     console.error("[Cron] Fatal error:", err);

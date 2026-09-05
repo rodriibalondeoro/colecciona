@@ -277,6 +277,10 @@ BEGIN
       -- Seller CANNOT modify SOLD products
       ELSIF OLD.status IN ('RESERVED','SOLD') THEN
         RAISE EXCEPTION 'Seller cannot change % to %. Use system functions.', OLD.status, NEW.status;
+      -- Any other transition not explicitly allowed is rejected.
+      -- Prevents seller from setting status='SOLD'/'RESERVED'/'DRAFT' directly.
+      ELSE
+        RAISE EXCEPTION 'Seller cannot transition product from % to % directly. Use publish/unpublish or system functions.', OLD.status, NEW.status;
       END IF;
     END IF;
 
@@ -302,6 +306,24 @@ DROP TRIGGER IF EXISTS trg_validate_product_transition ON products;
 CREATE TRIGGER trg_validate_product_transition
   BEFORE UPDATE ON products
   FOR EACH ROW EXECUTE FUNCTION validate_product_transition();
+
+-- Prevent deletion of RESERVED/SOLD products (they have active checkout/payment lifecycle).
+-- Only ACTIVE/INACTIVE/DRAFT/REMOVED products may be deleted by the seller.
+CREATE OR REPLACE FUNCTION prevent_product_delete()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  IF OLD.status IN ('RESERVED', 'SOLD') THEN
+    RAISE EXCEPTION 'Cannot delete product in % status. Use system functions to release/cancel first.', OLD.status;
+  END IF;
+  RETURN OLD;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_prevent_product_delete ON products;
+CREATE TRIGGER trg_prevent_product_delete
+  BEFORE DELETE ON products
+  FOR EACH ROW EXECUTE FUNCTION prevent_product_delete();
 
 -- Atomic reservation (auth.uid() = buyer check)
 CREATE OR REPLACE FUNCTION reserve_products_for_checkout(
@@ -376,10 +398,16 @@ BEGIN
   LOOP
     v_should_cancel_order := FALSE;
 
-    -- UNIQUE(order_items.product_id) guarantees at most one order per product
+    -- Find the most recent order for this product.
+    -- Note: no UNIQUE(product_id) index on order_items (only UNIQUE(order_id, product_id)),
+    -- so a product may have history across multiple orders. We must pick the CURRENT order.
+    -- Choosing the most recent (highest created_at) order minimizes the risk of
+    -- releasing a product that a newer PAYMENT_PROCESSING order still needs.
     SELECT oi.order_id INTO v_order_id
     FROM order_items oi
+    JOIN orders o ON o.id = oi.order_id
     WHERE oi.product_id = v_product.id
+    ORDER BY o.created_at DESC
     LIMIT 1;
 
     -- LOCKING ORDER: orders BEFORE products (global convention for deadlock prevention)
@@ -1060,9 +1088,11 @@ BEGIN
     IF v_product.reserved_by <> v_order.buyer_id THEN
       RAISE EXCEPTION 'Product % reserved_by % (expected buyer %)', v_product.id, v_product.reserved_by, v_order.buyer_id;
     END IF;
-    IF v_product.reserved_until <= now() THEN
-      RAISE EXCEPTION 'Product % reservation expired', v_product.id;
-    END IF;
+    -- Note: reserved_until is intentionally NOT checked here.
+    -- With capture_method=manual, the seller may capture days after the 15-min
+    -- checkout reservation window. The product is legitimately held (release_expired_reservations
+    -- skips PAYMENT_PROCESSING orders), so expiry must NOT block payment confirmation.
+    -- Integrity is enforced by status=RESERVED + reserved_by=buyer above.
   END LOOP;
 
   -- 4. Verify ALL expected products were found and locked
@@ -1077,6 +1107,11 @@ BEGIN
   UPDATE products
   SET status = 'SOLD', sold_at = now(), reserved_by = NULL, reserved_until = NULL
   WHERE id = ANY(v_product_ids);
+
+  -- Reject all remaining pending offers on the sold products (prevent lingering offers).
+  UPDATE offers SET status = 'rejected'
+  WHERE product_id = ANY(v_product_ids)
+    AND status = 'pending';
 
   RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'products_sold', v_expected_count);
 END;
@@ -2171,7 +2206,7 @@ CREATE TABLE IF NOT EXISTS trade_proposals (
 CREATE TABLE IF NOT EXISTS trade_proposal_items (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   proposal_id UUID NOT NULL REFERENCES trade_proposals(id) ON DELETE CASCADE,
-  collection_item_id UUID NOT NULL REFERENCES collection_items(id) ON DELETE CASCADE,
+  collection_item_id UUID NOT NULL REFERENCES collection_items(id) ON DELETE RESTRICT,
   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
   side TEXT NOT NULL CHECK (side IN ('proposer','receiver')),
@@ -2890,6 +2925,9 @@ BEGIN
   -- Trade commitments: items locked in active trade proposals
   -- PROPOSED: only proposer items committed
   -- ACCEPTED+: both sides committed
+  -- DISPUTED/COMPLETED: items remain committed until explicitly resolved/transferred.
+  --   Note: COMPLETED currently has no ownership-transfer logic, so items stay
+  --   committed to prevent infinite re-trading of the same cards.
   SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_trade_committed
   FROM trade_proposal_items tpi
   JOIN trade_proposals tp ON tp.id = tpi.proposal_id
@@ -2898,7 +2936,7 @@ BEGIN
     AND (
       (tp.status = 'PROPOSED' AND tpi.side = 'proposer')
       OR
-      (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED'))
+      (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED', 'DISPUTED', 'COMPLETED'))
     );
 
   -- Marketplace reservations: ACTIVE products linked to this item
