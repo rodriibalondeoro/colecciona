@@ -2158,6 +2158,44 @@ CREATE TRIGGER trg_validate_collection_item_quantities
   BEFORE INSERT OR UPDATE ON collection_items
   FOR EACH ROW EXECUTE FUNCTION validate_collection_item_quantities();
 
+-- Block reducing quantity below active trade commitments.
+-- While an item is committed in a PROPOSED/ACCEPTED/SHIPPING_PENDING/SHIPPED/
+-- RECEIVED/DISPUTED trade, a user cannot reduce owned/duplicate quantity below
+-- the committed amount. COMPLETED is excluded — the transfer function decrements
+-- at completion (the proposal is already COMPLETED when transfer runs).
+CREATE OR REPLACE FUNCTION protect_committed_item_quantity()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_committed INTEGER;
+BEGIN
+  -- Only applies to user-driven reductions (not system/service_role operations)
+  IF auth.uid() IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_committed
+  FROM trade_proposal_items tpi
+  JOIN trade_proposals tp ON tp.id = tpi.proposal_id
+  WHERE tpi.collection_item_id = NEW.id
+    AND tp.status IN ('PROPOSED', 'ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED', 'DISPUTED');
+
+  IF NEW.owned_quantity < v_committed THEN
+    RAISE EXCEPTION 'Cannot reduce owned_quantity below % (committed in active trade)', v_committed;
+  END IF;
+  IF NEW.duplicate_quantity < v_committed THEN
+    RAISE EXCEPTION 'Cannot reduce duplicate_quantity below % (committed in active trade)', v_committed;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_protect_committed_item_quantity ON collection_items;
+CREATE TRIGGER trg_protect_committed_item_quantity
+  BEFORE UPDATE ON collection_items
+  FOR EACH ROW EXECUTE FUNCTION protect_committed_item_quantity();
+
 -- Enforce ownership consistency: collection_items.user_id must match collections.user_id
 CREATE OR REPLACE FUNCTION validate_collection_item_owner()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -3730,7 +3768,8 @@ BEGIN
   -- Lock all source items in deterministic order (prevents deadlock)
   FOR v_tpi IN
     SELECT tpi.collection_item_id, tpi.user_id, tpi.quantity, tpi.side,
-           ci.card_name, ci.card_number, ci.card_code, ci.set_name, ci.category, ci.image_url
+           ci.card_name, ci.card_number, ci.card_code, ci.set_name, ci.category, ci.image_url,
+           ci.user_id AS item_owner, ci.owned_quantity, ci.duplicate_quantity
     FROM trade_proposal_items tpi
     JOIN collection_items ci ON ci.id = tpi.collection_item_id
     WHERE tpi.proposal_id = p_proposal_id
@@ -3746,12 +3785,27 @@ BEGIN
 
     v_transfer_quantity := v_tpi.quantity;
 
-    -- Decrement source item quantities (clamped at 0)
+    -- OWNERSHIP CHECK: item must still belong to the source user
+    IF v_tpi.item_owner IS DISTINCT FROM v_tpi.user_id THEN
+      RAISE EXCEPTION '[NOT_OWNER] Item % no longer belongs to the source user', v_tpi.collection_item_id;
+    END IF;
+
+    -- QUANTITY CHECK: must have enough to transfer (fail, don't silently clamp)
+    IF v_tpi.owned_quantity < v_transfer_quantity THEN
+      RAISE EXCEPTION '[INSUFFICIENT_QUANTITY] Item %: need % but only % owned',
+        v_tpi.collection_item_id, v_transfer_quantity, v_tpi.owned_quantity;
+    END IF;
+
+    -- Decrement source item quantities
     UPDATE collection_items
-    SET owned_quantity = GREATEST(owned_quantity - v_transfer_quantity, 0),
+    SET owned_quantity = owned_quantity - v_transfer_quantity,
         duplicate_quantity = GREATEST(duplicate_quantity - v_transfer_quantity, 0),
         trade_quantity = GREATEST(trade_quantity - v_transfer_quantity, 0),
-        sale_quantity = CASE WHEN owned_quantity - v_transfer_quantity <= 0 THEN 0 ELSE sale_quantity END,
+        sale_quantity = CASE WHEN (owned_quantity - v_transfer_quantity) <= 0 THEN 0 ELSE sale_quantity END,
+        status = CASE
+          WHEN (owned_quantity - v_transfer_quantity) = 0 THEN 'MISSING'
+          ELSE status
+        END,
         updated_at = now()
     WHERE id = v_tpi.collection_item_id;
 
