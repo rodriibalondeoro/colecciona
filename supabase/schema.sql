@@ -4743,3 +4743,73 @@ $$;
 
 REVOKE ALL ON FUNCTION check_rate_limit(TEXT, INT, INT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION check_rate_limit(TEXT, INT, INT) FROM authenticated;
+
+-- ============================================================================
+-- OTP CODES — distributed OTP storage (replaces in-memory Map)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS otp_codes (
+  key TEXT PRIMARY KEY,
+  code TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE otp_codes ENABLE ROW LEVEL SECURITY;
+-- No RLS policies: only accessible via SECURITY DEFINER RPCs (backend-only)
+
+-- Set/replace an OTP code (resets attempts on new code)
+CREATE OR REPLACE FUNCTION set_otp_code(p_key TEXT, p_code TEXT, p_ttl_ms INT DEFAULT 300000)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  INSERT INTO otp_codes (key, code, attempts, expires_at)
+  VALUES (p_key, p_code, 0, now() + (p_ttl_ms || ' ms')::interval)
+  ON CONFLICT (key) DO UPDATE
+    SET code = EXCLUDED.code,
+        attempts = 0,
+        expires_at = EXCLUDED.expires_at,
+        created_at = now();
+END;
+$$;
+
+-- Verify OTP atomically: one-time use + attempt limit + expiry
+-- Returns 'success' | 'invalid' | 'expired' | 'locked'
+CREATE OR REPLACE FUNCTION verify_otp_code(p_key TEXT, p_code TEXT, p_max_attempts INT DEFAULT 5)
+RETURNS TEXT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_rec RECORD;
+BEGIN
+  SELECT * INTO v_rec FROM otp_codes WHERE key = p_key FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN 'expired';
+  END IF;
+
+  IF v_rec.expires_at <= now() THEN
+    DELETE FROM otp_codes WHERE key = p_key;
+    RETURN 'expired';
+  END IF;
+
+  IF v_rec.attempts >= p_max_attempts THEN
+    DELETE FROM otp_codes WHERE key = p_key;
+    RETURN 'locked';
+  END IF;
+
+  IF v_rec.code = p_code THEN
+    -- Correct code: one-time use (delete immediately)
+    DELETE FROM otp_codes WHERE key = p_key;
+    RETURN 'success';
+  ELSE
+    -- Wrong code: increment attempts
+    UPDATE otp_codes SET attempts = attempts + 1 WHERE key = p_key;
+    RETURN 'invalid';
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION set_otp_code(TEXT, TEXT, INT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION verify_otp_code(TEXT, TEXT, INT) FROM PUBLIC;

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { getOtp, deleteOtp } from "@/lib/otpStore";
+import { verifyOtp } from "@/lib/otpStore";
 import { normalizePhone } from "@/lib/phone";
 import { rateLimit } from "@/lib/rateLimit";
 
@@ -92,19 +92,26 @@ export async function POST(req) {
     const rawKey = String(otpKey);
     const isEmail = rawKey.includes("@");
     const normalizedKey = isEmail ? rawKey : normalizePhone(rawKey);
+    const rawCode = String(code).trim();
 
-    const entry = getOtp(normalizedKey);
-    if (!entry) {
+    // Atomic verify: one-time use + attempt limit + expiry (Supabase-backed)
+    const verifyResult = await verifyOtp(normalizedKey, rawCode, 5);
+
+    if (verifyResult === "expired") {
       return NextResponse.json(
         { error: "Código expirado. Solicita un nuevo código." },
         { status: 400 }
       );
     }
-    if (entry.code !== String(code).trim()) {
+    if (verifyResult === "locked") {
+      return NextResponse.json(
+        { error: "Demasiados intentos. Solicita un nuevo código." },
+        { status: 429 }
+      );
+    }
+    if (verifyResult === "invalid") {
       return NextResponse.json({ error: "Código incorrecto. Revisa el SMS y vuelve a intentarlo." }, { status: 400 });
     }
-
-    deleteOtp(normalizedKey);
 
     let user = null;
     let userPhone = normalizedKey;

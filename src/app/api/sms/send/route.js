@@ -45,7 +45,7 @@ export async function POST(req) {
     }
 
     const code = String(Math.floor(100000 + Math.random() * 900000));
-    setOtp(otpKey, code);
+    await setOtp(otpKey, code);
 
     const twilioSid = process.env.TWILIO_ACCOUNT_SID;
     const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;

@@ -1,24 +1,34 @@
-// Almacén compartido de OTP por teléfono (en memoria del servidor).
-// Los módulos de /api/sms/send y /api/sms/verify son instancias separadas,
-// por eso el Map vive en un módulo común.
-// En producción: reemplazar por Redis con TTL.
+// Distributed OTP storage backed by Supabase (shared across instances).
+// Replaces the in-memory Map (which was per-instance and lost on restart).
 
-const otpStorage = new Map();
+import { createClient } from "@supabase/supabase-js";
 
-export function setOtp(phone, code, ttlMs = 5 * 60 * 1000) {
-  otpStorage.set(phone, { code, expiresAt: Date.now() + ttlMs });
-}
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-export function getOtp(phone) {
-  const entry = otpStorage.get(phone);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    otpStorage.delete(phone);
-    return null;
+export async function setOtp(phone, code, ttlMs = 5 * 60 * 1000) {
+  if (url && serviceKey) {
+    const supabase = createClient(url, serviceKey);
+    const { error } = await supabase.rpc("set_otp_code", {
+      p_key: phone,
+      p_code: code,
+      p_ttl_ms: ttlMs,
+    });
+    if (!error) return;
+    console.warn("[OTP] set_otp_code fallback:", error.message);
   }
-  return entry;
 }
 
-export function deleteOtp(phone) {
-  otpStorage.delete(phone);
+export async function verifyOtp(phone, code, maxAttempts = 5) {
+  if (url && serviceKey) {
+    const supabase = createClient(url, serviceKey);
+    const { data, error } = await supabase.rpc("verify_otp_code", {
+      p_key: phone,
+      p_code: code,
+      p_max_attempts: maxAttempts,
+    });
+    if (!error) return data; // 'success' | 'invalid' | 'expired' | 'locked'
+    console.warn("[OTP] verify_otp_code fallback:", error.message);
+  }
+  return "expired";
 }
