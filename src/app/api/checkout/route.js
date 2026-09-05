@@ -16,7 +16,10 @@ export async function POST(req) {
     const rl = rateLimit(`checkout:${ip}`, { limit: 3, windowMs: 60000 });
     if (!rl.allowed) return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
 
-    const { productIds, shippingMethod, shippingAddress } = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+
+    const { productIds, shippingMethod, shippingAddress } = body;
 
     if (!Array.isArray(productIds) || productIds.length === 0) {
       return NextResponse.json({ error: "No hay productos seleccionados" }, { status: 400 });
@@ -119,10 +122,25 @@ export async function POST(req) {
 
     if (updateError) {
       console.error("[Checkout] Failed to link PI to order:", updateError.message);
-      // DO NOT return clientSecret — the order is in an inconsistent state.
-      // The PI exists in Stripe but isn't linked to the order.
-      // The cron recovery (orphaned PENDING orders) will find it via metadata.orderId.
-      // We return 500 so the user knows the checkout wasn't fully prepared.
+
+      // RECOVERY: cancel PI + rollback order to prevent orphaned state
+      try {
+        // Cancel the PI if still cancellable (requires_capture → can be canceled)
+        await stripe.paymentIntents.cancel(paymentIntent.id, {
+          idempotencyKey: `cancel:${orderId}`,
+        });
+        console.log(`[Checkout] Cancelled PI ${paymentIntent.id} for order ${orderId}`);
+      } catch (cancelErr) {
+        console.error("[Checkout] Failed to cancel PI:", cancelErr.message);
+        // PI may already be captured or non-cancellable — leave for webhook/cron
+      }
+
+      // Rollback order + reservations
+      const { error: rollbackError } = await serviceClient.rpc("rollback_checkout", { p_order_id: orderId });
+      if (rollbackError) {
+        console.error("[Checkout] Rollback failed:", rollbackError.message);
+      }
+
       return NextResponse.json({ error: "Error preparando el pago" }, { status: 500 });
     }
 
