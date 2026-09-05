@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
 import { createClient } from "@supabase/supabase-js";
+import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -9,6 +10,13 @@ const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 export const runtime = "nodejs";
 
 export async function POST(req) {
+  // Rate limit: 100 webhook events/min (Stripe retries within this window normally)
+  const rl = await rateLimit("stripe:webhook", { limit: 100, windowMs: 60000 });
+  if (!rl.allowed) {
+    console.warn("[Webhook] Rate limited");
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
   const body = await req.text();
   const sig = req.headers.get("stripe-signature");
 

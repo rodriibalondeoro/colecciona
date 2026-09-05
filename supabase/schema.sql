@@ -1141,6 +1141,35 @@ BEGIN
   WHERE product_id = ANY(v_product_ids)
     AND status = 'accepted';
 
+  -- Credit seller wallet: seller receives subtotal minus commission.
+  -- Idempotent: this block only runs when transitioning to PAID (not on retries).
+  DECLARE
+    v_seller_earnings NUMERIC := v_order.subtotal - v_order.commission;
+  BEGIN
+    -- Ensure wallet row exists (handles legacy users without wallet)
+    INSERT INTO wallet (user_id) VALUES (v_order.seller_id) ON CONFLICT (user_id) DO NOTHING;
+
+    UPDATE wallet
+    SET balance = balance + v_seller_earnings,
+        available_balance = available_balance + v_seller_earnings
+    WHERE user_id = v_order.seller_id
+      AND v_seller_earnings > 0;
+
+    IF v_seller_earnings > 0 THEN
+      INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, order_id, description)
+      SELECT
+        v_order.seller_id,
+        'sale_income',
+        v_seller_earnings,
+        w.balance - v_seller_earnings,
+        w.balance,
+        p_order_id,
+        'Venta completada — ingresos (subtotal - comisión)'
+      FROM wallet w
+      WHERE w.user_id = v_order.seller_id;
+    END IF;
+  END;
+
   RETURN jsonb_build_object('order_id', p_order_id, 'status', 'PAID', 'products_sold', v_expected_count);
 END;
 $$;
@@ -1445,6 +1474,34 @@ BEGIN
       refund_previous_status = NULL,
       active_stripe_refund_id = NULL
   WHERE id = p_order_id;
+
+  -- Debit seller wallet: reverse the sale_income credited on confirm_payment.
+  -- Prevents overdraft via CHECK (balance >= 0). If seller already spent funds,
+  -- this raises an exception — requires manual admin intervention.
+  DECLARE
+    v_seller_earnings NUMERIC := v_order.subtotal - v_order.commission;
+    v_balance_before NUMERIC;
+  BEGIN
+    IF v_seller_earnings > 0 THEN
+      SELECT balance INTO v_balance_before FROM wallet WHERE user_id = v_order.seller_id;
+
+      UPDATE wallet
+      SET balance = balance - v_seller_earnings,
+          available_balance = available_balance - v_seller_earnings
+      WHERE user_id = v_order.seller_id;
+
+      INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, order_id, description)
+      VALUES (
+        v_order.seller_id,
+        'refund_reversal',
+        -v_seller_earnings,
+        COALESCE(v_balance_before, 0),
+        COALESCE(v_balance_before, 0) - v_seller_earnings,
+        p_order_id,
+        'Reembolso — reversión de ingresos por venta'
+      );
+    END IF;
+  END;
 
   -- Notify buyer
   INSERT INTO notifications (user_id, type, title, message, data, read)
