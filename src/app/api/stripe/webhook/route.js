@@ -48,6 +48,41 @@ export async function POST(req) {
 
   const supabase = createClient(url, key);
 
+  // EVENT DEDUPLICATION: Prevents processing the same Stripe event twice.
+  // Critical events (side effects) are deduplicated via webhook_events table.
+  // Informational events (charge.succeeded/updated) are logged but not deduped.
+  const CRITICAL_EVENTS = [
+    "payment_intent.succeeded",
+    "payment_intent.payment_failed",
+    "payment_intent.canceled",
+    "refund.created",
+    "refund.updated",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
+  ];
+
+  if (CRITICAL_EVENTS.includes(event.type)) {
+    // Atomic claim: INSERT with UNIQUE constraint. If conflict, another request claimed it.
+    const { error: dedupError } = await supabase
+      .from("webhook_events")
+      .insert({
+        stripe_event_id: event.id,
+        event_type: event.type,
+        status: "processing",
+      });
+
+    if (dedupError) {
+      // Unique violation = event already claimed/processed
+      if (dedupError.code === "23505") {
+        console.log(`[Webhook] Duplicate event ${event.id} (${event.type}) — skipping`);
+        return NextResponse.json({ received: true, duplicate: true });
+      }
+      // Other DB error — log but continue processing (transient DB issue)
+      console.error(`[Webhook] Dedup DB error for ${event.id}:`, dedupError.message);
+    }
+  }
+
   // Track errors: if a critical RPC fails, return 500 so Stripe retries.
   // Stripe retries with exponential backoff up to 3 days.
   let criticalError = null;
@@ -292,11 +327,26 @@ export async function POST(req) {
   // This ensures transient errors (race conditions, DB locks) are recovered.
   // Do NOT expose internal details in response — log them instead.
   if (criticalError) {
+    // Mark event as failed (allows retry on next delivery)
+    if (CRITICAL_EVENTS.includes(event.type)) {
+      await supabase
+        .from("webhook_events")
+        .update({ status: "failed", processed_at: new Date().toISOString() })
+        .eq("stripe_event_id", event.id);
+    }
     console.error("[Webhook] Returning 500 to trigger Stripe retry:", criticalError);
     return NextResponse.json(
       { error: "Processing failed" },
       { status: 500 }
     );
+  }
+
+  // Mark event as completed (prevents reprocessing on retry)
+  if (CRITICAL_EVENTS.includes(event.type)) {
+    await supabase
+      .from("webhook_events")
+      .update({ status: "completed", processed_at: new Date().toISOString() })
+      .eq("stripe_event_id", event.id);
   }
 
   return NextResponse.json({ received: true });

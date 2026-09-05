@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS wallet (
 CREATE TABLE IF NOT EXISTS wallet_transactions (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('SALE','COMMISSION','REFUND','WITHDRAWAL','DEPOSIT','ADJUSTMENT')),
+  type TEXT NOT NULL CHECK (type IN ('SALE','COMMISSION','REFUND','REFUND_REVERSAL','WITHDRAWAL','DEPOSIT','ADJUSTMENT')),
   amount NUMERIC(10,2) NOT NULL,
   balance_before NUMERIC(10,2) NOT NULL,
   balance_after NUMERIC(10,2) NOT NULL,
@@ -228,6 +228,26 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user ON wallet_transactions(user_id, created_at DESC);
+
+-- Webhook event deduplication: prevents processing the same Stripe event twice.
+-- UNIQUE(stripe_event_id) + status tracking enables at-most-once processing.
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  stripe_event_id TEXT UNIQUE NOT NULL,
+  event_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'processing' CHECK (status IN ('processing','completed','failed')),
+  created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
+  processed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_status ON webhook_events(status) WHERE status = 'processing';
+
+-- Ledger immutability: wallet_transactions is an append-only audit trail.
+-- Only backend (service_role) can INSERT. Users can SELECT. No UPDATE/DELETE.
+ALTER TABLE wallet_transactions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "wallet_tx_select_own" ON wallet_transactions;
+CREATE POLICY "wallet_tx_select_own" ON wallet_transactions FOR SELECT USING (auth.uid() = user_id);
+-- NO INSERT/UPDATE/DELETE policies: written via SECURITY DEFINER RPCs only.
+-- service_role bypasses RLS for backend inserts.
 
 -- ============================================================================
 -- 5. PRODUCTS — marketplace listings
@@ -1156,14 +1176,15 @@ BEGIN
       AND v_seller_earnings > 0;
 
     IF v_seller_earnings > 0 THEN
-      INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, order_id, description)
+      INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, reference_id, reference_type, description)
       SELECT
         v_order.seller_id,
-        'sale_income',
+        'SALE',
         v_seller_earnings,
         w.balance - v_seller_earnings,
         w.balance,
         p_order_id,
+        'order',
         'Venta completada — ingresos (subtotal - comisión)'
       FROM wallet w
       WHERE w.user_id = v_order.seller_id;
@@ -1475,32 +1496,47 @@ BEGIN
       active_stripe_refund_id = NULL
   WHERE id = p_order_id;
 
-  -- Debit seller wallet: reverse the sale_income credited on confirm_payment.
-  -- Prevents overdraft via CHECK (balance >= 0). If seller already spent funds,
-  -- this raises an exception — requires manual admin intervention.
+  -- Wallet debit: BEST-EFFORT (order status is already REFUNDED regardless).
+  -- If seller has insufficient funds (spent earnings), the debit is logged as
+  -- a deficit (negative amount) and the platform absorbs the difference.
+  -- The order is NEVER held hostage by wallet state.
   DECLARE
     v_seller_earnings NUMERIC := v_order.subtotal - v_order.commission;
     v_balance_before NUMERIC;
+    v_debit_amount NUMERIC;
   BEGIN
     IF v_seller_earnings > 0 THEN
       SELECT balance INTO v_balance_before FROM wallet WHERE user_id = v_order.seller_id;
+      v_balance_before := COALESCE(v_balance_before, 0);
 
-      UPDATE wallet
-      SET balance = balance - v_seller_earnings,
-          available_balance = available_balance - v_seller_earnings
-      WHERE user_id = v_order.seller_id;
+      -- Debit what's available (can be negative = deficit tracked in ledger)
+      v_debit_amount := LEAST(v_seller_earnings, v_balance_before);
 
-      INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, order_id, description)
+      IF v_debit_amount > 0 THEN
+        UPDATE wallet
+        SET balance = balance - v_debit_amount,
+            available_balance = available_balance - v_debit_amount
+        WHERE user_id = v_order.seller_id;
+      END IF;
+
+      -- Ledger: always records the full reversal (positive or negative amount)
+      INSERT INTO wallet_transactions (user_id, type, amount, balance_before, balance_after, reference_id, reference_type, description)
       VALUES (
         v_order.seller_id,
-        'refund_reversal',
+        'REFUND_REVERSAL',
         -v_seller_earnings,
-        COALESCE(v_balance_before, 0),
-        COALESCE(v_balance_before, 0) - v_seller_earnings,
+        v_balance_before,
+        v_balance_before - v_debit_amount,
         p_order_id,
+        'order',
         'Reembolso — reversión de ingresos por venta'
       );
     END IF;
+  EXCEPTION WHEN OTHERS THEN
+    -- Wallet debit failed (e.g., CHECK constraint, missing row).
+    -- Order is already REFUNDED — this is a platform accounting issue,
+    -- not a refund-blocking issue. Log and continue.
+    RAISE NOTICE 'Wallet debit failed for order %: %', p_order_id, SQLERRM;
   END;
 
   -- Notify buyer
@@ -1848,12 +1884,31 @@ $$;
 -- ============================================================================
 -- 5. ORDERS — purchase transactions (10 states)
 -- ============================================================================
--- Commission model: commission is paid by SELLER (deducted from their earnings)
--- Buyer pays: subtotal + shipping
--- Seller receives: subtotal - commission
--- Platform keeps: commission
--- Example: 10€ card + 2.50€ shipping → buyer pays 12.50€, seller gets 9.20€ (8% commission)
--- Premium sellers: 5% commission instead of 8%
+-- FINANCIAL MODEL (explicit formulas):
+--
+-- SALE:
+--   total_paid       = subtotal + shipping           (buyer pays this)
+--   seller_earnings  = subtotal - commission          (credited to seller wallet on PAID)
+--   platform_keeps   = commission                     (deducted from seller)
+--   commission_rate  = 8% (or 5% for premium sellers)
+--
+-- REFUND (full):
+--   refund_amount    = total_paid                     (Stripe refunds buyer)
+--   wallet_debit     = seller_earnings                (best-effort; deficit = platform loss)
+--   platform_loss    = commission + Stripe fees        (platform absorbs)
+--   Stripe fees      = NOT refunded by Stripe          (platform cost)
+--
+-- Example: 10€ card + 2.50€ shipping, standard (8% commission):
+--   total_paid      = 12.50€   (buyer)
+--   seller_earnings = 9.20€    (seller wallet)
+--   commission      = 0.80€    (platform)
+--   Stripe fee      = ~0.35€   (platform cost, not refunded)
+--   Refund: buyer gets 12.50€, platform loses 0.80€ + 0.35€ = 1.15€
+--
+-- WALLET LEDGER (wallet_transactions):
+--   SALE            → +seller_earnings on confirm_payment (PAID)
+--   REFUND_REVERSAL → -seller_earnings on mark_order_refunded (REFUNDED)
+--   Ledger is append-only (no UPDATE/DELETE). Immutability enforced by RLS.
 CREATE TABLE IF NOT EXISTS orders (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   seller_id UUID NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
@@ -2666,10 +2721,6 @@ CREATE POLICY "user_private_insert_own" ON user_private FOR INSERT WITH CHECK (a
 ALTER TABLE wallet ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "wallet_select_own" ON wallet;
 CREATE POLICY "wallet_select_own" ON wallet FOR SELECT USING (auth.uid() = user_id);
-
-ALTER TABLE wallet_transactions ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "wallet_tx_select_own" ON wallet_transactions;
-CREATE POLICY "wallet_tx_select_own" ON wallet_transactions FOR SELECT USING (auth.uid() = user_id);
 
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "products_select_public" ON products;
