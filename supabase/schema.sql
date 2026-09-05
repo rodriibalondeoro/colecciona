@@ -2975,9 +2975,12 @@ BEGIN
   -- Trade commitments: items locked in active trade proposals
   -- PROPOSED: only proposer items committed
   -- ACCEPTED+: both sides committed
-  -- DISPUTED/COMPLETED: items remain committed until explicitly resolved/transferred.
-  --   Note: COMPLETED currently has no ownership-transfer logic, so items stay
-  --   committed to prevent infinite re-trading of the same cards.
+  -- DISPUTED: remains committed (no transfer happened, items not released).
+  -- CANCELLED/SUPERSEDED: NOT committed (released).
+  -- COMPLETED: NOT committed — transfer_trade_items() has already physically
+  --   decremented the source item's quantities in the same atomic transaction.
+  --   Counting COMPLETED here would double-count and permanently lock the
+  --   (already-reduced) source item.
   SELECT COALESCE(SUM(tpi.quantity), 0) INTO v_trade_committed
   FROM trade_proposal_items tpi
   JOIN trade_proposals tp ON tp.id = tpi.proposal_id
@@ -2986,7 +2989,7 @@ BEGIN
     AND (
       (tp.status = 'PROPOSED' AND tpi.side = 'proposer')
       OR
-      (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED', 'DISPUTED', 'COMPLETED'))
+      (tp.status IN ('ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED', 'DISPUTED'))
     );
 
   -- Marketplace reservations: ACTIVE products linked to this item
@@ -3697,8 +3700,11 @@ BEGIN
     RAISE EXCEPTION '[INVALID_STATUS] Proposal state changed concurrently';
   END IF;
 
-  -- On completion, atomically transfer the cards between collections
-  IF p_new_status = 'COMPLETED' THEN
+  -- On completion, atomically transfer the cards between collections.
+  -- IDEMPOTENCY: only transfer when the status ACTUALLY CHANGED to COMPLETED
+  -- (v_proposal.status is the pre-update snapshot). Prevents double-transfer
+  -- if transition_trade_proposal(COMPLETED) is called twice.
+  IF p_new_status = 'COMPLETED' AND v_proposal.status <> 'COMPLETED' THEN
     PERFORM transfer_trade_items(p_proposal_id);
   END IF;
 
