@@ -28,10 +28,13 @@ export async function GET(req) {
     const userIds = (matches || []).map(m => m.user_id).filter(Boolean);
     let profiles = [];
     if (userIds.length > 0) {
-      const { data } = await supabase
+      const { data, error: profilesError } = await supabase
         .from("profiles")
         .select("id, name, username, avatar, rating, location")
         .in("id", userIds);
+      if (profilesError) {
+        console.error("[Match] Profiles error:", profilesError.message);
+      }
       profiles = data || [];
     }
 
