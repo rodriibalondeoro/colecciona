@@ -38,13 +38,16 @@ export async function POST(req) {
 }
 
 export async function DELETE(req) {
-  const { user, error } = await verifyAuth(req);
-  if (error) return NextResponse.json({ error: "No auth" }, { status: 401 });
+  const { user, error: authError } = await verifyAuth(req);
+  if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
   const { endpoint } = await req.json().catch(() => ({}));
   const supabase = createClient(url, serviceKey);
   if (endpoint) {
-    await supabase.from("push_subscriptions").delete().eq("endpoint", endpoint);
+    // Always filter by user_id to prevent deleting other users' subscriptions
+    await supabase.from("push_subscriptions").delete()
+      .eq("endpoint", endpoint)
+      .eq("user_id", user.id);
   } else {
     await supabase.from("push_subscriptions").delete().eq("user_id", user.id);
   }

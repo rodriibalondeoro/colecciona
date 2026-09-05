@@ -52,10 +52,12 @@ export async function GET(req) {
 
     // Process stale orders if any exist (don't return early — orphan recovery must always run)
     if (staleOrders && staleOrders.length > 0) {
-      console.log(`[Cron] Found ${staleOrders.length} stale PAYMENT_PROCESSING/CAPTURING orders`);
+      const MAX_BATCH = 50;
+      const batch = staleOrders.slice(0, MAX_BATCH);
+      console.log(`[Cron] Found ${staleOrders.length} stale orders, processing batch of ${batch.length}`);
 
       // 2. Check each with Stripe
-      for (const order of staleOrders) {
+      for (const order of batch) {
         results.checked++;
         const hoursStale = order.hours_stale || 0;
 
