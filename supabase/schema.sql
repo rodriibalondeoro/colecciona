@@ -2180,11 +2180,20 @@ BEGIN
   WHERE tpi.collection_item_id = NEW.id
     AND tp.status IN ('PROPOSED', 'ACCEPTED', 'SHIPPING_PENDING', 'SHIPPED', 'RECEIVED', 'DISPUTED');
 
-  IF NEW.owned_quantity < v_committed THEN
-    RAISE EXCEPTION 'Cannot reduce owned_quantity below % (committed in active trade)', v_committed;
-  END IF;
-  IF NEW.duplicate_quantity < v_committed THEN
-    RAISE EXCEPTION 'Cannot reduce duplicate_quantity below % (committed in active trade)', v_committed;
+  IF v_committed > 0 THEN
+    -- Item is committed in an active trade: block any structural/quantity changes
+    IF OLD.collection_id IS DISTINCT FROM NEW.collection_id THEN
+      RAISE EXCEPTION 'Cannot move collection item committed in an active trade';
+    END IF;
+    IF OLD.card_name IS DISTINCT FROM NEW.card_name THEN
+      RAISE EXCEPTION 'Cannot change card_name of item committed in an active trade';
+    END IF;
+    IF NEW.owned_quantity < v_committed THEN
+      RAISE EXCEPTION 'Cannot reduce owned_quantity below % (committed in active trade)', v_committed;
+    END IF;
+    IF NEW.duplicate_quantity < v_committed THEN
+      RAISE EXCEPTION 'Cannot reduce duplicate_quantity below % (committed in active trade)', v_committed;
+    END IF;
   END IF;
 
   RETURN NEW;
@@ -2846,6 +2855,9 @@ BEGIN
       WHEN OLD.status = 'SHIPPED' AND NEW.status = 'RECEIVED' AND auth.uid() = OLD.receiver_id THEN true
       WHEN OLD.status = 'RECEIVED' AND NEW.status = 'COMPLETED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
       WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','DISPUTED','SUPERSEDED') AND NEW.status = 'DISPUTED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
+      -- DISPUTED resolution (admin only): cancel (release items) or complete (transfer)
+      WHEN OLD.status = 'DISPUTED' AND NEW.status = 'CANCELLED' AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.is_admin = true) THEN true
+      WHEN OLD.status = 'DISPUTED' AND NEW.status = 'COMPLETED' AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.is_admin = true) THEN true
       ELSE false
     END;
     IF NOT allowed THEN RAISE EXCEPTION 'Invalid transition: % -> %', OLD.status, NEW.status; END IF;
