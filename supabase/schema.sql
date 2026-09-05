@@ -4813,3 +4813,46 @@ $$;
 
 REVOKE ALL ON FUNCTION set_otp_code(TEXT, TEXT, INT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION verify_otp_code(TEXT, TEXT, INT) FROM PUBLIC;
+
+-- ============================================================================
+-- ACCOUNT DELETION — anonimiza datos personales (conserva transacciones)
+-- ============================================================================
+-- GDPR: anonymous instead of hard-delete. Deleting auth.users cascades and
+-- would destroy orders/reviews/messages. Instead we anonymize PII while
+-- preserving the transactional rows (FK integrity intact).
+
+CREATE OR REPLACE FUNCTION anonymize_user(p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_suffix TEXT := substr(replace(p_user_id::text, '-', ''), 1, 16);
+BEGIN
+  -- Anonymize public profile
+  UPDATE profiles
+  SET name = 'Usuario eliminado',
+      username = 'deleted_' || v_suffix,
+      avatar = NULL,
+      bio = NULL,
+      location = NULL,
+      response_time = NULL,
+      is_admin = false
+  WHERE id = p_user_id;
+
+  -- Anonymize private data (PII)
+  UPDATE user_private
+  SET email = 'deleted_' || v_suffix || '@deleted.local',
+      phone = NULL,
+      address_street = NULL,
+      address_city = NULL,
+      address_zip = NULL,
+      address_country = NULL,
+      address_complete = false
+  WHERE user_id = p_user_id;
+
+  RETURN TRUE;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION anonymize_user(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION anonymize_user(UUID) FROM authenticated;
