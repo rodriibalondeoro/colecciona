@@ -271,24 +271,6 @@ export async function updateOffer({ id, status }) {
   } catch (err) { console.error("[DataService] updateOffer error:", err?.message); return null; }
 }
 
-/** Envía un push al destinatario (no bloqueante). */
-export async function sendPush({ recipientId, title, body, link }) {
-  if (!recipientId) return;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), NET_TIMEOUT);
-    await fetch("/api/push/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-      body: JSON.stringify({ recipientId, title, body, link }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-  } catch (err) {
-    console.warn("[DataService] sendPush no disponible:", err?.message);
-  }
-}
-
 /** Obtiene las reseñas públicas de un usuario (vendedor). */
 export async function fetchReviews(userId) {
   if (!userId) return [];
