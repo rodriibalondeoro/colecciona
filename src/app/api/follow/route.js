@@ -10,14 +10,13 @@ async function resolveUser(req) {
 
 export async function POST(req) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`follow:${ip}`, { limit: 10, windowMs: 60000 });
+    const user = await resolveUser(req);
+    if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const rl = rateLimit(`follow:${user.id}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
-
-    const user = await resolveUser(req);
-    if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const token = extractToken(req);
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
@@ -71,14 +70,13 @@ export async function POST(req) {
 
 export async function DELETE(req) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`follow:${ip}`, { limit: 10, windowMs: 60000 });
+    const user = await resolveUser(req);
+    if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const rl = rateLimit(`follow:${user.id}`, { limit: 10, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
-
-    const user = await resolveUser(req);
-    if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const token = extractToken(req);
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });

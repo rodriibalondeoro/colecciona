@@ -6,14 +6,13 @@ import { rateLimit } from "@/lib/rateLimit";
 
 export async function POST(req) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`reviews:${ip}`, { limit: 5, windowMs: 60000 });
+    const { user, error } = await verifyAuth(req);
+    if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const rl = rateLimit(`reviews:${user.id}`, { limit: 5, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
-
-    const { user, error } = await verifyAuth(req);
-    if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const body = await req.json().catch(() => null);
     if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });

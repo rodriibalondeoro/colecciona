@@ -76,14 +76,13 @@ export async function GET(req, { params }) {
 
 export async function POST(req, { params }) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`collection-items:${ip}`, { limit: 20, windowMs: 60000 });
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const rl = rateLimit(`collection-items:${user.id}`, { limit: 20, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
-
-    const { user, error: authError } = await verifyAuth(req);
-    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const { id } = await params;
     if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
@@ -159,14 +158,13 @@ export async function POST(req, { params }) {
 
 export async function PATCH(req, { params }) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`collection-items:${ip}`, { limit: 20, windowMs: 60000 });
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const rl = rateLimit(`collection-items:${user.id}`, { limit: 20, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
-
-    const { user, error: authError } = await verifyAuth(req);
-    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const { id } = await params;
     const token = extractToken(req);
@@ -232,14 +230,13 @@ export async function PATCH(req, { params }) {
 
 export async function DELETE(req, { params }) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = rateLimit(`collection-items:${ip}`, { limit: 20, windowMs: 60000 });
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+
+    const rl = rateLimit(`collection-items:${user.id}`, { limit: 20, windowMs: 60000 });
     if (!rl.allowed) {
       return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
-
-    const { user, error: authError } = await verifyAuth(req);
-    if (authError || !user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const { id } = await params;
     const token = extractToken(req);
