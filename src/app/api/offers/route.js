@@ -37,7 +37,7 @@ export async function GET(req) {
 
   const allowedTypes = ["all", "received", "sent"];
   if (!allowedTypes.includes(type)) {
-    return NextResponse.json({ offers: [] }, { status: 400 });
+    return NextResponse.json({ error: "type no válido" }, { status: 400 });
   }
 
   let dbQuery = supabase
@@ -60,8 +60,8 @@ export async function GET(req) {
   const { data, error: dbError } = await dbQuery.order("created_at", { ascending: false }).limit(100);
 
   if (dbError) {
-    console.warn("[Offers API] GET error:", dbError.message);
-    return NextResponse.json({ offers: [] }, { status: 500 });
+    console.error("[Offers API] GET error:", dbError.message);
+    return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
   }
 
   const offers = (data || []).map((o) => ({
@@ -79,7 +79,9 @@ export async function POST(req) {
   const token = extractToken(req);
   if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-  const body = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+
   const { productId, amount, message } = body;
 
   if (!productId || !amount) {
@@ -92,15 +94,14 @@ export async function POST(req) {
     return NextResponse.json({ error: "productId inválido" }, { status: 400 });
   }
 
-  // Validate amount is a finite positive number with max 2 decimals
-  const parsedAmount = typeof amount === "string" ? Number(amount) : amount;
-  if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+  // Validate amount is a number (not string)
+  if (typeof amount === "string" || !Number.isFinite(amount) || amount <= 0) {
     return NextResponse.json({ error: "Importe inválido" }, { status: 400 });
   }
-  if (parsedAmount > 999999.99) {
+  if (amount > 999999.99) {
     return NextResponse.json({ error: "Importe demasiado alto" }, { status: 400 });
   }
-  const decimalPart = parsedAmount.toString().split(".")[1];
+  const decimalPart = amount.toString().split(".")[1];
   if (decimalPart && decimalPart.length > 2) {
     return NextResponse.json({ error: "Importe máximo 2 decimales" }, { status: 400 });
   }
@@ -119,7 +120,7 @@ export async function POST(req) {
 
   const { data, error: rpcError } = await supabase.rpc("create_offer", {
     p_product_id: productId,
-    p_amount: parsedAmount,
+    p_amount: amount,
     p_message: message || "",
   });
 
