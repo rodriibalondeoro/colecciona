@@ -3647,6 +3647,11 @@ BEGIN
     RAISE EXCEPTION '[INVALID_STATUS] Proposal state changed concurrently';
   END IF;
 
+  -- On completion, atomically transfer the cards between collections
+  IF p_new_status = 'COMPLETED' THEN
+    PERFORM transfer_trade_items(p_proposal_id);
+  END IF;
+
   -- Notify the other party
   INSERT INTO notifications (user_id, type, title, message, data, read)
   SELECT
@@ -3669,6 +3674,131 @@ $$;
 
 REVOKE ALL ON FUNCTION transition_trade_proposal(UUID, TEXT, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION transition_trade_proposal(UUID, TEXT, TEXT) TO authenticated;
+
+-- ============================================================================
+-- TRANSFER TRADE ITEMS — atomically move cards between collections on COMPLETED
+-- ============================================================================
+-- For each proposal item:
+--   side='proposer' items  → proposer (source) gives to receiver (destination)
+--   side='receiver' items  → receiver (source) gives to proposer (destination)
+-- Decrements source quantities; finds-or-creates destination item in the
+-- destination's default collection. Fully atomic (single transaction).
+
+CREATE OR REPLACE FUNCTION get_or_create_default_collection(p_user_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_collection_id UUID;
+BEGIN
+  SELECT id INTO v_collection_id
+  FROM collections
+  WHERE user_id = p_user_id
+  ORDER BY created_at ASC
+  LIMIT 1;
+
+  IF v_collection_id IS NULL THEN
+    INSERT INTO collections (user_id, name, visibility, total_items)
+    VALUES (p_user_id, 'Intercambios recibidos', 'private', 0)
+    RETURNING id INTO v_collection_id;
+  END IF;
+
+  RETURN v_collection_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION transfer_trade_items(p_proposal_id UUID)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_proposal RECORD;
+  v_tpi RECORD;
+  v_source_item RECORD;
+  v_dest_user UUID;
+  v_dest_collection UUID;
+  v_dest_item UUID;
+  v_transfer_quantity INTEGER;
+BEGIN
+  SELECT proposer_id, receiver_id, status INTO v_proposal
+  FROM trade_proposals WHERE id = p_proposal_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION '[PROPOSAL_NOT_FOUND] Proposal not found'; END IF;
+  IF v_proposal.status <> 'COMPLETED' THEN
+    RAISE EXCEPTION '[INVALID_STATUS] Proposal is not COMPLETED, cannot transfer items';
+  END IF;
+
+  -- Lock all source items in deterministic order (prevents deadlock)
+  FOR v_tpi IN
+    SELECT tpi.collection_item_id, tpi.user_id, tpi.quantity, tpi.side,
+           ci.card_name, ci.card_number, ci.card_code, ci.set_name, ci.category, ci.image_url
+    FROM trade_proposal_items tpi
+    JOIN collection_items ci ON ci.id = tpi.collection_item_id
+    WHERE tpi.proposal_id = p_proposal_id
+    ORDER BY ci.id
+    FOR UPDATE OF ci
+  LOOP
+    -- Destination is the opposite party
+    IF v_tpi.side = 'proposer' THEN
+      v_dest_user := v_proposal.receiver_id;
+    ELSE
+      v_dest_user := v_proposal.proposer_id;
+    END IF;
+
+    v_transfer_quantity := v_tpi.quantity;
+
+    -- Decrement source item quantities (clamped at 0)
+    UPDATE collection_items
+    SET owned_quantity = GREATEST(owned_quantity - v_transfer_quantity, 0),
+        duplicate_quantity = GREATEST(duplicate_quantity - v_transfer_quantity, 0),
+        trade_quantity = GREATEST(trade_quantity - v_transfer_quantity, 0),
+        sale_quantity = CASE WHEN owned_quantity - v_transfer_quantity <= 0 THEN 0 ELSE sale_quantity END,
+        updated_at = now()
+    WHERE id = v_tpi.collection_item_id;
+
+    -- Find or create destination collection
+    v_dest_collection := get_or_create_default_collection(v_dest_user);
+
+    -- Find or create destination item (matching card) in that collection
+    SELECT id INTO v_dest_item
+    FROM collection_items
+    WHERE collection_id = v_dest_collection
+      AND card_name = v_tpi.card_name
+      AND (card_number IS NOT DISTINCT FROM v_tpi.card_number)
+    ORDER BY created_at ASC
+    LIMIT 1
+    FOR UPDATE;
+
+    IF v_dest_item IS NULL THEN
+      INSERT INTO collection_items (
+        collection_id, user_id, card_name, card_number, card_code, set_name,
+        category, image_url, status,
+        total_quantity, owned_quantity, duplicate_quantity, trade_quantity, sale_quantity
+      )
+      VALUES (
+        v_dest_collection, v_dest_user, v_tpi.card_name, v_tpi.card_number,
+        v_tpi.card_code, v_tpi.set_name, v_tpi.category, v_tpi.image_url,
+        CASE WHEN v_transfer_quantity > 1 THEN 'DUPLICATE' ELSE 'OWNED' END,
+        v_transfer_quantity, v_transfer_quantity,
+        GREATEST(v_transfer_quantity - 1, 0), 0, 0
+      );
+    ELSE
+      UPDATE collection_items
+      SET owned_quantity = owned_quantity + v_transfer_quantity,
+          duplicate_quantity = duplicate_quantity + GREATEST(v_transfer_quantity - 1, 0),
+          total_quantity = total_quantity + v_transfer_quantity,
+          status = CASE
+            WHEN owned_quantity + v_transfer_quantity > 1 THEN 'DUPLICATE'
+            ELSE status
+          END,
+          updated_at = now()
+      WHERE id = v_dest_item;
+    END IF;
+  END LOOP;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION get_or_create_default_collection(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION transfer_trade_items(UUID) FROM PUBLIC;
 
 -- Reviews RPC: validates order COMPLETED, participant, no duplicate
 CREATE OR REPLACE FUNCTION create_review(
