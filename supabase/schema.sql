@@ -4200,32 +4200,39 @@ RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
+  v_user_id UUID;
   v_result JSONB;
 BEGIN
+  -- SECURITY: derive user from JWT, never trust caller-provided p_user_id
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
   WITH
   -- Current user's items available for trade
   my_offers AS (
     SELECT card_name, card_number, set_name, trade_quantity
     FROM collection_items
-    WHERE user_id = p_user_id AND trade_quantity > 0
+    WHERE user_id = v_user_id AND trade_quantity > 0
   ),
   -- Current user's missing items (what they want)
   my_wants AS (
     SELECT card_name, card_number, set_name
     FROM collection_items
-    WHERE user_id = p_user_id AND status = 'MISSING'
+    WHERE user_id = v_user_id AND status = 'MISSING'
   ),
   -- Other users' items available for trade
   other_offers AS (
     SELECT ci.user_id, ci.card_name, ci.card_number, ci.set_name, ci.trade_quantity
     FROM collection_items ci
-    WHERE ci.user_id != p_user_id AND ci.trade_quantity > 0
+    WHERE ci.user_id != v_user_id AND ci.trade_quantity > 0
   ),
   -- Other users' missing items (what they want)
   other_wants AS (
     SELECT ci.user_id, ci.card_name, ci.card_number, ci.set_name
     FROM collection_items ci
-    WHERE ci.user_id != p_user_id AND ci.status = 'MISSING'
+    WHERE ci.user_id != v_user_id AND ci.status = 'MISSING'
   ),
   -- Match score: how many items user can GIVE to each other user
   give_scores AS (

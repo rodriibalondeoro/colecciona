@@ -41,14 +41,16 @@ export async function GET(req) {
 
     const profileMap = Object.fromEntries(profiles.map(p => [p.id, p]));
 
-    const enriched = (matches || []).map(m => ({
-      user: profileMap[m.user_id] || { id: m.user_id, name: "Usuario" },
-      giveCount: m.give_count,
-      getCount: m.get_count,
-      score: m.score,
-      giveItems: m.give_items || [],
-      getItems: m.get_items || [],
-    }));
+    const enriched = (matches || [])
+      .filter(m => profileMap[m.user_id])
+      .map(m => ({
+        user: profileMap[m.user_id],
+        giveCount: m.give_count,
+        getCount: m.get_count,
+        score: m.score,
+        giveItems: m.give_items || [],
+        getItems: m.get_items || [],
+      }));
 
     return NextResponse.json({ matches: enriched });
   } catch (err) {
