@@ -158,10 +158,14 @@ CREATE TABLE IF NOT EXISTS profiles (
   response_time TEXT DEFAULT '< 1 hora',
   member_since TEXT NOT NULL,
   is_admin BOOLEAN DEFAULT false NOT NULL,
+  deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_profiles_username ON profiles(username);
 CREATE INDEX IF NOT EXISTS idx_profiles_is_admin ON profiles(id, is_admin) WHERE is_admin = true;
+
+-- Subtle: deleted_at cannot be empty if present
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 -- ============================================================================
 -- 2. USER_PRIVATE — private user data (owner only)
@@ -4828,7 +4832,13 @@ AS $$
 DECLARE
   v_suffix TEXT := substr(replace(p_user_id::text, '-', ''), 1, 16);
 BEGIN
-  -- Anonymize public profile
+  -- Idempotency + account-lock: set deleted_at FIRST (blocks new operations).
+  -- Subsequent calls are no-ops for already-deleted users.
+  IF EXISTS (SELECT 1 FROM profiles WHERE id = p_user_id AND deleted_at IS NOT NULL) THEN
+    RETURN TRUE; -- already anonymized
+  END IF;
+
+  -- Anonymize public profile + mark as deleted
   UPDATE profiles
   SET name = 'Usuario eliminado',
       username = 'deleted_' || v_suffix,
@@ -4836,7 +4846,8 @@ BEGIN
       bio = NULL,
       location = NULL,
       response_time = NULL,
-      is_admin = false
+      is_admin = false,
+      deleted_at = now()
   WHERE id = p_user_id;
 
   -- Anonymize private data (PII)

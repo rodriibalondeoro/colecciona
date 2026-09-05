@@ -80,43 +80,39 @@ export async function DELETE(req) {
       );
     }
 
-    // Anonymize PII (conserves transactional rows)
+    // LOCK ORDER: ban auth user FIRST (invalidates session immediately,
+    // blocking any concurrent operations), then anonymize.
+    // 1. Ban auth user — blocks re-login + new authenticated operations
+    const suffix = userId.replace(/-/g, "").slice(0, 16);
+    const anonEmail = `deleted_${suffix}@deleted.local`;
+    const { error: banError } = await serviceClient.auth.admin.updateUserById(userId, {
+      ban_duration: "876000h",
+      email: anonEmail,
+    });
+    if (banError) {
+      console.error("[Account Delete] ban/email error:", banError.message);
+      // Continue — anonymization below still protects PII even if auth update fails
+    }
+
+    // 2. Anonymize PII in DB (idempotent via deleted_at check; preserves transactions)
     const { error: anonError } = await serviceClient.rpc("anonymize_user", { p_user_id: userId });
     if (anonError) {
       console.error("[Account Delete] anonymize_user error:", anonError.message);
       return NextResponse.json({ error: "Error al anonimizar los datos" }, { status: 500 });
     }
 
-    // Delete personal storage files (best-effort)
+    // 3. Delete personal storage files (best-effort)
     try {
       const { data: files } = await serviceClient.storage.from(STORAGE_BUCKET).list(`${userId}`, {
         limit: 500,
       });
-      const paths = (files || []).map((f) => `${userId}/${f.name}`);
-      // list() returns top-level entries; cards are under userId/cards/
-      const removePaths = [`${userId}`];
-      // Build paths including subdirectories (cards/ folder)
       for (const f of files || []) {
-        if (f.id !== null && f.name.indexOf(".") === -1) {
-          // Likely a directory (e.g., cards) — no dot in folder name
-          removePaths.push(`${userId}/${f.name}`);
-        }
-      }
-      for (const p of removePaths) {
-        const { error: rmError } = await serviceClient.storage.from(STORAGE_BUCKET).remove([p]);
+        const path = `${userId}/${f.name}`;
+        const { error: rmError } = await serviceClient.storage.from(STORAGE_BUCKET).remove([path]);
         if (rmError) console.warn("[Account Delete] storage remove:", rmError.message);
       }
     } catch (storageErr) {
       console.warn("[Account Delete] storage cleanup:", storageErr.message);
-    }
-
-    // Ban auth user (invalidates session + prevents re-login), conserving auth.users row
-    // for FK integrity. 100 years ban ≈ permanent.
-    const { error: banError } = await serviceClient.auth.admin.updateUserById(userId, {
-      ban_duration: "876000h",
-    });
-    if (banError) {
-      console.error("[Account Delete] ban error:", banError.message);
     }
 
     return NextResponse.json({
