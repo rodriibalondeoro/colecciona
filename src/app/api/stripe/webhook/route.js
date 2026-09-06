@@ -75,6 +75,7 @@ export async function POST(req) {
         stripe_event_id: event.id,
         event_type: event.type,
         status: "processing",
+        processing_started_at: new Date().toISOString(),
       });
 
     if (dedupError) {
@@ -92,19 +93,17 @@ export async function POST(req) {
         }
 
         if (existing.status === "processing") {
-          // Check if stale (>5min) — reclaim if crashed during processing
-          const { data: row } = await supabase
+          // Atomic stale claim: only one request wins the UPDATE
+          const { data: reclaimed } = await supabase
             .from("webhook_events")
-            .select("created_at")
+            .update({ status: "processing", processing_started_at: new Date().toISOString() })
             .eq("stripe_event_id", event.id)
+            .eq("status", "processing")
+            .lt("processing_started_at", new Date(Date.now() - 5 * 60 * 1000).toISOString())
+            .select("id")
             .single();
-          const stale = row && (Date.now() - new Date(row.created_at).getTime()) > 5 * 60 * 1000;
-          if (stale) {
-            console.log(`[Webhook] Stale processing event ${event.id} (>5min) — reclaiming`);
-            await supabase
-              .from("webhook_events")
-              .update({ status: "processing", processed_at: null })
-              .eq("stripe_event_id", event.id);
+          if (reclaimed) {
+            console.log(`[Webhook] Stale processing event ${event.id} (>5min) — reclaimed`);
           } else {
             console.log(`[Webhook] Event ${event.id} being processed by another request — skipping`);
             return NextResponse.json({ received: true, duplicate: true });
@@ -116,7 +115,7 @@ export async function POST(req) {
           console.log(`[Webhook] Retrying failed event ${event.id}`);
           await supabase
             .from("webhook_events")
-            .update({ status: "processing", processed_at: null })
+            .update({ status: "processing", processed_at: null, processing_started_at: new Date().toISOString() })
             .eq("stripe_event_id", event.id);
         }
       } else {

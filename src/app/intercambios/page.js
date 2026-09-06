@@ -96,17 +96,20 @@ export default function IntercambiosPage() {
       }
       setTheirForTradeItems(theirItems);
     } catch {
-      // Fallback: use match data (names only) — won't work for proposal creation
-      const match = matches.find(m => m.userId === userId);
-      if (match) {
-        setTheirForTradeItems(match.youCanGet.map(name => ({ card_name: name })));
-      }
+      setTheirForTradeItems([]);
+      showToast('No se pudieron cargar las cartas del otro usuario', 'error');
     }
   };
 
   const handleCreateProposal = async () => {
     if (!proposalTarget || (!selectedMyItems.length && !selectedTheirItems.length)) {
       showToast('Selecciona al menos un elemento', 'error');
+      return;
+    }
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const allIds = [...selectedMyItems, ...selectedTheirItems];
+    if (!allIds.every(id => UUID_RE.test(id))) {
+      showToast('Elementos inválidos — recarga la página e intenta de nuevo', 'error');
       return;
     }
     setSending(true);

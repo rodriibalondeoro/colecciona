@@ -253,9 +253,11 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   event_type TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'processing' CHECK (status IN ('processing','completed','failed')),
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL,
-  processed_at TIMESTAMPTZ
+  processed_at TIMESTAMPTZ,
+  processing_started_at TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_webhook_events_status ON webhook_events(status) WHERE status = 'processing';
+CREATE INDEX IF NOT EXISTS idx_webhook_events_stale ON webhook_events(processing_started_at) WHERE status = 'processing';
 
 -- webhook_events: only service_role access (no RLS policies = denied to anon/authenticated)
 ALTER TABLE webhook_events ENABLE ROW LEVEL SECURITY;
