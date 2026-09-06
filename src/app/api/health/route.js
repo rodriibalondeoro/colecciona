@@ -9,12 +9,12 @@ export async function GET() {
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (url && key) {
-      const { error } = await fetch(`${url}/rest/v1/`, {
+      const res = await fetch(`${url}/rest/v1/`, {
         headers: { apikey: key, Authorization: `Bearer ${key}` },
         signal: AbortSignal.timeout(5000),
       });
-      checks.supabase = error ? "unreachable" : "ok";
-      if (error) status = 503;
+      checks.supabase = res.ok ? "ok" : "unreachable";
+      if (!res.ok) status = 503;
     } else {
       checks.supabase = "not_configured";
     }
