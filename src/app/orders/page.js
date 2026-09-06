@@ -14,6 +14,8 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState([]);
   const [sales, setSales] = useState([]);
   const [offers, setOffers] = useState([]);
+  const [sentOffers, setSentOffers] = useState([]);
+  const [offerTab, setOfferTab] = useState('received');
   const [loading, setLoading] = useState(true);
 
   const [isShippingModalOpen, setIsShippingModalOpen] = useState(false);
@@ -35,22 +37,25 @@ export default function OrdersPage() {
       try {
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
-        const [ordersRes, offersRes] = await Promise.all([
+        const [ordersRes, offersRes, sentOffersRes] = await Promise.all([
           authFetch('/api/orders'),
           authFetch('/api/offers?type=received'),
+          authFetch('/api/offers?type=sent'),
         ]);
 
         if (cancelled) return;
 
         const ordersData = ordersRes.ok ? await ordersRes.json() : { orders: [] };
         const offersData = offersRes.ok ? await offersRes.json() : { offers: [] };
+        const sentOffersData = sentOffersRes.ok ? await sentOffersRes.json() : { offers: [] };
 
-        const myOrders = (ordersData.orders || []).filter(o => o.buyer_id === session?.id);
-        const mySales = (ordersData.orders || []).filter(o => o.seller_id === session?.id);
+        const myOrders = (ordersData.orders || []).filter(o => o.buyer_id === session?.user?.id || o.buyer_id === session?.id);
+        const mySales = (ordersData.orders || []).filter(o => o.seller_id === session?.user?.id || o.seller_id === session?.id);
 
         setOrders(myOrders);
         setSales(mySales);
         setOffers(offersData.offers || []);
+        setSentOffers(sentOffersData.offers || []);
       } catch (err) {
         if (!cancelled) console.error('Error fetching data:', err);
       } finally {
@@ -169,6 +174,28 @@ export default function OrdersPage() {
         showToast('Pedido en preparación', 'success');
       } else {
         showToast(data.error || 'Error al actualizar', 'error');
+      }
+    } catch (err) {
+      showToast('Error de conexion', 'error');
+    }
+  };
+
+  const handleCancelOffer = async (offerId) => {
+    try {
+      const res = await fetch(`/api/offers/${offerId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ action: 'cancel' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSentOffers(prev => prev.map(o => o.id === offerId ? { ...o, status: 'cancelled' } : o));
+        showToast('Oferta cancelada', 'success');
+      } else {
+        showToast(data.error || 'Error al cancelar', 'error');
       }
     } catch (err) {
       showToast('Error de conexion', 'error');
@@ -454,48 +481,111 @@ export default function OrdersPage() {
         )}
 
         {activeTab === 'ofertas' && (
-          <div className={styles.cardList}>
-            {offers.length > 0 ? offers.map(offer => {
-              const isReceived = offer.to_user_id === session?.id;
-              const partner = isReceived ? offer.from_user : offer.to_user;
-              const fmt = (n) => `${Number(n || 0).toFixed(2)} €`;
+          <div>
+            <div className={styles.subTabs}>
+              <button
+                className={`${styles.subTab} ${offerTab === 'received' ? styles.subTabActive : ''}`}
+                onClick={() => setOfferTab('received')}
+              >
+                Recibidas
+              </button>
+              <button
+                className={`${styles.subTab} ${offerTab === 'sent' ? styles.subTabActive : ''}`}
+                onClick={() => setOfferTab('sent')}
+              >
+                Enviadas
+              </button>
+            </div>
 
-              return (
-                <div key={offer.id} className={styles.card}>
-                  <div className={styles.cardHeader}>
-                    <div className={styles.productInfo}>
-                      <img src={offer.product?.image || 'https://via.placeholder.com/80'} alt={offer.product?.title} className={styles.productImage} />
-                      <div className={styles.productDetails}>
-                        <span className={styles.productTitle}>{offer.product?.title || 'Producto'}</span>
-                        <span className={styles.productPrice}>Oferta: {fmt(offer.amount)} · Original: {fmt(offer.original_price)}</span>
-                        <div className={styles.partnerInfo}>
-                          {isReceived ? 'De:' : 'Para:'}
-                          <div className={styles.avatar}>{getInitials(partner?.name)}</div>
-                          {partner?.name || 'Usuario'}
+            {offerTab === 'received' && (
+              <div className={styles.cardList}>
+                {offers.length > 0 ? offers.map(offer => {
+                  const partner = offer.from_user;
+                  const fmt = (n) => `${Number(n || 0).toFixed(2)} €`;
+                  return (
+                    <div key={offer.id} className={styles.card}>
+                      <div className={styles.cardHeader}>
+                        <div className={styles.productInfo}>
+                          <img src={offer.product?.image || 'https://via.placeholder.com/80'} alt={offer.product?.title} className={styles.productImage} />
+                          <div className={styles.productDetails}>
+                            <span className={styles.productTitle}>{offer.product?.title || 'Producto'}</span>
+                            <span className={styles.productPrice}>Oferta: {fmt(offer.amount)} · Original: {fmt(offer.original_price)}</span>
+                            <div className={styles.partnerInfo}>
+                              De:
+                              <div className={styles.avatar}>{getInitials(partner?.name)}</div>
+                              {partner?.name || 'Usuario'}
+                            </div>
+                          </div>
+                        </div>
+                        <div className={styles.cardActions}>
+                          {getStatusBadge(offer.status)}
+                          <span className={styles.date}>{offer.created_at ? new Date(offer.created_at).toLocaleDateString('es-ES') : '—'}</span>
                         </div>
                       </div>
-                    </div>
-                    <div className={styles.cardActions}>
-                      {getStatusBadge(offer.status)}
-                      <span className={styles.date}>{offer.created_at ? new Date(offer.created_at).toLocaleDateString('es-ES') : '—'}</span>
-                    </div>
-                  </div>
-
-                  <div className={styles.cardBody}>
-                    {offer.message && (
-                      <div className={styles.shippingInfo}>
-                        <span>Mensaje: &ldquo;{offer.message}&rdquo;</span>
+                      <div className={styles.cardBody}>
+                        {offer.message && (
+                          <div className={styles.shippingInfo}>
+                            <span>Mensaje: &ldquo;{offer.message}&rdquo;</span>
+                          </div>
+                        )}
+                        {offer.status === 'pending' && (
+                          <OfferActions offer={offer} onRespond={handleRespondToOffer} />
+                        )}
                       </div>
-                    )}
+                    </div>
+                  );
+                }) : (
+                  <div className={styles.emptyState}>No hay ofertas recibidas.</div>
+                )}
+              </div>
+            )}
 
-                    {isReceived && offer.status === 'pending' && (
-                      <OfferActions offer={offer} onRespond={handleRespondToOffer} />
-                    )}
-                  </div>
-                </div>
-              );
-            }) : (
-              <div className={styles.emptyState}>No hay ofertas activas.</div>
+            {offerTab === 'sent' && (
+              <div className={styles.cardList}>
+                {sentOffers.length > 0 ? sentOffers.map(offer => {
+                  const partner = offer.to_user;
+                  const fmt = (n) => `${Number(n || 0).toFixed(2)} €`;
+                  return (
+                    <div key={offer.id} className={styles.card}>
+                      <div className={styles.cardHeader}>
+                        <div className={styles.productInfo}>
+                          <img src={offer.product?.image || 'https://via.placeholder.com/80'} alt={offer.product?.title} className={styles.productImage} />
+                          <div className={styles.productDetails}>
+                            <span className={styles.productTitle}>{offer.product?.title || 'Producto'}</span>
+                            <span className={styles.productPrice}>Oferta: {fmt(offer.amount)} · Original: {fmt(offer.original_price)}</span>
+                            <div className={styles.partnerInfo}>
+                              Para:
+                              <div className={styles.avatar}>{getInitials(partner?.name)}</div>
+                              {partner?.name || 'Usuario'}
+                            </div>
+                          </div>
+                        </div>
+                        <div className={styles.cardActions}>
+                          {getStatusBadge(offer.status)}
+                          <span className={styles.date}>{offer.created_at ? new Date(offer.created_at).toLocaleDateString('es-ES') : '—'}</span>
+                        </div>
+                      </div>
+                      <div className={styles.cardBody}>
+                        {offer.message && (
+                          <div className={styles.shippingInfo}>
+                            <span>Mensaje: &ldquo;{offer.message}&rdquo;</span>
+                          </div>
+                        )}
+                        {offer.status === 'pending' && (
+                          <button
+                            className={`${styles.actionButton} ${styles.danger}`}
+                            onClick={() => handleCancelOffer(offer.id)}
+                          >
+                            Cancelar oferta
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }) : (
+                  <div className={styles.emptyState}>No has enviado ofertas.</div>
+                )}
+              </div>
             )}
           </div>
         )}

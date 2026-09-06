@@ -44,6 +44,34 @@
   border-bottom-color: var(--accent-primary);
 }
 
+.subTabs {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.subTab {
+  padding: 8px 16px;
+  border-radius: 20px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.subTab:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.subTabActive {
+  background: var(--accent-primary);
+  color: #fff;
+  border-color: var(--accent-primary);
+}
+
 .cardList {
   display: flex;
   flex-direction: column;
