@@ -20,14 +20,16 @@ export default function CollectionsPage() {
 
   useEffect(() => {
     if (!session?.id) { router.push('/auth'); return; }
-    loadCollections();
+    let cancelled = false;
+    loadCollections(cancelled);
+    return () => { cancelled = true; };
   }, [session]);
 
-  const loadCollections = async () => {
+  const loadCollections = async (cancelled) => {
     try {
       const res = await authFetch('/api/collections');
       const data = await res.json();
-      setCollections(data.collections || []);
+      if (!cancelled) setCollections(data.collections || []);
     } catch { showToast('Error al cargar colecciones', 'error'); }
     setLoading(false);
   };

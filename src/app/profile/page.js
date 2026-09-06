@@ -83,9 +83,11 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (!user?.id) return;
+    let cancelled = false;
     fetch(`/api/products/search?limit=100`)
       .then((r) => r.json())
       .then((data) => {
+        if (cancelled) return;
         const mine = (data.products || []).filter((p) => {
           const sellerId = typeof p.seller === "object" ? p.seller?.id : p.seller;
           return sellerId === user.id;
@@ -93,6 +95,7 @@ export default function ProfilePage() {
         setUserProducts(mine);
       })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, [user?.id]);
 
   useEffect(() => {

@@ -46,6 +46,7 @@ export default function SellerProfilePage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [followLoading, setFollowLoading] = useState(false);
   const [sellerPage, setSellerPage] = useState(0);
   const [buyerPage, setBuyerPage] = useState(0);
   const [productsAtStart, setProductsAtStart] = useState(true);
@@ -122,6 +123,7 @@ export default function SellerProfilePage() {
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   const handleFollow = async () => {
+    if (followLoading) return;
     if (!session?.id) {
       showToast("Inicia sesión para seguir", "info");
       router.push("/auth");
@@ -137,6 +139,7 @@ export default function SellerProfilePage() {
       showToast("No se pudo identificar al usuario", "error");
       return;
     }
+    setFollowLoading(true);
     const headers = { ...(await getAuthHeaders()), "Content-Type": "application/json" };
     const method = isFollowing ? "DELETE" : "POST";
     const url = isFollowing ? `/api/follow?targetUserId=${targetId}` : "/api/follow";
@@ -159,6 +162,8 @@ export default function SellerProfilePage() {
       }
     } catch (e) {
       showToast("Error de conexión", "error");
+    } finally {
+      setFollowLoading(false);
     }
   };
 
@@ -350,6 +355,7 @@ export default function SellerProfilePage() {
               <button
                 className={`${styles.followBtn} ${isFollowing ? styles.following : ""}`}
                 onClick={handleFollow}
+                disabled={followLoading}
               >
                 {isFollowing ? (
                   <>

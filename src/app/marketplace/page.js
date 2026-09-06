@@ -206,7 +206,7 @@ function MarketplaceContent() {
     return () => observer.disconnect();
   }, [hasMore, loadingMore, loading, dbProducts.length, currentPage]);
 
-  const fetchProducts = useCallback(async (page, append = false) => {
+  const fetchProducts = useCallback(async (page, append = false, signal) => {
     const params = buildSearchParams({
       q: searchQuery,
       category: selectedCategory,
@@ -218,7 +218,7 @@ function MarketplaceContent() {
     });
 
     try {
-      const res = await fetch(`/api/products/search?${params}`);
+      const res = await fetch(`/api/products/search?${params}`, { signal });
       const data = await res.json();
       const normalized = (data.products || []).map((p) => ({
         ...p,
@@ -234,15 +234,17 @@ function MarketplaceContent() {
       setHasMore(normalized.length >= PAGE_LIMIT);
       setCurrentPage(data.page || page);
     } catch {
-      if (!append) setDbProducts([]);
+      if (!signal?.aborted && !append) setDbProducts([]);
     }
   }, [searchQuery, selectedCategory, conditionFilter, sortBy, minPrice, maxPrice]);
 
   // Initial load from URL params
   useEffect(() => {
+    const controller = new AbortController();
     const initialPage = parseInt(searchParams.get("page") || "1", 10);
     setCurrentPage(initialPage);
-    fetchProducts(initialPage, false).then(() => setLoading(false));
+    fetchProducts(initialPage, false, controller.signal).then(() => setLoading(false));
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -269,12 +271,14 @@ function MarketplaceContent() {
     setDbProducts([]);
     setHasMore(true);
 
+    const controller = new AbortController();
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      fetchProducts(1, false);
+      fetchProducts(1, false, controller.signal);
     }, searchQuery ? 300 : 0);
 
     return () => {
+      controller.abort();
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [searchQuery, selectedCategory, conditionFilter, sortBy, minPrice, maxPrice, router, fetchProducts]);

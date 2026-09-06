@@ -379,19 +379,50 @@ export function AppProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   // Favorites helpers
   // ─────────────────────────────────────────────────────────────
-  const toggleFavorite = useCallback((productId) => {
+  const toggleFavorite = useCallback(async (productId) => {
+    const wasFavorited = favorites.has(productId);
+
+    // Optimistic update
     setFavorites((prev) => {
       const next = new Set(prev);
-      if (next.has(productId)) {
+      if (wasFavorited) {
         next.delete(productId);
-        showToast("Eliminado de favoritos", "info");
       } else {
         next.add(productId);
-        showToast("Añadido a favoritos ♥", "success");
       }
       return next;
     });
-  }, [showToast]);
+    showToast(wasFavorited ? "Eliminado de favoritos" : "Añadido a favoritos ♥", "success");
+
+    // Sync with server
+    try {
+      const result = await toggleFavoriteAPI(productId);
+      if (result !== null && result !== undefined) {
+        // Server confirmed — reconcile if different from optimistic
+        setFavorites((prev) => {
+          const next = new Set(prev);
+          if (result) {
+            next.add(productId);
+          } else {
+            next.delete(productId);
+          }
+          return next;
+        });
+      }
+    } catch {
+      // Rollback on failure
+      setFavorites((prev) => {
+        const next = new Set(prev);
+        if (wasFavorited) {
+          next.add(productId);
+        } else {
+          next.delete(productId);
+        }
+        return next;
+      });
+      showToast("Error al actualizar favorito", "error");
+    }
+  }, [favorites, showToast]);
 
   // ─────────────────────────────────────────────────────────────
   // Notifications helpers

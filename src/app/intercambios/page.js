@@ -31,33 +31,35 @@ export default function IntercambiosPage() {
 
   useEffect(() => {
     if (!session?.id) { router.push('/auth'); return; }
-    loadMatches();
-    loadProposals();
+    let cancelled = false;
+    loadMatches(cancelled);
+    loadProposals(cancelled);
     // Check if we should open proposal modal from URL
     const targetId = searchParams.get('newProposal');
     if (targetId) {
       setTab('proposals');
       openProposalFor(targetId);
     }
+    return () => { cancelled = true; };
   }, [session, searchParams]);
 
-  const loadMatches = async () => {
+  const loadMatches = async (cancelled) => {
     setMatchLoading(true);
     try {
       const res = await authFetch('/api/match');
       const data = await res.json();
-      setMatches(data.matches || []);
-      setMatchHint(data.hint || '');
+      if (!cancelled) setMatches(data.matches || []);
+      if (!cancelled) setMatchHint(data.hint || '');
     } catch { showToast('Error al cargar matches', 'error'); }
     setMatchLoading(false);
   };
 
-  const loadProposals = async () => {
+  const loadProposals = async (cancelled) => {
     setProposalsLoading(true);
     try {
       const res = await authFetch('/api/trade-proposals');
       const data = await res.json();
-      setProposals(data.proposals || []);
+      if (!cancelled) setProposals(data.proposals || []);
     } catch { showToast('Error al cargar propuestas', 'error'); }
     setProposalsLoading(false);
   };
