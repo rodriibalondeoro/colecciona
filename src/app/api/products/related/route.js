@@ -28,7 +28,10 @@ export async function GET(req) {
 
   if (error) {
     console.error("[Products Related]", error.message);
-    return NextResponse.json({ products: [] });
+    return NextResponse.json(
+      { error: "Error interno del servidor" },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json({ products: data || [] });
