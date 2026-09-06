@@ -167,10 +167,15 @@ export async function POST(req) {
             email: user.email,
             password: tempPassword,
           });
-          if (!sessionErr && sessionData?.session) {
-            accessToken = sessionData.session.access_token;
-            refreshToken = sessionData.session.refresh_token;
+          if (sessionErr || !sessionData?.session) {
+            console.error("[SMS Verify] Session creation failed:", sessionErr?.message);
+            return NextResponse.json({
+              success: false,
+              error: "Teléfono verificado pero no se pudo crear la sesión. Intenta iniciar sesión manualmente.",
+            }, { status: 500 });
           }
+          accessToken = sessionData.session.access_token;
+          refreshToken = sessionData.session.refresh_token;
         }
       }
     }
