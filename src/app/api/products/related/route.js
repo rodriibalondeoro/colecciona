@@ -26,5 +26,10 @@ export async function GET(req) {
 
   const { data, error } = await query;
 
+  if (error) {
+    console.error("[Products Related]", error.message);
+    return NextResponse.json({ products: [] });
+  }
+
   return NextResponse.json({ products: data || [] });
 }
