@@ -1522,7 +1522,10 @@ BEGIN
     v_shortfall NUMERIC;
   BEGIN
     IF v_seller_earnings > 0 THEN
-      SELECT balance INTO v_balance_before FROM wallet WHERE user_id = v_order.seller_id;
+      -- FOR UPDATE: serializes concurrent refunds for the same seller.
+      -- Without this, two concurrent refunds could both read the same balance,
+      -- both calculate debit based on stale data, and the second triggers CHECK (balance >= 0).
+      SELECT balance INTO v_balance_before FROM wallet WHERE user_id = v_order.seller_id FOR UPDATE;
       v_balance_before := COALESCE(v_balance_before, 0);
 
       -- Case 1: wallet has sufficient balance → full debit
