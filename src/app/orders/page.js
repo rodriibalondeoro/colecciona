@@ -49,8 +49,8 @@ export default function OrdersPage() {
         const offersData = offersRes.ok ? await offersRes.json() : { offers: [] };
         const sentOffersData = sentOffersRes.ok ? await sentOffersRes.json() : { offers: [] };
 
-        const myOrders = (ordersData.orders || []).filter(o => o.buyer_id === session?.user?.id || o.buyer_id === session?.id);
-        const mySales = (ordersData.orders || []).filter(o => o.seller_id === session?.user?.id || o.seller_id === session?.id);
+        const myOrders = (ordersData.orders || []).filter(o => o.buyer_id === session?.user?.id);
+        const mySales = (ordersData.orders || []).filter(o => o.seller_id === session?.user?.id);
 
         setOrders(myOrders);
         setSales(mySales);
@@ -190,12 +190,12 @@ export default function OrdersPage() {
         },
         body: JSON.stringify({ action: 'cancel' }),
       });
-      const data = await res.json();
-      if (data.success) {
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
         setSentOffers(prev => prev.map(o => o.id === offerId ? { ...o, status: 'cancelled' } : o));
         showToast('Oferta cancelada', 'success');
       } else {
-        showToast(data.error || 'Error al cancelar', 'error');
+        showToast(data?.error || 'Error al cancelar', 'error');
       }
     } catch (err) {
       showToast('Error de conexion', 'error');
