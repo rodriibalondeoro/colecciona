@@ -92,7 +92,7 @@ export default function OrdersPage() {
       const data = await res.json();
       if (data.success) {
         setSales(prev => prev.map(s =>
-          s.id === selectedSaleId ? { ...s, status: ORDER_STATES.SHIPPED, tracking_code: trackingCode } : s
+          s.id === selectedSaleId ? { ...s, status: ORDER_STATES.SHIPPED, tracking_number: trackingCode } : s
         ));
         setIsShippingModalOpen(false);
         showToast('Envio marcado como enviado', 'success');
@@ -112,17 +112,63 @@ export default function OrdersPage() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ status: ORDER_STATES.COMPLETED }),
+        body: JSON.stringify({ status: ORDER_STATES.DELIVERED }),
       });
 
       const data = await res.json();
       if (data.success) {
         setOrders(prev => prev.map(o =>
-          o.id === orderId ? { ...o, status: ORDER_STATES.COMPLETED } : o
+          o.id === orderId ? { ...o, status: ORDER_STATES.DELIVERED } : o
         ));
-        showToast('Recepcion confirmada! Valoracion disponible.', 'success');
+        showToast('Entrega confirmada', 'success');
       } else {
         showToast(data.error || 'Error al confirmar', 'error');
+      }
+    } catch (err) {
+      showToast('Error de conexion', 'error');
+    }
+  };
+
+  const handleCompleteOrder = async (orderId) => {
+    try {
+      const res = await fetch(`/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ status: ORDER_STATES.COMPLETED }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setOrders(prev => prev.map(o =>
+          o.id === orderId ? { ...o, status: ORDER_STATES.COMPLETED } : o
+        ));
+        showToast('Pedido completado', 'success');
+      } else {
+        showToast(data.error || 'Error al completar', 'error');
+      }
+    } catch (err) {
+      showToast('Error de conexion', 'error');
+    }
+  };
+
+  const handleMarkPreparing = async (orderId) => {
+    try {
+      const res = await fetch(`/api/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ status: ORDER_STATES.PREPARING }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSales(prev => prev.map(s => s.id === orderId ? { ...s, status: ORDER_STATES.PREPARING } : s));
+        showToast('Pedido en preparación', 'success');
+      } else {
+        showToast(data.error || 'Error al actualizar', 'error');
       }
     } catch (err) {
       showToast('Error de conexion', 'error');
@@ -213,14 +259,14 @@ export default function OrdersPage() {
 
   const renderProgressBar = (status) => {
     const normalized = normalizeOrderStatus(status);
-    const steps = [ORDER_STATES.PAID, ORDER_STATES.SHIPPED, ORDER_STATES.COMPLETED];
+    const steps = [ORDER_STATES.PAID, ORDER_STATES.PREPARING, ORDER_STATES.SHIPPED, ORDER_STATES.DELIVERED, ORDER_STATES.COMPLETED];
     let currentIndex = steps.indexOf(normalized);
     if (currentIndex === -1) currentIndex = 0;
     if ([ORDER_STATES.CANCELLED, ORDER_STATES.REFUNDED, ORDER_STATES.DISPUTED].includes(normalized)) return null;
 
     return (
       <div className={styles.progressBar}>
-        {['Pagado', 'Enviado', 'Entregado'].map((label, idx) => (
+        {['Pagado', 'Preparando', 'Enviado', 'Entregado', 'Completado'].map((label, idx) => (
           <div key={idx} className={styles.progressStep}>
             <div className={`${styles.stepDot} ${idx < currentIndex ? styles.completed : idx === currentIndex ? styles.active : ''}`}>
               {idx < currentIndex ? '✓' : (idx + 1)}
@@ -273,9 +319,9 @@ export default function OrdersPage() {
               <div key={order.id} className={styles.card}>
                 <div className={styles.cardHeader}>
                   <div className={styles.productInfo}>
-                    <img src={order.product?.image || 'https://via.placeholder.com/80'} alt={order.product?.title} className={styles.productImage} />
+                    <img src={order.items?.[0]?.product?.image || 'https://via.placeholder.com/80'} alt={order.items?.[0]?.product?.title} className={styles.productImage} />
                     <div className={styles.productDetails}>
-                      <span className={styles.productTitle}>{order.product?.title || 'Producto'}</span>
+                      <span className={styles.productTitle}>{order.items?.[0]?.product?.title || 'Producto'}</span>
                       <span className={styles.productPrice}>{order.total || order.price} €</span>
                       <div className={styles.partnerInfo}>
                         Vendedor:
@@ -294,7 +340,7 @@ export default function OrdersPage() {
                   {order.shipping_method && (
                     <div className={styles.shippingInfo}>
                       <span>Envio: {order.shipping_method}</span>
-                      {order.tracking_code && <span>Seguimiento: <span className={styles.trackingCode}>{order.tracking_code}</span></span>}
+                      {order.tracking_number && <span>Seguimiento: <span className={styles.trackingCode}>{order.tracking_number}</span></span>}
                     </div>
                   )}
 
@@ -306,6 +352,14 @@ export default function OrdersPage() {
                       onClick={() => handleConfirmDelivery(order.id)}
                     >
                       CONFIRMAR RECEPCION
+                    </button>
+                  )}
+                  {normalizeOrderStatus(order.status) === ORDER_STATES.DELIVERED && (
+                    <button
+                      className={`${styles.actionButton} ${styles.success}`}
+                      onClick={() => handleCompleteOrder(order.id)}
+                    >
+                      COMPLETAR PEDIDO
                     </button>
                   )}
                   {normalizeOrderStatus(order.status) === ORDER_STATES.COMPLETED && !reviewedOrderIds.has(order.id) && !order.reviewed && (
@@ -332,7 +386,7 @@ export default function OrdersPage() {
         {activeTab === 'ventas' && (
           <div className={styles.cardList}>
             {sales.length > 0 ? sales.map(sale => {
-              const priceNum = parseFloat(sale.price || 0);
+              const priceNum = parseFloat(sale.total || 0);
               const earning = (priceNum * 0.92).toFixed(2);
 
               return (
@@ -357,23 +411,32 @@ export default function OrdersPage() {
 
                   <div className={styles.cardBody}>
                     <div className={styles.shippingInfo}>
-                      <span>Precio venta: {sale.price} €</span>
+                      <span>Precio venta: {sale.total} €</span>
                       <span>Cobraras (aprox): <strong className={styles.trackingCode}>{earning} €</strong></span>
                     </div>
 
                     {renderProgressBar(sale.status)}
 
-                    {normalizeOrderStatus(sale.status) === ORDER_STATES.SHIPPED && sale.tracking_code && (
-                      <div className={styles.shippingInfo} style={{ alignItems: 'center' }}>
+                    {normalizeOrderStatus(sale.status) === ORDER_STATES.SHIPPED && sale.tracking_number && (
+                      <div className={styles.qrSection}>
                         <ShippingQR
-                          value={`https://colecciona.com/rastreo/${encodeURIComponent(sale.tracking_code)}`}
-                          label={`QR de envío · ${sale.tracking_code}`}
+                          value={`https://colecciona.com/rastreo/${encodeURIComponent(sale.tracking_number)}`}
+                          label={`QR de envío · ${sale.tracking_number}`}
                           size={140}
                         />
                       </div>
                     )}
 
                     {normalizeOrderStatus(sale.status) === ORDER_STATES.PAID && (
+                      <button
+                        className={`${styles.actionButton} ${styles.primary}`}
+                        onClick={() => handleMarkPreparing(sale.id)}
+                      >
+                        Preparar envío
+                      </button>
+                    )}
+
+                    {normalizeOrderStatus(sale.status) === ORDER_STATES.PREPARING && (
                       <button
                         className={`${styles.actionButton} ${styles.primary}`}
                         onClick={() => openShippingModal(sale.id)}

@@ -99,7 +99,7 @@ export async function GET(req) {
         const supabase = createClient(url, key);
         let dbQuery = supabase
           .from("products")
-          .select("*, seller:users(id, username, name, avatar, bio, level, level_name, sales, purchases, rating, location, followers, following)", { count: "exact" });
+          .select("*, seller:profiles!products_seller_fkey(id, username, name, avatar, bio, level, level_name, sales, purchases, rating, location, followers, following)", { count: "exact" });
 
         dbQuery = dbQuery.eq("status", "ACTIVE");
 

@@ -137,7 +137,7 @@ export function AppProvider({ children }) {
   // Fetch notifications from API & subscribe to realtime
   // ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!session?.id) return;
+    if (!(session?.user?.id || session?.id)) return;
 
     let cancelled = false;
 
@@ -167,7 +167,7 @@ export function AppProvider({ children }) {
       }
     };
     fetchNotifications();
-    const unsubNotifs = subscribeToNotifications(session.id, (notif) => {
+    const unsubNotifs = subscribeToNotifications(session?.user?.id || session?.id, (notif) => {
       if (cancelled) return;
       setNotifications((prev) => [
         {
@@ -195,7 +195,7 @@ export function AppProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   // Load threads from server on mount
   useEffect(() => {
-    if (!session?.id) {
+    if (!(session?.user?.id || session?.id)) {
       setThreads([]);
       return;
     }
@@ -222,11 +222,11 @@ export function AppProvider({ children }) {
 
   // Subscribe to realtime incoming messages
   useEffect(() => {
-    if (!session?.id) return;
+    if (!(session?.user?.id || session?.id)) return;
 
-    const unsub = subscribeToMessages(session.id, (msg) => {
+    const unsub = subscribeToMessages(session?.user?.id || session?.id, (msg) => {
       // Ignore own messages (already added optimistically)
-      if (msg.sender_id === session.id) return;
+      if (msg.sender_id === (session?.user?.id || session?.id)) return;
 
       setThreads((prev) => {
         const partnerId = msg.sender_id;
@@ -327,7 +327,7 @@ export function AppProvider({ children }) {
   // Persist favorites locally per user
   useEffect(() => {
     try {
-      const key = session?.id ? `colecciona_favorites_${session.id}` : "colecciona_favorites";
+      const key = (session?.user?.id || session?.id) ? `colecciona_favorites_${session?.user?.id || session?.id}` : "colecciona_favorites";
       localStorage.setItem(key, JSON.stringify([...favorites]));
     } catch {}
   }, [favorites, session]);
@@ -662,7 +662,7 @@ export function AppProvider({ children }) {
 
     // Send to server
     persistMessage({
-      senderId: session?.id,
+      senderId: session?.user?.id || session?.id,
       receiverId,
       productId,
       text,
