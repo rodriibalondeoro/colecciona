@@ -28,6 +28,18 @@ export default function IntercambiosPage() {
   const [selectedTheirItems, setSelectedTheirItems] = useState([]);
   const [proposalMsg, setProposalMsg] = useState('');
   const [sending, setSending] = useState(false);
+  const sendingRef = useState(false);
+
+  // Counter-offer state
+  const [showCounter, setShowCounter] = useState(false);
+  const [counterTarget, setCounterTarget] = useState(null);
+  const [counterMyItems, setCounterMyItems] = useState([]);
+  const [counterTheirItems, setCounterTheirItems] = useState([]);
+  const [selectedCounterMyItems, setSelectedCounterMyItems] = useState([]);
+  const [selectedCounterTheirItems, setSelectedCounterTheirItems] = useState([]);
+  const [counterMsg, setCounterMsg] = useState('');
+  const [counterSending, setCounterSending] = useState(false);
+  const counterSendingRef = useState(false);
 
   useEffect(() => {
     if (!session?.id) { router.push('/auth'); return; }
@@ -112,6 +124,8 @@ export default function IntercambiosPage() {
       showToast('Elementos inválidos — recarga la página e intenta de nuevo', 'error');
       return;
     }
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     try {
       const res = await authFetch('/api/trade-proposals', {
@@ -133,7 +147,84 @@ export default function IntercambiosPage() {
         showToast(data.error || 'Error al enviar', 'error');
       }
     } catch { showToast('Error', 'error'); }
+    sendingRef.current = false;
     setSending(false);
+  };
+
+  const openCounterOffer = async (proposal) => {
+    const otherUserId = proposal.proposer_id;
+    setCounterTarget(proposal);
+    setSelectedCounterMyItems([]);
+    setSelectedCounterTheirItems([]);
+    setCounterMsg('');
+    setShowCounter(true);
+
+    // Load my FOR_TRADE items (what I will offer as new proposer)
+    try {
+      const res = await authFetch(`/api/collections?userId=${session.id}`);
+      const data = await res.json();
+      const allItems = [];
+      for (const col of data.collections || []) {
+        const itemRes = await authFetch(`/api/collections/${col.id}/items?status=FOR_TRADE`);
+        const itemData = await itemRes.json();
+        allItems.push(...(itemData.items || []).map(i => ({ ...i, collectionName: col.name })));
+      }
+      setCounterMyItems(allItems);
+    } catch {}
+
+    // Load original proposer's FOR_TRADE items (what I can ask for)
+    try {
+      const res = await authFetch(`/api/collections?userId=${otherUserId}`);
+      const data = await res.json();
+      const theirItems = [];
+      for (const col of data.collections || []) {
+        const itemRes = await authFetch(`/api/collections/${col.id}/items?status=FOR_TRADE`);
+        const itemData = await itemRes.json();
+        theirItems.push(...(itemData.items || []).map(i => ({ ...i, collectionName: col.name })));
+      }
+      setCounterTheirItems(theirItems);
+    } catch {
+      setCounterTheirItems([]);
+      showToast('No se pudieron cargar las cartas del otro usuario', 'error');
+    }
+  };
+
+  const handleCounterOffer = async () => {
+    if (!counterTarget) return;
+    if (!selectedCounterMyItems.length && !selectedCounterTheirItems.length) {
+      showToast('Selecciona al menos un elemento', 'error');
+      return;
+    }
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const allIds = [...selectedCounterMyItems, ...selectedCounterTheirItems];
+    if (!allIds.every(id => UUID_RE.test(id))) {
+      showToast('Elementos inválidos — recarga la página e intenta de nuevo', 'error');
+      return;
+    }
+    if (counterSendingRef.current) return;
+    counterSendingRef.current = true;
+    setCounterSending(true);
+    try {
+      const res = await authFetch(`/api/trade-proposals/${counterTarget.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'COUNTERED',
+          message: counterMsg || null,
+          new_proposer_items: selectedCounterMyItems.map(id => ({ collection_item_id: id, quantity: 1 })),
+          new_receiver_items: selectedCounterTheirItems.map(id => ({ collection_item_id: id, quantity: 1 })),
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast('Contraoferta enviada', 'success');
+        setShowCounter(false);
+        loadProposals();
+      } else {
+        showToast(data.error || 'Error al enviar contraoferta', 'error');
+      }
+    } catch { showToast('Error', 'error'); }
+    counterSendingRef.current = false;
+    setCounterSending(false);
   };
 
   const handleStatusChange = async (proposalId, newStatus) => {
@@ -311,6 +402,7 @@ export default function IntercambiosPage() {
                        {['PROPOSED', 'COUNTERED'].includes(p.status) && !isProposer && (
                         <div className={styles.proposalActions}>
                           <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'ACCEPTED'); }} className={styles.acceptBtn}>✓ Aceptar</button>
+                          <button onClick={(e) => { e.preventDefault(); openCounterOffer(p); }} className={styles.counterBtn}>⇄ Contraoferta</button>
                           <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'SUPERSEDED'); }} className={styles.rejectBtn}>✕ Rechazar</button>
                         </div>
                       )}
@@ -374,6 +466,53 @@ export default function IntercambiosPage() {
                   <button onClick={handleCreateProposal} disabled={sending || (!selectedMyItems.length && !selectedTheirItems.length)}
                     className={styles.submitBtn}>
                     {sending ? 'Enviando...' : 'Enviar propuesta'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Counter-Offer Modal */}
+        {showCounter && (
+          <div className={styles.modal} onClick={() => setShowCounter(false)}>
+            <div className={styles.modalContent} onClick={e => e.stopPropagation()}>
+              <h2>Contraoferta</h2>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 14px' }}>
+                Modifica los elementos para proponer un nuevo intercambio. La propuesta original será reemplazada.
+              </p>
+              <div className={styles.proposalForm}>
+                <div className={styles.formSection}>
+                  <label>Tú ofreces:</label>
+                  {counterMyItems.length === 0 ? (
+                    <p className={styles.formHint}>No tienes cromos marcados para intercambio.</p>
+                  ) : counterMyItems.map(item => (
+                    <label key={item.id} className={styles.checkItem}>
+                      <input type="checkbox" checked={selectedCounterMyItems.includes(item.id)}
+                        onChange={e => setSelectedCounterMyItems(prev => e.target.checked ? [...prev, item.id] : prev.filter(id => id !== item.id))} />
+                      {item.card_name} {item.card_number ? `#${item.card_number}` : ''} ({item.collectionName})
+                    </label>
+                  ))}
+                </div>
+                <div className={styles.formSection}>
+                  <label>Pides a cambio:</label>
+                  {counterTheirItems.length === 0 ? (
+                    <p className={styles.formHint}>No se pudieron cargar las cartas del otro usuario.</p>
+                  ) : counterTheirItems.map((item, i) => (
+                    <label key={i} className={styles.checkItem}>
+                      <input type="checkbox" checked={selectedCounterTheirItems.includes(item.id)}
+                        onChange={e => setSelectedCounterTheirItems(prev => e.target.checked ? [...prev, item.id] : prev.filter(n => n !== item.id))} />
+                      {item.card_name}
+                    </label>
+                  ))}
+                </div>
+                <textarea placeholder="Mensaje (opcional)" value={counterMsg} onChange={e => setCounterMsg(e.target.value)}
+                  className={styles.input} rows={2} />
+                <div className={styles.formActions}>
+                  <button onClick={() => setShowCounter(false)} className={styles.cancelBtn}>Cancelar</button>
+                  <button onClick={handleCounterOffer} disabled={counterSending || (!selectedCounterMyItems.length && !selectedCounterTheirItems.length)}
+                    className={styles.submitBtn}>
+                    {counterSending ? 'Enviando...' : 'Enviar contraoferta'}
                   </button>
                 </div>
               </div>

@@ -74,6 +74,7 @@
 
 .proposalActions { display: flex; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
 .acceptBtn { padding: 8px 16px; background: var(--emerald); border: none; border-radius: var(--radius-xs); color: white; font-size: 12px; font-weight: 700; cursor: pointer; }
+.counterBtn { padding: 8px 16px; background: var(--accent-primary); border: none; border-radius: var(--radius-xs); color: white; font-size: 12px; font-weight: 700; cursor: pointer; }
 .rejectBtn { padding: 8px 16px; background: transparent; border: 1px solid var(--border-medium); border-radius: var(--radius-xs); color: var(--text-muted); font-size: 12px; cursor: pointer; }
 
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
