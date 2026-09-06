@@ -101,6 +101,9 @@ export async function DELETE(req) {
       return NextResponse.json({ error: "Error al anonimizar los datos" }, { status: 500 });
     }
 
+    // 2b. Clean up push subscriptions (prevent notifications to deleted user)
+    await serviceClient.from("push_subscriptions").delete().eq("user_id", userId);
+
     // 3. Delete personal storage files (best-effort)
     try {
       const { data: files } = await serviceClient.storage.from(STORAGE_BUCKET).list(`${userId}`, {

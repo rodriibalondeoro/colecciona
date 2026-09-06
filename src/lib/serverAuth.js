@@ -19,6 +19,17 @@ export async function verifyAuth(req) {
   if (error || !data?.user) {
     return { user: null, error: "Token inválido" };
   }
+
+  // Check if account has been deleted — reject even with valid JWT
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("deleted_at")
+    .eq("id", data.user.id)
+    .single();
+  if (profile?.deleted_at) {
+    return { user: null, error: "Cuenta eliminada" };
+  }
+
   return { user: data.user, error: null };
 }
 

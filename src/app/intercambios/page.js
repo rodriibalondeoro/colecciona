@@ -361,8 +361,8 @@ export default function IntercambiosPage() {
                     <p className={styles.formHint}>Los elementos que buscas aparecerán aquí.</p>
                   ) : theirForTradeItems.map((item, i) => (
                     <label key={i} className={styles.checkItem}>
-                      <input type="checkbox" checked={selectedTheirItems.includes(item.card_name)}
-                        onChange={e => setSelectedTheirItems(prev => e.target.checked ? [...prev, item.card_name] : prev.filter(n => n !== item.card_name))} />
+                      <input type="checkbox" checked={selectedTheirItems.includes(item.id)}
+                        onChange={e => setSelectedTheirItems(prev => e.target.checked ? [...prev, item.id] : prev.filter(n => n !== item.id))} />
                       {item.card_name}
                     </label>
                   ))}

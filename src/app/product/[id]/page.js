@@ -24,6 +24,7 @@ export default function ProductDetailPage() {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [addedToCart, setAddedToCart] = useState(false);
   const [relatedProducts, setRelatedProducts] = useState([]);
+  const [otherProducts, setOtherProducts] = useState([]);
   const [product, setProduct] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
@@ -162,6 +163,17 @@ export default function ProductDetailPage() {
       .catch(() => setRelatedProducts([]));
   }, [product]);
 
+  // Other products from same seller
+  useEffect(() => {
+    if (!product?.seller) return;
+    const sellerId = typeof product.seller === "object" ? product.seller.id : product.seller;
+    if (!sellerId) return;
+    fetch(`/api/products/related?id=${product.id}&seller=${sellerId}`)
+      .then((res) => res.json())
+      .then((data) => setOtherProducts(data.products || []))
+      .catch(() => setOtherProducts([]));
+  }, [product]);
+
   if (loading) {
     return (
       <div className={styles.notFoundWrapper}>
@@ -218,9 +230,6 @@ export default function ProductDetailPage() {
   if (gallery.length === 0 && product.image) gallery.push(product.image);
   const activeImage = gallery[Math.min(activeImageIndex, gallery.length - 1)] || product.image;
 
-  const otherProducts = mockProducts.filter(
-    (p) => p.seller === seller?.id && p.id !== product.id
-  );
   const mockReviewCount = seller
     ? (mockReviews[seller.id]?.asSeller?.length || 0) + (mockReviews[seller.id]?.asBuyer?.length || 0)
     : 0;

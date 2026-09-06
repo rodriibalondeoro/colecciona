@@ -1231,6 +1231,7 @@ DECLARE
   v_released_count INTEGER;
 BEGIN
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'Authentication required'; END IF;
+  PERFORM assert_not_deleted();
 
   -- Lock order
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
