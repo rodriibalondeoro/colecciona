@@ -42,17 +42,17 @@ export async function POST(req) {
       return NextResponse.json({ error: "Título demasiado largo (máximo 200 caracteres)" }, { status: 400 });
     }
 
-    const price = Number(body.price);
-    if (!Number.isFinite(price) || price <= 0) {
+    if (typeof body.price !== "number" || !Number.isFinite(body.price) || body.price <= 0) {
       return NextResponse.json({ error: "Precio inválido" }, { status: 400 });
     }
-    if (price > 999999.99) {
+    if (body.price > 999999.99) {
       return NextResponse.json({ error: "Precio demasiado alto" }, { status: 400 });
     }
-    const priceDecimals = price.toString().split(".")[1];
+    const priceDecimals = body.price.toString().split(".")[1];
     if (priceDecimals && priceDecimals.length > 2) {
       return NextResponse.json({ error: "Precio máximo 2 decimales" }, { status: 400 });
     }
+    const price = body.price;
 
     if (body.description !== undefined && body.description !== null) {
       if (typeof body.description !== "string") {
