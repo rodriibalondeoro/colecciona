@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import styles from "./PSAVerifier.module.css";
 
 // Base de datos de certificados PSA mock válidos para simulación oficial
@@ -54,6 +54,11 @@ export default function PSAVerifier({ onVerify }) {
   const [stepIndex, setStepIndex] = useState(0);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const intervalRef = useRef(null);
+
+  useEffect(() => {
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, []);
 
   const handleVerify = () => {
     if (!certNumber.trim()) return;
@@ -63,12 +68,13 @@ export default function PSAVerifier({ onVerify }) {
     setStepIndex(0);
 
     let i = 0;
-    const tick = setInterval(() => {
+    intervalRef.current = setInterval(() => {
       i += 1;
       if (i < VERIFY_STEPS.length) {
         setStepIndex(i);
       } else {
-        clearInterval(tick);
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
         const data = PSA_DATABASE[certNumber.trim()];
         setLoading(false);
         if (data) {

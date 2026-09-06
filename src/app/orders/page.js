@@ -28,6 +28,7 @@ export default function OrdersPage() {
   const token = session?.access_token || session?.accessToken;
 
   useEffect(() => {
+    let cancelled = false;
     async function fetchData() {
       setLoading(true);
       try {
@@ -37,6 +38,8 @@ export default function OrdersPage() {
           fetch('/api/orders', { headers }),
           fetch('/api/offers?type=received', { headers }),
         ]);
+
+        if (cancelled) return;
 
         const ordersData = ordersRes.ok ? await ordersRes.json() : { orders: [] };
         const offersData = offersRes.ok ? await offersRes.json() : { offers: [] };
@@ -48,9 +51,9 @@ export default function OrdersPage() {
         setSales(mySales);
         setOffers(offersData.offers || []);
       } catch (err) {
-        console.error('Error fetching data:', err);
+        if (!cancelled) console.error('Error fetching data:', err);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
@@ -59,6 +62,7 @@ export default function OrdersPage() {
     } else {
       setLoading(false);
     }
+    return () => { cancelled = true; };
   }, [token, session]);
 
   const getInitials = (name) => {

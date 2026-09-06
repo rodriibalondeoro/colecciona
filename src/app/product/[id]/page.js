@@ -33,8 +33,9 @@ export default function ProductDetailPage() {
     const id = params.id;
     if (!id) return;
 
+    const controller = new AbortController();
     setLoading(true);
-    fetch(`/api/products/${encodeURIComponent(id)}`)
+    fetch(`/api/products/${encodeURIComponent(id)}`, { signal: controller.signal })
       .then((res) => res.json())
       .then((data) => {
         if (data.success && data.product) {
@@ -43,8 +44,10 @@ export default function ProductDetailPage() {
           setProduct(null);
         }
       })
-      .catch(() => setProduct(null))
-      .finally(() => setLoading(false));
+      .catch(() => { if (!controller.signal.aborted) setProduct(null); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+
+    return () => controller.abort();
   }, [params.id]);
 
   useEffect(() => {

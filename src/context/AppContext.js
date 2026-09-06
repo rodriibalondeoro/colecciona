@@ -139,6 +139,8 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!session?.id) return;
 
+    let cancelled = false;
+
     // Fetch existing notifications
     const fetchNotifications = async () => {
       try {
@@ -148,7 +150,7 @@ export function AppProvider({ children }) {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = await res.json();
-        if (data.notifications?.length) {
+        if (!cancelled && data.notifications?.length) {
           setNotifications(data.notifications.map((n) => ({
             id: n.id,
             type: n.type,
@@ -166,6 +168,7 @@ export function AppProvider({ children }) {
 
     // Subscribe to realtime notifications
     const unsubNotifs = subscribeToNotifications(session.id, (notif) => {
+      if (cancelled) return;
       setNotifications((prev) => [
         {
           id: notif.id,
@@ -181,7 +184,10 @@ export function AppProvider({ children }) {
       ]);
     });
 
-    return () => unsubNotifs();
+    return () => {
+      cancelled = true;
+      unsubNotifs();
+    };
   }, [session]);
 
   // ─────────────────────────────────────────────────────────────
@@ -194,6 +200,8 @@ export function AppProvider({ children }) {
       return;
     }
 
+    let cancelled = false;
+
     const loadThreads = async () => {
       try {
         const token = session?.access_token;
@@ -202,12 +210,14 @@ export function AppProvider({ children }) {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = await res.json();
-        if (data.threads) setThreads(data.threads);
+        if (!cancelled && data.threads) setThreads(data.threads);
       } catch (err) {
         console.warn("[AppContext] Error loading threads:", err);
       }
     };
     loadThreads();
+
+    return () => { cancelled = true; };
   }, [session]);
 
   // Subscribe to realtime incoming messages
@@ -265,8 +275,9 @@ export function AppProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return;
+    let cancelled = false;
     getFavorites().then((ids) => {
-      if (ids && ids.length > 0) {
+      if (!cancelled && ids && ids.length > 0) {
         setFavorites((prev) => {
           const next = new Set(prev);
           ids.forEach((id) => next.add(id));
@@ -274,6 +285,7 @@ export function AppProvider({ children }) {
         });
       }
     }).catch(() => {});
+    return () => { cancelled = true; };
   }, [session]);
 
   // ─────────────────────────────────────────────────────────────
@@ -281,8 +293,9 @@ export function AppProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return;
+    let cancelled = false;
     getOffers().then((list) => {
-      if (list.length) {
+      if (!cancelled && list.length) {
         setOffers(list.map((o) => ({
           id: o.id,
           productId: o.product_id,
@@ -298,6 +311,7 @@ export function AppProvider({ children }) {
         })));
       }
     }).catch(() => {});
+    return () => { cancelled = true; };
   }, [session]);
 
   // ─────────────────────────────────────────────────────────────

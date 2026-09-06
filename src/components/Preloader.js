@@ -16,8 +16,8 @@ export default function Preloader() {
     const prefersReduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     if (prefersReduced) {
       setLeaving(true);
-      setTimeout(() => setGone(true), 300);
-      return;
+      const t = setTimeout(() => setGone(true), 300);
+      return () => clearTimeout(t);
     }
 
     document.documentElement.classList.add("preloader-active");
@@ -27,6 +27,7 @@ export default function Preloader() {
     const duration = 1500;
     const start = performance.now();
     let raf;
+    let timers = [];
 
     const tick = (t) => {
       const raw = Math.min(1, (t - start) / duration);
@@ -35,17 +36,18 @@ export default function Preloader() {
       if (raw < 1) {
         raf = requestAnimationFrame(tick);
       } else {
-        setTimeout(() => {
+        timers.push(setTimeout(() => {
           setLeaving(true);
           document.documentElement.classList.remove("preloader-active");
-          setTimeout(() => setGone(true), 800);
-        }, 250);
+          timers.push(setTimeout(() => setGone(true), 800));
+        }, 250));
       }
     };
     raf = requestAnimationFrame(tick);
 
     return () => {
       cancelAnimationFrame(raf);
+      timers.forEach(clearTimeout);
       document.documentElement.classList.remove("preloader-active");
     };
   }, []);

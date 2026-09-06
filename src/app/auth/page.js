@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { findUserByPhone, findUserByUsername, findUserByEmail, users } from "@/data/mockData";
 import { registerUser, resetPassword } from "@/lib/dataService";
 import { normalizePhone } from "@/lib/phone";
 import { supabase } from "@/lib/supabase";
@@ -58,51 +57,18 @@ export default function AuthPage() {
 
   // --- REAL-TIME Phone Duplicate Check ---
   const checkPhone = (localNumber) => {
-    const rawPhone = `${prefix}${localNumber.replace(/\s/g, "")}`;
-    if (localNumber.replace(/\s/g, "").length < 7) {
-      setPhoneError(null);
-      setConflictUser(null);
-      return;
-    }
-    const existing = findUserByPhone(rawPhone);
-    if (existing) {
-      setConflictUser(existing);
-      setPhoneError(
-        `Este número de teléfono ya está asociado a una cuenta activa. Sólo se permite una cuenta por número de teléfono.`
-      );
-    } else {
-      setConflictUser(null);
-      setPhoneError(null);
-    }
+    setPhoneError(null);
+    setConflictUser(null);
   };
 
   // --- REAL-TIME Username Duplicate Check ---
   const checkUsername = (val) => {
-    const clean = val.replace("@", "").trim();
-    if (clean.length < 3) {
-      setUsernameError(null);
-      return;
-    }
-    const existing = findUserByUsername(clean);
-    if (existing) {
-      setUsernameError(`El nombre de usuario @${clean} ya está en uso. Elige otro.`);
-    } else {
-      setUsernameError(null);
-    }
+    setUsernameError(null);
   };
 
   // --- REAL-TIME Email Duplicate Check ---
   const checkEmail = (val) => {
-    if (!val.includes("@")) {
-      setEmailError(null);
-      return;
-    }
-    const existing = findUserByEmail(val);
-    if (existing) {
-      setEmailError(`Este email ya tiene una cuenta activa (@${existing.username}). ¿Quieres iniciar sesión?`);
-    } else {
-      setEmailError(null);
-    }
+    setEmailError(null);
   };
 
   // --- Send OTP ---

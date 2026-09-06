@@ -153,7 +153,7 @@ export default function SellPage() {
         condition,
         price: numericPrice,
         image: finalImage || "/images/cards/collection.png",
-        seller: session?.id || "u1",
+        seller: session?.id,
         sellerName: session?.name || null,
         code: title.split(" ").pop(),
         rarity: null,

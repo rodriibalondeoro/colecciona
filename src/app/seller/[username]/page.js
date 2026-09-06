@@ -94,16 +94,18 @@ export default function SellerProfilePage() {
       return;
     }
     setSearchingUser(true);
-    fetch(`/api/users/search?q=${username}`)
+    const controller = new AbortController();
+    fetch(`/api/users/search?q=${username}`, { signal: controller.signal })
       .then(r => r.json())
       .then(data => {
         const found = (data.users || []).find(u => u.username === username);
-        if (found) setSellerDb(found);
+        if (!controller.signal.aborted && found) setSellerDb(found);
       })
       .catch(() => {})
       .finally(() => {
-        setSearchingUser(false);
+        if (!controller.signal.aborted) setSearchingUser(false);
       });
+    return () => controller.abort();
   }, [username]);
 
   useEffect(() => {
