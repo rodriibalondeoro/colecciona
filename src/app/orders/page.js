@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
 import ShippingQR from '@/components/ShippingQR';
+import { authFetch } from '@/lib/authFetch';
 import styles from './page.module.css';
 import { ORDER_STATES, normalizeOrderStatus } from '@/lib/orderStates';
 
@@ -35,8 +36,8 @@ export default function OrdersPage() {
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
         const [ordersRes, offersRes] = await Promise.all([
-          fetch('/api/orders', { headers }),
-          fetch('/api/offers?type=received', { headers }),
+          authFetch('/api/orders'),
+          authFetch('/api/offers?type=received'),
         ]);
 
         if (cancelled) return;
@@ -130,9 +131,10 @@ export default function OrdersPage() {
 
   const handleRespondToOffer = async (offerId, action, counterAmount) => {
     try {
-      const body = { status: action };
+      const actionMap = { accepted: 'accept', rejected: 'reject', countered: 'counter', cancelled: 'cancel' };
+      const body = { action: actionMap[action] || action };
       if (action === 'countered' && counterAmount) {
-        body.counter_amount = counterAmount;
+        body.amount = counterAmount;
       }
 
       const res = await fetch(`/api/offers/${offerId}`, {

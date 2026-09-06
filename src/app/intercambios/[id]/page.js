@@ -170,10 +170,10 @@ export default function TradeProposalDetail() {
             )}
           </div>
 
-          {['PROPOSED', 'COUNTERED'].includes(proposal.status) && !isProposer && (
+           {['PROPOSED', 'COUNTERED'].includes(proposal.status) && !isProposer && (
             <div className={styles.actions}>
               <button onClick={() => handleStatus('ACCEPTED')} disabled={updating} className={styles.acceptBtn}>✓ Aceptar propuesta</button>
-              <button onClick={() => handleStatus('CANCELLED')} disabled={updating} className={styles.rejectBtn}>✕ Rechazar</button>
+              <button onClick={() => handleStatus('SUPERSEDED')} disabled={updating} className={styles.rejectBtn}>✕ Rechazar</button>
             </div>
           )}
           {proposal.status === 'ACCEPTED' && isProposer && (

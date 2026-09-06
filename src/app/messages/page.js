@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useApp } from '@/context/AppContext';
+import { authFetch } from '@/lib/authFetch';
 import styles from './page.module.css';
 
 function timeAgo(dateStr) {
@@ -72,12 +73,14 @@ function MessagesInner() {
   };
 
   const activeThread = threads.find(t => t.id === activeThreadId);
+  const sendingRef = useRef(false);
 
   useEffect(() => {
     if (!session?.id) return;
-    fetch('/api/trade-proposals', {
-      headers: { Authorization: `Bearer ${localStorage.getItem('colecciona_session') ? JSON.parse(localStorage.getItem('colecciona_session')).access_token || JSON.parse(localStorage.getItem('colecciona_session')).accessToken : ''}` }
-    }).then(r => r.json()).then(d => setProposals(d.proposals || [])).catch(() => {});
+    authFetch('/api/trade-proposals')
+      .then(r => r.json())
+      .then(d => setProposals(d.proposals || []))
+      .catch(() => {});
   }, [session]);
 
   const activeProposal = activeThread?.partner?.id
@@ -129,11 +132,13 @@ function MessagesInner() {
   }, [markThreadRead]);
 
   const handleSend = () => {
-    if (messageText.trim() && activeThreadId) {
+    if (messageText.trim() && activeThreadId && !sendingRef.current) {
+      sendingRef.current = true;
       if (sendMessage) {
         sendMessage(activeThreadId, messageText);
       }
       setMessageText('');
+      setTimeout(() => { sendingRef.current = false; }, 500);
     }
   };
 

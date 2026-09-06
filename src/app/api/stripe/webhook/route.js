@@ -92,8 +92,23 @@ export async function POST(req) {
         }
 
         if (existing.status === "processing") {
-          console.log(`[Webhook] Event ${event.id} being processed by another request — skipping`);
-          return NextResponse.json({ received: true, duplicate: true });
+          // Check if stale (>5min) — reclaim if crashed during processing
+          const { data: row } = await supabase
+            .from("webhook_events")
+            .select("created_at")
+            .eq("stripe_event_id", event.id)
+            .single();
+          const stale = row && (Date.now() - new Date(row.created_at).getTime()) > 5 * 60 * 1000;
+          if (stale) {
+            console.log(`[Webhook] Stale processing event ${event.id} (>5min) — reclaiming`);
+            await supabase
+              .from("webhook_events")
+              .update({ status: "processing", processed_at: null })
+              .eq("stripe_event_id", event.id);
+          } else {
+            console.log(`[Webhook] Event ${event.id} being processed by another request — skipping`);
+            return NextResponse.json({ received: true, duplicate: true });
+          }
         }
 
         if (existing.status === "failed") {

@@ -1,8 +1,11 @@
 import { supabase } from "./supabase";
 
+let redirecting = false;
+
 /**
  * Client-side auth helper for fetch calls.
  * Returns headers with Bearer token from Supabase Auth (or localStorage fallback).
+ * Automatically redirects to /auth on 401 responses.
  */
 export async function authFetch(url, options = {}) {
   let token = null;
@@ -35,5 +38,17 @@ export async function authFetch(url, options = {}) {
     headers["Content-Type"] = "application/json";
   }
 
-  return fetch(url, { ...options, headers });
+  const res = await fetch(url, { ...options, headers });
+
+  if (res.status === 401 && !redirecting) {
+    redirecting = true;
+    console.warn("[authFetch] 401 received — session expired, redirecting to /auth");
+    try {
+      if (supabase) await supabase.auth.signOut();
+      localStorage.removeItem("colecciona_session");
+    } catch {}
+    window.location.href = "/auth";
+  }
+
+  return res;
 }

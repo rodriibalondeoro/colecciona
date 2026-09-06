@@ -51,7 +51,7 @@ export default function IntercambiosPage() {
       if (!cancelled) setMatches(data.matches || []);
       if (!cancelled) setMatchHint(data.hint || '');
     } catch { showToast('Error al cargar matches', 'error'); }
-    setMatchLoading(false);
+    if (!cancelled) setMatchLoading(false);
   };
 
   const loadProposals = async (cancelled) => {
@@ -61,7 +61,7 @@ export default function IntercambiosPage() {
       const data = await res.json();
       if (!cancelled) setProposals(data.proposals || []);
     } catch { showToast('Error al cargar propuestas', 'error'); }
-    setProposalsLoading(false);
+    if (!cancelled) setProposalsLoading(false);
   };
 
   const openProposalFor = async (userId) => {
@@ -84,11 +84,23 @@ export default function IntercambiosPage() {
       setMyForTradeItems(allItems);
     } catch {}
 
-    // Load their FOR_TRADE items (via match data)
-    const match = matches.find(m => m.userId === userId);
-    if (match) {
-      // Items they can give us are what we're missing
-      setTheirForTradeItems(match.youCanGet.map(name => ({ card_name: name })));
+    // Load their FOR_TRADE items (actual UUIDs from their collections)
+    try {
+      const res = await authFetch(`/api/collections?userId=${userId}`);
+      const data = await res.json();
+      const theirItems = [];
+      for (const col of data.collections || []) {
+        const itemRes = await authFetch(`/api/collections/${col.id}/items?status=FOR_TRADE`);
+        const itemData = await itemRes.json();
+        theirItems.push(...(itemData.items || []).map(i => ({ ...i, collectionName: col.name })));
+      }
+      setTheirForTradeItems(theirItems);
+    } catch {
+      // Fallback: use match data (names only) — won't work for proposal creation
+      const match = matches.find(m => m.userId === userId);
+      if (match) {
+        setTheirForTradeItems(match.youCanGet.map(name => ({ card_name: name })));
+      }
     }
   };
 
@@ -105,7 +117,7 @@ export default function IntercambiosPage() {
           receiver_id: proposalTarget,
           message: proposalMsg || null,
           proposer_items: selectedMyItems.map(id => ({ collection_item_id: id, quantity: 1 })),
-          receiver_items: selectedTheirItems.map(name => ({ card_name: name })),
+          receiver_items: selectedTheirItems.map(id => ({ collection_item_id: id, quantity: 1 })),
         }),
       });
       const data = await res.json();
@@ -293,10 +305,10 @@ export default function IntercambiosPage() {
                         </div>
                       </div>
                       {p.message && <p className={styles.proposalMsg}>"{p.message}"</p>}
-                      {['PROPOSED', 'COUNTERED'].includes(p.status) && !isProposer && (
+                       {['PROPOSED', 'COUNTERED'].includes(p.status) && !isProposer && (
                         <div className={styles.proposalActions}>
                           <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'ACCEPTED'); }} className={styles.acceptBtn}>✓ Aceptar</button>
-                          <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'CANCELLED'); }} className={styles.rejectBtn}>✕ Rechazar</button>
+                          <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'SUPERSEDED'); }} className={styles.rejectBtn}>✕ Rechazar</button>
                         </div>
                       )}
                       {p.status === 'ACCEPTED' && isProposer && (
