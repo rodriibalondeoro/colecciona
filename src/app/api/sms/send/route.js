@@ -83,7 +83,7 @@ export async function POST(req) {
       });
     }
 
-    console.log(`📱 [Colecciona SMS Mock] Código enviado a ${otpKey}: ${code} (Expira en 5 min)`);
+    console.log(`📱 [Colecciona SMS Mock] Código enviado a ${otpKey} (Expira en 5 min)`);
     return NextResponse.json({
       success: true,
       message: "Código SMS enviado con éxito",

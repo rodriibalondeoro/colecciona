@@ -3,6 +3,8 @@ import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 import { ORDER_STATES, canTransitionOrder, normalizeOrderStatus } from "@/lib/orderStates";
 import { rateLimit } from "@/lib/rateLimit";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function mapRpcError(message) {
   if (!message) return { status: 500, code: "INTERNAL" };
   const codeMatch = message.match(/^\[([A-Z_]+)\]/);
@@ -36,6 +38,9 @@ export async function PATCH(req, { params }) {
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
     const { id } = await params;
+    if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
+      return NextResponse.json({ error: "ID de pedido inválido" }, { status: 400 });
+    }
     const body = await req.json().catch(() => null);
     if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
     const nextStatus = body.status ? normalizeOrderStatus(body.status) : null;

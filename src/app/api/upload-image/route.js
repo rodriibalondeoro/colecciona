@@ -12,18 +12,14 @@ const ALLOWED_IMAGE_TYPES = new Map([
 
 export async function POST(req) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const isDev = process.env.NODE_ENV !== "production";
-    if (!isDev) {
-      const rl = await rateLimit(`upload:${ip}`, { limit: 5, windowMs: 60000 });
-      if (!rl.allowed) {
-        return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
-      }
-    }
-
     const { user, error: authError } = await verifyAuth(req);
     if (authError) {
       return NextResponse.json({ error: authError }, { status: 401 });
+    }
+
+    const rl = await rateLimit(`upload:${user.id}`, { limit: 5, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
     }
 
     const token = extractToken(req);

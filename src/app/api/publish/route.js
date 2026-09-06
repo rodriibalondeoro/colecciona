@@ -19,15 +19,14 @@ function mapRpcError(message) {
 
 export async function POST(req) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = await rateLimit(`publish:${ip}`, { limit: 10, windowMs: 60000 });
-    if (!rl.allowed) {
-      return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
-    }
-
     const { user, error: authError } = await verifyAuth(req);
     if (authError) {
       return NextResponse.json({ error: authError }, { status: 401 });
+    }
+
+    const rl = await rateLimit(`publish:${user.id}`, { limit: 10, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
     }
 
     const token = extractToken(req);
@@ -36,11 +35,39 @@ export async function POST(req) {
     const body = await req.json().catch(() => null);
     if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
 
+    if (!body.title || typeof body.title !== "string" || body.title.trim().length === 0) {
+      return NextResponse.json({ error: "Título inválido" }, { status: 400 });
+    }
+    if (body.title.length > 200) {
+      return NextResponse.json({ error: "Título demasiado largo (máximo 200 caracteres)" }, { status: 400 });
+    }
+
+    const price = Number(body.price);
+    if (!Number.isFinite(price) || price <= 0) {
+      return NextResponse.json({ error: "Precio inválido" }, { status: 400 });
+    }
+    if (price > 999999.99) {
+      return NextResponse.json({ error: "Precio demasiado alto" }, { status: 400 });
+    }
+    const priceDecimals = price.toString().split(".")[1];
+    if (priceDecimals && priceDecimals.length > 2) {
+      return NextResponse.json({ error: "Precio máximo 2 decimales" }, { status: 400 });
+    }
+
+    if (body.description !== undefined && body.description !== null) {
+      if (typeof body.description !== "string") {
+        return NextResponse.json({ error: "description debe ser texto" }, { status: 400 });
+      }
+      if (body.description.length > 2000) {
+        return NextResponse.json({ error: "Descripción demasiado larga (máximo 2000 caracteres)" }, { status: 400 });
+      }
+    }
+
     // Call atomic RPC (locks collection_item, checks availability, inserts product)
     const supabase = createUserClient(token);
     const { data, error: rpcError } = await supabase.rpc("publish_product", {
-      p_title: body.title,
-      p_price: Number(body.price),
+      p_title: body.title.trim(),
+      p_price: price,
       p_image: body.image || "",
       p_category: body.category || "",
       p_condition: body.condition || "",

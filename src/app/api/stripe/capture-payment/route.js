@@ -12,15 +12,14 @@ export async function POST(req) {
   let orderId = null;
 
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = await rateLimit(`capture-payment:${ip}`, { limit: 5, windowMs: 60000 });
-    if (!rl.allowed) {
-      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
-    }
-
     const { user, error: authError } = await verifyAuth(req);
     if (authError) {
       return NextResponse.json({ error: authError }, { status: 401 });
+    }
+
+    const rl = await rateLimit(`capture-payment:${user.id}`, { limit: 5, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
     }
 
     const body = await req.json().catch(() => null);
@@ -75,7 +74,7 @@ export async function POST(req) {
     const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
     if (pi.status !== "requires_capture") {
       await supabase.rpc("clear_capture_in_progress", { p_order_id: orderId });
-      return NextResponse.json({ error: `PaymentIntent status is ${pi.status}, expected requires_capture` }, { status: 400 });
+      return NextResponse.json({ error: "El pago no está listo para capturar" }, { status: 400 });
     }
 
     // 4. Capture with idempotency key (prevents duplicate capture on retry/timeout)

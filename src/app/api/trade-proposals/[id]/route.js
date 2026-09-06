@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function mapRpcError(message) {
   if (!message) return { status: 500 };
   const codeMatch = message.match(/^\[([A-Z_]+)\]/);
@@ -35,6 +37,9 @@ export async function GET(req, { params }) {
     }
 
     const { id } = await params;
+    if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
+      return NextResponse.json({ error: "ID de propuesta inválido" }, { status: 400 });
+    }
     const token = extractToken(req);
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
@@ -89,6 +94,9 @@ export async function PATCH(req, { params }) {
     }
 
     const { id } = await params;
+    if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
+      return NextResponse.json({ error: "ID de propuesta inválido" }, { status: 400 });
+    }
     const token = extractToken(req);
     if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 

@@ -9,12 +9,6 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 export async function DELETE(req, { params }) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown";
-    const rl = await rateLimit(`publish-delete:${ip}`, { limit: 10, windowMs: 60000 });
-    if (!rl.allowed) {
-      return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
-    }
-
     if (!url || !key) {
       return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
     }
@@ -38,6 +32,11 @@ export async function DELETE(req, { params }) {
     const { user, error: authError } = await verifyAuth(req);
     if (authError) {
       return NextResponse.json({ error: authError }, { status: 401 });
+    }
+
+    const rl = await rateLimit(`publish-delete:${user.id}`, { limit: 10, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones. Espera un momento." }, { status: 429 });
     }
 
     if (product.seller !== user.id) {
