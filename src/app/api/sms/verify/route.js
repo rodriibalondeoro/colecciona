@@ -116,6 +116,8 @@ export async function POST(req) {
     let user = null;
     let userPhone = normalizedKey;
     let tempPassword = null;
+    let accessToken = null;
+    let refreshToken = null;
     if (url && key) {
       const supabase = createClient(url, key);
       if (isEmail) {
@@ -157,6 +159,19 @@ export async function POST(req) {
           if (result.newId) { user.id = result.newId; user.email = result.email; }
           else if (result.error) console.error("[SMS Verify] Migration error:", result.error);
         }
+
+        // Create session server-side — never expose tempPassword to client
+        if (user?.id && user?.email) {
+          const userClient = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+          const { data: sessionData, error: sessionErr } = await userClient.auth.signInWithPassword({
+            email: user.email,
+            password: tempPassword,
+          });
+          if (!sessionErr && sessionData?.session) {
+            accessToken = sessionData.session.access_token;
+            refreshToken = sessionData.session.refresh_token;
+          }
+        }
       }
     }
 
@@ -165,7 +180,8 @@ export async function POST(req) {
       message: "Teléfono verificado correctamente",
       user,
       phone: userPhone,
-      tempPassword,
+      accessToken,
+      refreshToken,
     });
   } catch (error) {
     console.error("Error en SMS Verify API:", error);

@@ -270,18 +270,18 @@ export default function AuthPage() {
           return;
         }
 
-        // Crear sesión Supabase con la contraseña temporal del servidor
-        if (supabase && json.tempPassword && sessionUser?.email) {
+        // Use server-created session tokens (tempPassword never exposed to client)
+        if (supabase && json.accessToken && json.refreshToken) {
           try {
-            const { data: sessionData } = await supabase.auth.signInWithPassword({
-              email: sessionUser.email,
-              password: json.tempPassword,
+            const { error: setErr } = await supabase.auth.setSession({
+              access_token: json.accessToken,
+              refresh_token: json.refreshToken,
             });
-            if (sessionData?.session?.access_token) {
-              sessionUser.access_token = sessionData.session.access_token;
+            if (!setErr) {
+              sessionUser.access_token = json.accessToken;
             }
           } catch (e) {
-            console.warn("[Auth] No se pudo crear sesión Supabase:", e?.message);
+            console.warn("[Auth] No se pudo establecer sesión Supabase:", e?.message);
           }
         }
 
