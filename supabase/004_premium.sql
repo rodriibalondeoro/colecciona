@@ -61,6 +61,8 @@ CREATE POLICY "Users can delete own alerts"
   USING (auth.uid() = user_id);
 
 -- 6. RLS para subscriptions
+-- SELECT only for users. All writes via SECURITY DEFINER sync_subscription_from_stripe().
+-- No INSERT/UPDATE/DELETE policies = denied by default for authenticated users.
 ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can view own subscriptions"
@@ -68,14 +70,22 @@ CREATE POLICY "Users can view own subscriptions"
   USING (auth.uid() = user_id);
 
 -- 7. Función para verificar si un usuario es premium
+-- DEPRECATED: reads from subscriptions table (not legacy users table).
+-- Used for reference only; create_checkout_order checks subscriptions directly.
 CREATE OR REPLACE FUNCTION public.is_user_premium(uid uuid)
 RETURNS boolean
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
+SET search_path = public
 AS $$
   SELECT COALESCE(
-    (SELECT is_premium FROM public.users WHERE id = uid LIMIT 1),
+    (SELECT EXISTS(
+      SELECT 1 FROM subscriptions
+      WHERE user_id = uid
+        AND status IN ('active','trialing')
+        AND current_period_end > now()
+    )),
     false
   );
 $$;

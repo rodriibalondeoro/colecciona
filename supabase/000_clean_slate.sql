@@ -14,6 +14,7 @@ DROP FUNCTION IF EXISTS validate_collection_item_quantities() CASCADE;
 DROP FUNCTION IF EXISTS prevent_wallet_direct_update() CASCADE;
 DROP FUNCTION IF EXISTS update_collection_totals() CASCADE;
 DROP FUNCTION IF EXISTS create_review(UUID, INTEGER, TEXT) CASCADE;
+DROP FUNCTION IF EXISTS is_user_premium(UUID) CASCADE;
 
 DROP TABLE IF EXISTS wallet_transactions CASCADE;
 DROP TABLE IF EXISTS notifications CASCADE;
@@ -33,6 +34,7 @@ DROP TABLE IF EXISTS products CASCADE;
 DROP TABLE IF EXISTS wallet CASCADE;
 DROP TABLE IF EXISTS user_private CASCADE;
 DROP TABLE IF EXISTS profiles CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
 
 DROP TYPE IF EXISTS collection_item_status CASCADE;
 DROP TYPE IF EXISTS collection_visibility CASCADE;

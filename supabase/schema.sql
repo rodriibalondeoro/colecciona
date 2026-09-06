@@ -118,6 +118,22 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ============================================================================
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 
+-- SAFETY NET: If the legacy `users` table still exists (pre-split migration),
+-- enable RLS and lock down to owner-only SELECT. This table should be dropped
+-- via 000_clean_slate.sql, but this prevents data exposure if it wasn't.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users') THEN
+    ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+    -- Drop any permissive old policies
+    DROP POLICY IF EXISTS "users_select" ON public.users;
+    DROP POLICY IF EXISTS "users_select_own" ON public.users;
+    -- Only owner can read; no INSERT/UPDATE/DELETE for users
+    CREATE POLICY "users_select_own" ON public.users
+      FOR SELECT USING (auth.uid() = id);
+    RAISE NOTICE 'Legacy users table found — RLS enabled with owner-only SELECT';
+  END IF;
+END $$;
+
 -- ============================================================================
 -- ENUMS
 -- ============================================================================
@@ -2850,6 +2866,8 @@ DROP POLICY IF EXISTS "messages_insert_sender" ON messages;
 CREATE POLICY "messages_insert_sender" ON messages FOR INSERT WITH CHECK (auth.uid() = sender_id);
 DROP POLICY IF EXISTS "messages_update_receiver" ON messages;
 CREATE POLICY "messages_update_receiver" ON messages FOR UPDATE USING (auth.uid() = receiver_id);
+DROP POLICY IF EXISTS "messages_delete_owner" ON messages;
+CREATE POLICY "messages_delete_owner" ON messages FOR DELETE USING (auth.uid() = sender_id);
 
 ALTER TABLE offers ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "offers_select_participant" ON offers;
