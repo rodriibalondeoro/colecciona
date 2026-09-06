@@ -6,4 +6,5 @@ create table if not exists public.favorites (
   unique(user_id, product_id)
 );
 alter table public.favorites enable row level security;
-create policy "favorites_all" on public.favorites for all using (true);
+DROP POLICY IF EXISTS "favorites_all" ON public.favorites;
+CREATE POLICY "favorites_owner_all" ON public.favorites FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);

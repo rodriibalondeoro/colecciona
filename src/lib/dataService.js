@@ -10,7 +10,9 @@ async function getAuthToken() {
     try {
       const { data } = await supabase.auth.getSession();
       if (data?.session?.access_token) return data.session.access_token;
-    } catch {}
+    } catch (e) {
+      console.warn("[DataService] Supabase session error:", e?.message);
+    }
     return null;
   }
   // Demo mode ONLY (Supabase not configured)

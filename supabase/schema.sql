@@ -257,6 +257,9 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 );
 CREATE INDEX IF NOT EXISTS idx_webhook_events_status ON webhook_events(status) WHERE status = 'processing';
 
+-- webhook_events: only service_role access (no RLS policies = denied to anon/authenticated)
+ALTER TABLE webhook_events ENABLE ROW LEVEL SECURITY;
+
 -- Ledger immutability: wallet_transactions is an append-only audit trail.
 -- Only backend (service_role) can INSERT. Users can SELECT. No UPDATE/DELETE.
 ALTER TABLE wallet_transactions ENABLE ROW LEVEL SECURITY;
@@ -1985,6 +1988,7 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_seller ON orders(seller_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_payment_intent ON orders(payment_intent_id);
 
 -- Order items: individual products within an order
 CREATE TABLE IF NOT EXISTS order_items (
@@ -2482,6 +2486,7 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(sender_id, receiver_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id);
 
 -- ============================================================================
 -- 10. OFFERS — price negotiation
@@ -2500,6 +2505,7 @@ CREATE TABLE IF NOT EXISTS offers (
 );
 CREATE INDEX IF NOT EXISTS idx_offers_to_user ON offers(to_user_id);
 CREATE INDEX IF NOT EXISTS idx_offers_buyer ON offers(buyer_id);
+CREATE INDEX IF NOT EXISTS idx_offers_product ON offers(product_id);
 
 -- CRITICAL: At most 1 accepted offer per product (partial unique index)
 -- Prevents data inconsistency where multiple accepted offers exist for the same product.
@@ -5061,3 +5067,16 @@ $$;
 
 REVOKE ALL ON FUNCTION anonymize_user(UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION anonymize_user(UUID) FROM authenticated;
+
+-- ============================================================================
+-- UTILITY: count distinct active sellers
+-- ============================================================================
+CREATE OR REPLACE FUNCTION count_active_sellers()
+RETURNS BIGINT
+LANGUAGE sql SECURITY DEFINER SET search_path = public
+AS $$
+  SELECT COUNT(DISTINCT seller) FROM products WHERE status = 'ACTIVE';
+$$;
+
+REVOKE ALL ON FUNCTION count_active_sellers() FROM PUBLIC;
+REVOKE ALL ON FUNCTION count_active_sellers() FROM authenticated;

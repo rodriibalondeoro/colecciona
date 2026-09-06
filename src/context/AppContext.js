@@ -162,11 +162,11 @@ export function AppProvider({ children }) {
             link: n.link || "#",
           })));
         }
-      } catch {}
+      } catch (e) {
+        console.warn("[AppContext] Notifications fetch error:", e?.message);
+      }
     };
     fetchNotifications();
-
-    // Subscribe to realtime notifications
     const unsubNotifs = subscribeToNotifications(session.id, (notif) => {
       if (cancelled) return;
       setNotifications((prev) => [

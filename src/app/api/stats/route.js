@@ -14,15 +14,13 @@ export async function GET() {
     const startToday = new Date();
     startToday.setHours(0, 0, 0, 0);
 
-    const [{ count: totalProducts }, { data: sellers }, { count: salesToday }] = await Promise.all([
+    const [{ count: totalProducts }, { data: sellersData }, { count: salesToday }] = await Promise.all([
       supabase.from("products").select("id", { count: "exact", head: true }),
-      supabase.from("products").select("seller"),
+      supabase.rpc("count_active_sellers"),
       supabase.from("orders").select("id", { count: "exact", head: true }).gte("created_at", startToday.toISOString()),
     ]);
 
-    const activeSellers = (sellers || []).filter(
-      (r, i, arr) => arr.findIndex((x) => x.seller === r.seller) === i
-    ).length;
+    const activeSellers = Number(sellersData) || 0;
 
     return NextResponse.json({
       totalProducts: totalProducts || 0,

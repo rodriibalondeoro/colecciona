@@ -128,11 +128,16 @@ export async function GET(req) {
           dbQuery = dbQuery.order("price", { ascending: true });
         } else if (sort === "price-high" || sort === "price_desc") {
           dbQuery = dbQuery.order("price", { ascending: false });
-        } else if (sort === "oldest") {
+        } else         if (sort === "oldest") {
           dbQuery = dbQuery.order("created_at", { ascending: true });
         } else {
           dbQuery = dbQuery.order("created_at", { ascending: false });
         }
+
+        // Paginate at DB level (fetch generous page for text filter + mock merge)
+        const dbRangeLimit = Math.min(limit * 3, 300);
+        const dbOffset = Math.max(0, (page - 1) * limit);
+        dbQuery = dbQuery.range(dbOffset, dbOffset + dbRangeLimit - 1);
 
         const { data, error } = await dbQuery;
         if (!error && data) {

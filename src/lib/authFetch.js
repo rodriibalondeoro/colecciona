@@ -12,7 +12,9 @@ export async function authFetch(url, options = {}) {
     try {
       const { data } = await supabase.auth.getSession();
       if (data?.session?.access_token) token = data.session.access_token;
-    } catch {}
+    } catch (e) {
+      console.warn("[authFetch] Supabase session error:", e?.message);
+    }
   } else {
     // Demo mode ONLY (Supabase not configured)
     try {

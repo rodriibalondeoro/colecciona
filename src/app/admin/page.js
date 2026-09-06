@@ -24,7 +24,9 @@ export default function AdminPage() {
           const data = await res.json();
           setStats(data.stats);
         }
-      } catch {}
+      } catch (e) {
+        console.warn("[Admin] Stats fetch error:", e?.message);
+      }
       setLoading(false);
     }
     fetchStats();

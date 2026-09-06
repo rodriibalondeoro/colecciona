@@ -22,7 +22,9 @@ export default function AuthGate({ children }) {
         try {
           localStorage.removeItem("colecciona_session");
           if (supabase) await supabase.auth.signOut();
-        } catch {}
+        } catch (e) {
+          console.warn("[AuthGate] signOut error:", e?.message);
+        }
         ignoreStoredRef.current = false;
       }
 
@@ -33,7 +35,9 @@ export default function AuthGate({ children }) {
         try {
           const { data } = await supabase.auth.getSession();
           session = data?.session;
-        } catch {}
+        } catch (e) {
+          console.warn("[AuthGate] Supabase session error:", e?.message);
+        }
       } else {
         // Demo mode ONLY (Supabase not configured)
         try {
