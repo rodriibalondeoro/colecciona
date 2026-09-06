@@ -59,7 +59,7 @@ export async function POST(req) {
 
     if (error) {
       console.error("[API /upload-image] Storage error:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error al subir la imagen" }, { status: 500 });
     }
 
     const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(data.path);

@@ -47,7 +47,7 @@ export async function GET(req) {
 
     if (error) {
       console.error("[Cron] Error fetching stale orders:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error fetching stale orders" }, { status: 500 });
     }
 
     // Process stale orders if any exist (don't return early — orphan recovery must always run)

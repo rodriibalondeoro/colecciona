@@ -2,11 +2,18 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth } from "@/lib/serverAuth";
 import { getStripe } from "@/lib/stripe";
+import { rateLimit } from "@/lib/rateLimit";
 
 const PREMIUM_AMOUNT = 499; // 4.99 EUR en centimos
 
 export async function POST(req) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || "unknown";
+    const rl = await rateLimit(`stripe-subscribe:${ip}`, { limit: 3, windowMs: 60000 });
+    if (!rl.allowed) {
+      return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+    }
+
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !serviceKey) {
@@ -82,6 +89,6 @@ export async function POST(req) {
     return NextResponse.json({ url: session.url, sessionId: session.id });
   } catch (err) {
     console.error("[Stripe Subscribe Error]", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "Error al procesar la suscripción" }, { status: 500 });
   }
 }

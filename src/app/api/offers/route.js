@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
+import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -73,6 +74,12 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
+  const ip = req.headers.get("x-forwarded-for") || "unknown";
+  const rl = await rateLimit(`offers:${ip}`, { limit: 10, windowMs: 60000 });
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Demasiadas peticiones" }, { status: 429 });
+  }
+
   const { user, error } = await verifyAuth(req);
   if (error) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
@@ -124,13 +131,13 @@ export async function POST(req) {
     p_message: message || "",
   });
 
-  if (rpcError) {
+    if (rpcError) {
     console.error("[Offers API] create_offer error:", rpcError.message);
     const mapped = mapRpcError(rpcError.message);
     if (mapped.status === 500) {
       return NextResponse.json({ error: "Error interno del servidor" }, { status: 500 });
     }
-    return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
+    return NextResponse.json({ error: "Error al crear la oferta" }, { status: mapped.status });
   }
 
   return NextResponse.json({ success: true, offer: data });

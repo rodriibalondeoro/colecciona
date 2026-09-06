@@ -88,7 +88,6 @@ export async function POST(req) {
       success: true,
       message: "Código SMS enviado con éxito",
       otpKey,
-      demoCode: code, // En modo demo (sin Twilio) se devuelve para poder probar el flujo
     });
   } catch (error) {
     console.error("Error en SMS Send API:", error);

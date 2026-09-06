@@ -165,7 +165,6 @@ export async function POST(req) {
       message: "Teléfono verificado correctamente",
       user,
       phone: userPhone,
-      tempPassword,
     });
   } catch (error) {
     console.error("Error en SMS Verify API:", error);

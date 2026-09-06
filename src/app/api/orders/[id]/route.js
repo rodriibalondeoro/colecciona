@@ -68,7 +68,7 @@ export async function PATCH(req, { params }) {
 
     if (rpcError) {
       const mapped = mapRpcError(rpcError.message);
-      return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
+      return NextResponse.json({ error: "Error al actualizar el pedido" }, { status: mapped.status });
     }
 
     return NextResponse.json({ success: true, order: data });

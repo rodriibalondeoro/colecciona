@@ -128,7 +128,7 @@ export async function PATCH(req, { params }) {
       if (rpcError) {
         console.warn("[Trade Proposal PATCH] Counter-offer error:", rpcError.message);
         const mapped = mapRpcError(rpcError.message);
-        return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
+        return NextResponse.json({ error: "Error al enviar contraoferta" }, { status: mapped.status });
       }
 
       return NextResponse.json({ ok: true, result: data });
@@ -144,7 +144,7 @@ export async function PATCH(req, { params }) {
       if (rpcError) {
         console.warn("[Trade Proposal PATCH] Accept error:", rpcError.message);
         const mapped = mapRpcError(rpcError.message);
-        return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
+        return NextResponse.json({ error: "Error al aceptar propuesta" }, { status: mapped.status });
       }
 
       return NextResponse.json({ ok: true, result: data });
@@ -162,7 +162,7 @@ export async function PATCH(req, { params }) {
     if (rpcError) {
       console.warn("[Trade Proposal PATCH] Transition error:", rpcError.message);
       const mapped = mapRpcError(rpcError.message);
-      return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
+      return NextResponse.json({ error: "Error al cambiar estado" }, { status: mapped.status });
     }
 
     return NextResponse.json({ ok: true, result: data });

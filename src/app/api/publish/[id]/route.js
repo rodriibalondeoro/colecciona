@@ -5,6 +5,7 @@ import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function DELETE(req, { params }) {
   try {
@@ -20,8 +21,8 @@ export async function DELETE(req, { params }) {
     const supabase = createClient(url, key);
     const { id } = await params;
 
-    if (!id) {
-      return NextResponse.json({ error: "Falta el ID del producto" }, { status: 400 });
+    if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
+      return NextResponse.json({ error: "ID de producto inválido" }, { status: 400 });
     }
 
     const { data: product, error: fetchError } = await supabase
@@ -47,7 +48,7 @@ export async function DELETE(req, { params }) {
 
     if (error) {
       console.error("[API /publish DELETE] Error de Supabase:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error al eliminar el producto" }, { status: 500 });
     }
 
     return NextResponse.json({ success: true });

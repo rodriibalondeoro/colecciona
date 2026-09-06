@@ -178,7 +178,7 @@ export async function POST(req) {
     if (rpcError) {
       console.warn("[Trade Proposals POST] RPC error:", rpcError.message);
       const mapped = mapRpcError(rpcError.message);
-      return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
+      return NextResponse.json({ error: "Error al crear propuesta" }, { status: mapped.status });
     }
 
     return NextResponse.json({ proposal: data });

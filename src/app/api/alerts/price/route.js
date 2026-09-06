@@ -83,13 +83,13 @@ export async function POST(req) {
 
     if (error) {
       console.error("[Price Alerts] Supabase error:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "Error guardando alerta" }, { status: 500 });
     }
 
     return NextResponse.json({ alert: data });
   } catch (err) {
     console.error("[Price Alerts POST Error]", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
 
@@ -131,6 +131,6 @@ export async function DELETE(req) {
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[Price Alerts DELETE Error]", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }

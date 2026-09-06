@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function mapRpcError(message) {
   if (!message) return { status: 500, code: "INTERNAL" };
   const codeMatch = message.match(/^\[([A-Z_]+)\]/);
@@ -39,6 +41,9 @@ export async function PATCH(req, { params }) {
   if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
   const { id } = await params;
+  if (!id || typeof id !== "string" || !UUID_RE.test(id)) {
+    return NextResponse.json({ error: "ID de oferta inválido" }, { status: 400 });
+  }
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
   const { action, amount, message } = body;
@@ -93,7 +98,7 @@ export async function PATCH(req, { params }) {
 
   if (rpcResult.error) {
     const mapped = mapRpcError(rpcResult.error.message);
-    return NextResponse.json({ error: rpcResult.error.message }, { status: mapped.status });
+    return NextResponse.json({ error: "Error al procesar la oferta" }, { status: mapped.status });
   }
 
   return NextResponse.json({ success: true, result: rpcResult.data });

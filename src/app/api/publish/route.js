@@ -56,7 +56,7 @@ export async function POST(req) {
     if (rpcError) {
       console.warn("[API /publish] RPC error:", rpcError.message);
       const mapped = mapRpcError(rpcError.message);
-      return NextResponse.json({ error: rpcError.message }, { status: mapped.status });
+      return NextResponse.json({ error: "Error al publicar el producto" }, { status: mapped.status });
     }
 
     // Notify users who have this card as MISSING (best-effort)
