@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import styles from './page.module.css';
 import { useApp } from '@/context/AppContext';
-import { products, users } from '@/data/mockData';
 import ProductCard from '@/components/ProductCard';
 import Skeleton from '@/components/Skeleton';
 
@@ -23,17 +22,14 @@ export default function FavoritesPage() {
           ...p,
           listedAt: p.listedAt || p.created_at,
         }));
-        const known = new Set(real.map((p) => p.id));
-        const mock = products.filter((p) => !known.has(p.id));
-        if (real.length) setCatalog([...real, ...mock]);
+        if (real.length) setCatalog(real);
       })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
 
-  const list = catalog.length ? catalog : products;
-  const favoriteProducts = list.filter((p) => favorites.has(p.id));
+  const favoriteProducts = catalog.filter((p) => favorites.has(p.id));
 
   return (
     <div className={styles.container}>
@@ -50,7 +46,7 @@ export default function FavoritesPage() {
             const seller =
               typeof product.seller === 'object'
                 ? product.seller
-                : users.find((u) => u.id === product.seller);
+                : null;
             return <ProductCard key={product.id} product={product} seller={seller} />;
           })}
         </div>

@@ -802,7 +802,7 @@ export function AppProvider({ children }) {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           productIds,
-          shippingMethod: cart[0]?.shippingMethod?.id || "standard",
+          shippingMethod: cart[0]?.shippingMethod?.id || "sm1",
           shippingAddress: address,
         }),
       });

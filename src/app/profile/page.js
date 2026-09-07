@@ -86,7 +86,7 @@ export default function ProfilePage() {
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
     fetch(`/api/products/search?limit=100`, { headers })
       .then((r) => r.json())
       .then((data) => {
@@ -104,7 +104,7 @@ export default function ProfilePage() {
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
     fetch("/api/orders", { headers })
       .then((r) => r.json())
       .then((data) => {

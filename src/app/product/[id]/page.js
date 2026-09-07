@@ -69,7 +69,7 @@ export default function ProductDetailPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [lightboxOpen, isOfferModalOpen]);
 
-  const seller = typeof product?.seller === "object" ? product.seller : (product?.seller ? users.find((u) => u.id === product.seller) : null);
+  const seller = typeof product?.seller === "object" ? product.seller : null;
   const sellerShippingIds = Array.isArray(seller?.seller_shipping_methods) && seller.seller_shipping_methods.length
     ? seller.seller_shipping_methods
     : shippingMethods.map((method) => method.id);
