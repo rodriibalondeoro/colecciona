@@ -248,7 +248,6 @@ export default function IntercambiosPage() {
   const statusBadge = (status) => {
     const map = {
       PROPOSED: { label: 'Propuesta', color: '#6366f1' },
-      COUNTERED: { label: 'Contraoferta', color: '#f59e0b' },
       ACCEPTED: { label: 'Aceptada', color: '#10b981' },
       SHIPPING_PENDING: { label: 'Envío pendiente', color: '#3b82f6' },
       SHIPPED: { label: 'Enviado', color: '#3b82f6' },
@@ -342,7 +341,7 @@ export default function IntercambiosPage() {
         {tab === 'proposals' && (
           <div className={styles.section}>
             <div className={styles.filterRow}>
-              {['all', 'PROPOSED', 'COUNTERED', 'ACCEPTED', 'SHIPPED', 'COMPLETED', 'CANCELLED'].map(f => (
+              {['all', 'PROPOSED', 'ACCEPTED', 'SHIPPED', 'COMPLETED', 'CANCELLED'].map(f => (
                 <button key={f} className={`${styles.filterBtn} ${proposalFilter === f ? styles.filterActive : ''}`}
                   onClick={() => setProposalFilter(f)}>
                   {f === 'all' ? 'Todas' : f}
@@ -399,7 +398,7 @@ export default function IntercambiosPage() {
                         </div>
                       </div>
                       {p.message && <p className={styles.proposalMsg}>"{p.message}"</p>}
-                       {['PROPOSED', 'COUNTERED'].includes(p.status) && !isProposer && (
+                       {p.status === 'PROPOSED' && !isProposer && (
                         <div className={styles.proposalActions}>
                           <button onClick={(e) => { e.preventDefault(); handleStatusChange(p.id, 'ACCEPTED'); }} className={styles.acceptBtn}>✓ Aceptar</button>
                           <button onClick={(e) => { e.preventDefault(); openCounterOffer(p); }} className={styles.counterBtn}>⇄ Contraoferta</button>

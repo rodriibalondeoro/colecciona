@@ -57,7 +57,6 @@ export default function TradeProposalDetail() {
   const statusBadge = (status) => {
     const map = {
       PROPOSED: { label: 'Propuesta', color: '#6366f1', icon: '📨' },
-      COUNTERED: { label: 'Contraoferta', color: '#f59e0b', icon: '🔄' },
       ACCEPTED: { label: 'Aceptada', color: '#10b981', icon: '✅' },
       SHIPPING_PENDING: { label: 'Envío pendiente', color: '#3b82f6', icon: '📦' },
       SHIPPED: { label: 'Enviado', color: '#3b82f6', icon: '🚚' },
@@ -170,7 +169,7 @@ export default function TradeProposalDetail() {
             )}
           </div>
 
-           {['PROPOSED', 'COUNTERED'].includes(proposal.status) && !isProposer && (
+           {proposal.status === 'PROPOSED' && !isProposer && (
             <div className={styles.actions}>
               <button onClick={() => handleStatus('ACCEPTED')} disabled={updating} className={styles.acceptBtn}>✓ Aceptar propuesta</button>
               <button onClick={() => handleStatus('SUPERSEDED')} disabled={updating} className={styles.rejectBtn}>✕ Rechazar</button>
@@ -191,7 +190,7 @@ export default function TradeProposalDetail() {
               <button onClick={() => handleStatus('COMPLETED')} disabled={updating} className={styles.acceptBtn}>🎉 Completar intercambio</button>
             </div>
           )}
-          {['PROPOSED', 'COUNTERED', 'ACCEPTED'].includes(proposal.status) && (
+          {['PROPOSED', 'ACCEPTED'].includes(proposal.status) && (
             <div className={styles.actions}>
               <button onClick={() => handleStatus('CANCELLED')} disabled={updating} className={styles.rejectBtn}>Cancelar propuesta</button>
             </div>
