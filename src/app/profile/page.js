@@ -18,7 +18,6 @@ export default function ProfilePage() {
   const { session, setSession, showToast } = useApp();
   const [tab, setTab] = useState("selling");
   const [withdrawModal, setWithdrawModal] = useState(false);
-  const [withdrawDone, setWithdrawDone] = useState(false);
   const [logoutModal, setLogoutModal] = useState(false);
   const [deleteModal, setDeleteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -582,45 +581,38 @@ export default function ProfilePage() {
         {withdrawModal && (
           <div className={styles.modalOverlay} onClick={() => setWithdrawModal(false)}>
             <div className={`${styles.modalDialog} modal-enter`} onClick={(e) => e.stopPropagation()}>
-              {withdrawDone ? (
-                <div className={styles.modalSuccess}>
-                  <h3>¡Transferencia en Proceso!</h3>
-                  <p>Se han enviado {walletNet.toLocaleString("es-ES", { minimumFractionDigits: 2 })} € (saldo menos 0,50€ fee) a tu IBAN registrado.</p>
+              <>
+                <h3 className={styles.modalTitle}>Retirar Saldo de Wallet</h3>
+                <p className={styles.modalSub}>El dinero se transferirá por SEPA Instant a tu banco habitual.</p>
+
+                <div className={styles.withdrawSummary}>
+                  <div className={styles.row}>
+                    <span>Saldo actual en Wallet:</span>
+                    <span className={styles.mono}>
+                      {(Number(user.balance || 0)).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                    </span>
+                  </div>
+                  <div className={styles.row}>
+                    <span>Fee de payout SEPA:</span>
+                    <span className={styles.fee}>-0,50 €</span>
+                  </div>
+                  <div className={`${styles.row} ${styles.totalRow}`}>
+                    <span>Importe abonado en tu IBAN:</span>
+                    <span className={styles.netVal}>
+                      {walletNet.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                    </span>
+                  </div>
                 </div>
-              ) : (
-                <>
-                  <h3 className={styles.modalTitle}>Retirar Saldo de Wallet</h3>
-                  <p className={styles.modalSub}>El dinero se transferirá por SEPA Instant a tu banco habitual.</p>
 
-                  <div className={styles.withdrawSummary}>
-                    <div className={styles.row}>
-                      <span>Saldo actual en Wallet:</span>
-                      <span className={styles.mono}>
-                        {(Number(user.balance || 0)).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
-                      </span>
-                    </div>
-                    <div className={styles.row}>
-                      <span>Fee de payout SEPA:</span>
-                      <span className={styles.fee}>-0,50 €</span>
-                    </div>
-                    <div className={`${styles.row} ${styles.totalRow}`}>
-                      <span>Importe abonado en tu IBAN:</span>
-                      <span className={styles.netVal}>
-                        {walletNet.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className={styles.modalActions}>
-                    <button className={styles.cancelBtn} onClick={() => setWithdrawModal(false)}>
-                      Cancelar
-                    </button>
-                    <button className={styles.confirmBtn} onClick={handleWithdrawConfirm}>
-                      Confirmar Retirada SEPA
-                    </button>
-                  </div>
-                </>
-              )}
+                <div className={styles.modalActions}>
+                  <button className={styles.cancelBtn} onClick={() => setWithdrawModal(false)}>
+                    Cancelar
+                  </button>
+                  <button className={styles.confirmBtn} onClick={handleWithdrawConfirm}>
+                    Confirmar Retirada SEPA
+                  </button>
+                </div>
+              </>
             </div>
           </div>
         )}
