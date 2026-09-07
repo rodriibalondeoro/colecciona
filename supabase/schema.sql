@@ -177,7 +177,6 @@ CREATE TABLE IF NOT EXISTS profiles (
   deleted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_profiles_username ON profiles(username);
 CREATE INDEX IF NOT EXISTS idx_profiles_is_admin ON profiles(id, is_admin) WHERE is_admin = true;
 
 -- Subtle: deleted_at cannot be empty if present

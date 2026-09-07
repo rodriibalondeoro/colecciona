@@ -8,14 +8,14 @@ DO $$
 DECLARE
   uid UUID;
 BEGIN
-  SELECT id INTO uid FROM users LIMIT 1;
+  SELECT id INTO uid FROM profiles LIMIT 1;
 
   IF uid IS NULL THEN
-    RAISE NOTICE 'No hay usuarios en la tabla users. Crea uno primero desde la app.';
+    RAISE NOTICE 'No hay usuarios en la tabla profiles. Crea uno primero desde la app.';
     RETURN;
   END IF;
 
-  INSERT INTO products (title, price, image, category, condition, seller, code, rarity, description, "set", language, year, views, favorites, created_at)
+  INSERT INTO products (title, price, image, category, condition, seller, code, rarity, description, set_name, language, year, views, favorites, created_at)
   VALUES
     ('Charizard Holo 1ª Edición', 150.00, '/images/cards/fire-phoenix.png', 'liga-este-26-27', 'LP', uid, 'BS-004', 'Holo Secret', 'Carta mítica del Base Set original de 1999.', 'Base Set (1999)', 'Español', 1999, 342, 45, '2024-03-01T10:00:00Z'),
     ('Voltron Raikou Fox Secret', 25.00, '/images/cards/electric-fox.png', 'liga-este-26-27', 'NM', uid, 'PKM-042', 'Illustration Rare', 'Edición limitada promo de torneo.', 'Crown Zenith', 'Japonés', 2023, 85, 8, '2024-03-12T16:45:00Z'),
