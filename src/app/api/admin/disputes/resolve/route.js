@@ -1,34 +1,33 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { verifyAuth, createUserClient } from "@/lib/serverAuth";
 import { getStripe } from "@/lib/stripe";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function POST(req) {
   try {
-    if (!url || !key) {
+    if (!url || !serviceKey) {
       return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
     }
 
-    const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
-    const token = authHeader.split(" ")[1];
-    const userClient = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || key, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-    const { data: { user } } = await userClient.auth.getUser();
-    if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const serviceClient = createClient(url, key);
+    const token = req.headers.get("authorization")?.slice(7);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const { data: profile } = await serviceClient
+    const userClient = createUserClient(token);
+    const { data: profile } = await userClient
       .from("profiles").select("is_admin").eq("id", user.id).single();
     if (!profile?.is_admin) {
       return NextResponse.json({ error: "No autorizado" }, { status: 403 });
     }
+
+    const serviceClient = createClient(url, serviceKey);
 
     const body = await req.json().catch(() => null);
     if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
@@ -43,16 +42,14 @@ export async function POST(req) {
     }
 
     if (type === "refund") {
-      // Full refund flow: begin_refund → Stripe Refund.create → bind → persist
       const stripe = getStripe();
       if (!stripe) {
         return NextResponse.json({ error: "Stripe not configured" }, { status: 503 });
       }
 
-      // Fetch order details first
       const { data: order, error: orderError } = await serviceClient
         .from("orders")
-        .select("id, status, seller_id, payment_intent_id, total")
+        .select("id, status, seller_id, buyer_id, payment_intent_id, total")
         .eq("id", orderId)
         .single();
 
@@ -68,7 +65,6 @@ export async function POST(req) {
         return NextResponse.json({ error: "No payment intent for this order" }, { status: 400 });
       }
 
-      // 1. Atomically transition to REFUND_PENDING
       const { data: ref, error: beginError } = await serviceClient.rpc("begin_refund", {
         p_order_id: orderId,
       });
@@ -76,7 +72,6 @@ export async function POST(req) {
         return NextResponse.json({ error: beginError?.message || "Unable to initiate refund" }, { status: 500 });
       }
 
-      // 2. Create Stripe refund
       let stripeRefund;
       try {
         stripeRefund = await stripe.refunds.create(
@@ -89,11 +84,9 @@ export async function POST(req) {
         );
       } catch (stripeErr) {
         console.error("[Admin resolve] Stripe refund failed:", stripeErr);
-        // Ambiguous error — don't revert REFUND_PENDING, let webhook reconcile
         return NextResponse.json({ error: "Refund initiated but Stripe outcome pending" }, { status: 500 });
       }
 
-      // 3. Bind active refund identity
       const { error: bindError } = await serviceClient.rpc("bind_active_refund", {
         p_order_id: orderId,
         p_refund_id: stripeRefund.id,
@@ -102,7 +95,6 @@ export async function POST(req) {
         console.error("[Admin resolve] Bind failed:", bindError.message);
       }
 
-      // 4. Persist refund record
       await serviceClient.from("refunds").insert({
         order_id: orderId,
         payment_intent_id: order.payment_intent_id,
@@ -113,7 +105,6 @@ export async function POST(req) {
         reason: "requested_by_customer",
       });
 
-      // 5. Notify buyer
       await serviceClient.from("notifications").insert({
         user_id: order.buyer_id,
         type: "refund",
@@ -126,7 +117,7 @@ export async function POST(req) {
       return NextResponse.json({ success: true, result: { order_id: orderId, status: "REFUND_PENDING", refund_id: stripeRefund.id } });
     }
 
-    // type === "complete" — resolve dispute in favor of completing (seller wins)
+    // type === "complete"
     const { error } = await serviceClient
       .from("orders")
       .update({ status: "COMPLETED", completed_at: new Date().toISOString() })
@@ -138,7 +129,6 @@ export async function POST(req) {
       return NextResponse.json({ error: error.message || "Error completing order" }, { status: 500 });
     }
 
-    // Notify both parties
     const { data: orderInfo } = await serviceClient
       .from("orders").select("buyer_id, seller_id").eq("id", orderId).single();
     if (orderInfo) {

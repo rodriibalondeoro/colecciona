@@ -1,33 +1,32 @@
 import { NextResponse } from "next/server";
+import { verifyAuth, createUserClient } from "@/lib/serverAuth";
 import { createClient } from "@supabase/supabase-js";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export async function GET(req) {
   try {
-    if (!url || !key) {
+    if (!url || !serviceKey) {
       return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
     }
 
-    const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const { user, error: authError } = await verifyAuth(req);
+    if (authError || !user) {
       return NextResponse.json({ error: "No autenticado" }, { status: 401 });
     }
-    const token = authHeader.split(" ")[1];
-    const userClient = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || key, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-    const { data: { user } } = await userClient.auth.getUser();
-    if (!user) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const serviceClient = createClient(url, key);
+    const token = req.headers.get("authorization")?.slice(7);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    const { data: profile } = await serviceClient
+    const userClient = createUserClient(token);
+    const { data: profile } = await userClient
       .from("profiles").select("is_admin").eq("id", user.id).single();
     if (!profile?.is_admin) {
       return NextResponse.json({ error: "No autorizado" }, { status: 403 });
     }
+
+    const serviceClient = createClient(url, serviceKey);
 
     const { data: disputedOrders, error } = await serviceClient
       .from("orders")

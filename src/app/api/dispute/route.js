@@ -32,6 +32,9 @@ export async function POST(req) {
     if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
       return NextResponse.json({ error: "reason is required" }, { status: 400 });
     }
+    if (reason.length > 2000) {
+      return NextResponse.json({ error: "reason too long (max 2000 chars)" }, { status: 400 });
+    }
 
     const serviceClient = createClient(url, key);
 
