@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { verifyAuth } from "@/lib/serverAuth";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -33,10 +33,10 @@ export async function POST(req) {
       return NextResponse.json({ error: "reason is required" }, { status: 400 });
     }
 
-    const supabase = createClient(url, key);
+    const serviceClient = createClient(url, key);
 
     // Verify order exists and user is buyer
-    const { data: order, error: orderError } = await supabase
+    const { data: order, error: orderError } = await serviceClient
       .from("orders")
       .select("id, buyer_id, seller_id, status")
       .eq("id", orderId)
@@ -54,8 +54,14 @@ export async function POST(req) {
       return NextResponse.json({ error: "No se puede abrir disputa para esta orden" }, { status: 400 });
     }
 
-    // Transition order to DISPUTED via service_role (auth.uid() check bypassed)
-    const { error: updateError } = await supabase
+    // CRITICAL: Use authenticated user client for the UPDATE.
+    // The trigger validate_order_transition checks auth.uid() = buyer_id OR seller_id.
+    // Service role has auth.uid() = NULL, which would fail the trigger.
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+    const userClient = createUserClient(token);
+
+    const { error: updateError } = await userClient
       .from("orders")
       .update({ status: "DISPUTED" })
       .eq("id", orderId)
@@ -66,8 +72,8 @@ export async function POST(req) {
       return NextResponse.json({ error: "Error al abrir disputa" }, { status: 500 });
     }
 
-    // Notify seller
-    await supabase.from("notifications").insert({
+    // Notify seller (server-side via service role)
+    await serviceClient.from("notifications").insert({
       user_id: order.seller_id,
       type: "dispute",
       title: "Disputa abierta",
