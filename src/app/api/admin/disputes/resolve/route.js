@@ -115,7 +115,7 @@ export async function POST(req) {
 
       // 5. Notify buyer
       await serviceClient.from("notifications").insert({
-        user_id: order.seller_id,
+        user_id: order.buyer_id,
         type: "refund",
         title: "Reembolso procesado",
         message: "El administrador ha procesado un reembolso",

@@ -36,7 +36,7 @@ export default function SellerProfilePage() {
   const params = useParams();
   const router = useRouter();
   const username = params.username;
-  const { getReviewsForUser, startThread, showToast } = useApp();
+  const { startThread, showToast } = useApp();
   const [dbProducts, setDbProducts] = useState([]);
   const [serverReviews, setServerReviews] = useState([]);
   const [session, setSession] = useState(null);
@@ -302,11 +302,8 @@ export default function SellerProfilePage() {
     date: r.created_at,
     reviewer: r.reviewer || { name: 'Usuario' },
   }));
-  const localReviews = getReviewsForUser(seller.id) || [];
-  const mockSellerReviews = mockReviews[seller.id]?.asSeller || [];
-  const mockBuyerReviews = mockReviews[seller.id]?.asBuyer || [];
-  const sellerReviewsList = [...serverMapped, ...localReviews, ...mockSellerReviews];
-  const buyerReviewsList = [...mockBuyerReviews];
+  const sellerReviewsList = serverMapped;
+  const buyerReviewsList = [];
 
   const allReviews = [...sellerReviewsList, ...buyerReviewsList];
   const totalReviews = allReviews.length;

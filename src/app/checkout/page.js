@@ -81,7 +81,7 @@ export default function CheckoutPage() {
   const subtotal = cartTotal.subtotal || 0;
   const shippingTotal = cartTotal.shipping || 0;
   const commission = cartTotal.commission || 0;
-  const finalTotal = subtotal + shippingTotal + commission + protectionFee;
+  const finalTotal = subtotal + shippingTotal;
 
   const handleNextStep = (e) => {
     e.preventDefault();
@@ -324,14 +324,6 @@ export default function CheckoutPage() {
               <div className={styles.summaryRow}>
                 <span>Envío</span>
                 <span>{shippingTotal.toFixed(2)} €</span>
-              </div>
-              <div className={styles.summaryRow}>
-                <span>Comisión</span>
-                <span>{commission.toFixed(2)} €</span>
-              </div>
-              <div className={styles.summaryRow}>
-                <span>Protección</span>
-                <span>{protectionFee.toFixed(2)} €</span>
               </div>
 
               <div className={styles.summaryDivider} />

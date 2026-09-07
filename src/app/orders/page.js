@@ -474,7 +474,7 @@ export default function OrdersPage() {
                     {normalizeOrderStatus(sale.status) === ORDER_STATES.SHIPPED && sale.tracking_number && (
                       <div className={styles.qrSection}>
                         <ShippingQR
-                          value={`https://colecciona.com/rastreo/${encodeURIComponent(sale.tracking_number)}`}
+                          value={`${typeof window !== 'undefined' ? window.location.origin : ''}/rastreo/${encodeURIComponent(sale.tracking_number)}`}
                           label={`QR de envío · ${sale.tracking_number}`}
                           size={140}
                         />
