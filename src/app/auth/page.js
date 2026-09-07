@@ -139,13 +139,8 @@ export default function AuthPage() {
     let phone = "";
     let email = "";
     if (id.includes("@")) {
-      const user = findUserByEmail(id);
-      if (!user) {
-        setOtpError("No encontramos ninguna cuenta con ese email.");
-        return;
-      }
-      phone = user.phone;
       email = id;
+      // Server will look up phone by email if needed
     } else {
       phone = normalizePhone(id);
       if (!phone) {
@@ -262,11 +257,9 @@ export default function AuthPage() {
 
         localStorage.setItem("colecciona_session", JSON.stringify(fullSession));
       } else {
-        const id = String(loginId).trim();
-        const mockUser = id.includes("@") ? findUserByEmail(id) : findUserByPhone(id.replace(/[^\d+]/g, ""));
-        const sessionUser = json.user || mockUser;
+        const sessionUser = json.user;
         if (!sessionUser) {
-          setOtpError("No existe ninguna cuenta asociada a este teléfono. Regístrate para crear una.");
+          setOtpError("No se pudo verificar la cuenta. Inténtalo de nuevo.");
           return;
         }
 
