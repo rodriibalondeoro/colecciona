@@ -67,6 +67,10 @@ describe("canTransitionOrder", () => {
       expect(canTransitionOrder("CAPTURING", "PAID")).toBe(true);
     });
 
+    it("CAPTURING → PAYMENT_PROCESSING (retry after failure)", () => {
+      expect(canTransitionOrder("CAPTURING", "PAYMENT_PROCESSING")).toBe(true);
+    });
+
     it("PAID → PREPARING", () => {
       expect(canTransitionOrder("PAID", "PREPARING")).toBe(true);
     });
@@ -103,6 +107,26 @@ describe("canTransitionOrder", () => {
 
     it("REFUND_PENDING → REFUNDED", () => {
       expect(canTransitionOrder("REFUND_PENDING", "REFUNDED")).toBe(true);
+    });
+
+    it("REFUND_PENDING → PAID (refund failed, rollback)", () => {
+      expect(canTransitionOrder("REFUND_PENDING", "PAID")).toBe(true);
+    });
+
+    it("REFUND_PENDING → PREPARING (refund failed, rollback)", () => {
+      expect(canTransitionOrder("REFUND_PENDING", "PREPARING")).toBe(true);
+    });
+
+    it("REFUND_PENDING → SHIPPED (refund failed, rollback)", () => {
+      expect(canTransitionOrder("REFUND_PENDING", "SHIPPED")).toBe(true);
+    });
+
+    it("REFUND_PENDING → DELIVERED (refund failed, rollback)", () => {
+      expect(canTransitionOrder("REFUND_PENDING", "DELIVERED")).toBe(true);
+    });
+
+    it("REFUND_PENDING → DISPUTED (refund failed, rollback)", () => {
+      expect(canTransitionOrder("REFUND_PENDING", "DISPUTED")).toBe(true);
     });
   });
 
