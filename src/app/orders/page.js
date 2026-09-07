@@ -389,6 +389,30 @@ export default function OrdersPage() {
                       COMPLETAR PEDIDO
                     </button>
                   )}
+                  {[ORDER_STATES.PAID, ORDER_STATES.PREPARING, ORDER_STATES.SHIPPED, ORDER_STATES.DELIVERED].includes(normalizeOrderStatus(order.status)) && (
+                    <button
+                      className={`${styles.actionButton} ${styles.danger}`}
+                      onClick={async () => {
+                        const reason = window.prompt("Describe el motivo de la disputa:");
+                        if (!reason?.trim()) return;
+                        try {
+                          const res = await authFetch("/api/dispute", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ orderId: order.id, reason: reason.trim() }),
+                          });
+                          const data = await res.json();
+                          if (!res.ok) throw new Error(data.error || "Error al abrir disputa");
+                          setOrders((prev) => prev.map(o => o.id === order.id ? { ...o, status: "DISPUTED" } : o));
+                          showToast("Disputa abierta correctamente", "success");
+                        } catch (err) {
+                          showToast(err.message || "Error al abrir disputa", "error");
+                        }
+                      }}
+                    >
+                      Abrir Disputa
+                    </button>
+                  )}
                   {normalizeOrderStatus(order.status) === ORDER_STATES.COMPLETED && !reviewedOrderIds.has(order.id) && !order.reviewed && (
                     <button
                       className={`${styles.actionButton} ${styles.success}`}
@@ -469,6 +493,30 @@ export default function OrdersPage() {
                         onClick={() => openShippingModal(sale.id)}
                       >
                         Marcar como enviado
+                      </button>
+                    )}
+
+                    {[ORDER_STATES.PAID, ORDER_STATES.PREPARING, ORDER_STATES.SHIPPED, ORDER_STATES.DELIVERED, ORDER_STATES.DISPUTED].includes(normalizeOrderStatus(sale.status)) && normalizeOrderStatus(sale.status) !== ORDER_STATES.COMPLETED && (
+                      <button
+                        className={`${styles.actionButton} ${styles.danger}`}
+                        onClick={async () => {
+                          if (!window.confirm("¿Reembolsar esta venta? Esta acción no se puede deshacer.")) return;
+                          try {
+                            const res = await authFetch("/api/refund", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ orderId: sale.id }),
+                            });
+                            const data = await res.json();
+                            if (!res.ok) throw new Error(data.error || "Error al reembolsar");
+                            setSales((prev) => prev.map(s => s.id === sale.id ? { ...s, status: "REFUND_PENDING" } : s));
+                            showToast("Reembolso iniciado correctamente", "success");
+                          } catch (err) {
+                            showToast(err.message || "Error al reembolsar", "error");
+                          }
+                        }}
+                      >
+                        Reembolsar
                       </button>
                     )}
                   </div>
