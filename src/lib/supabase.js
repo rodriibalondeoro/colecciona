@@ -1,5 +1,4 @@
 // Supabase Client
-// Error in production runtime if not configured; warning in dev/build
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -25,25 +24,59 @@ if (supabaseUrl && supabaseAnonKey) {
 export const supabase = supabaseClient;
 export const isConfigured = isRealSupabase;
 
-// Realtime subscription helpers
+// Active channel refs for cleanup
+let activeMessageChannel = null;
+let activeNotificationChannel = null;
+
 export function subscribeToMessages(userId, callback) {
-  if (!supabaseClient) return () => {};
+  if (!supabaseClient || !userId) return () => {};
+
+  // Clean up previous channel for this subscription slot
+  if (activeMessageChannel) {
+    supabaseClient.removeChannel(activeMessageChannel);
+    activeMessageChannel = null;
+  }
+
   const channel = supabaseClient
-    .channel("messages-realtime")
+    .channel(`messages-${userId}`)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `receiver_id=eq.${userId}` }, (payload) => {
       callback(payload.new);
     })
-    .subscribe();
-  return () => supabaseClient.removeChannel(channel);
+    .subscribe((status) => {
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn("[Realtime] Messages channel error, will retry on next subscribe");
+      }
+    });
+
+  activeMessageChannel = channel;
+  return () => {
+    supabaseClient.removeChannel(channel);
+    if (activeMessageChannel === channel) activeMessageChannel = null;
+  };
 }
 
 export function subscribeToNotifications(userId, callback) {
-  if (!supabaseClient) return () => {};
+  if (!supabaseClient || !userId) return () => {};
+
+  if (activeNotificationChannel) {
+    supabaseClient.removeChannel(activeNotificationChannel);
+    activeNotificationChannel = null;
+  }
+
   const channel = supabaseClient
-    .channel("notifications-realtime")
+    .channel(`notifications-${userId}`)
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${userId}` }, (payload) => {
       callback(payload.new);
     })
-    .subscribe();
-  return () => supabaseClient.removeChannel(channel);
+    .subscribe((status) => {
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn("[Realtime] Notifications channel error, will retry on next subscribe");
+      }
+    });
+
+  activeNotificationChannel = channel;
+  return () => {
+    supabaseClient.removeChannel(channel);
+    if (activeNotificationChannel === channel) activeNotificationChannel = null;
+  };
 }

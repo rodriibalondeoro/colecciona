@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, memo } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { VerifiedBadge } from "./Badge";
@@ -15,7 +15,7 @@ function normalize(s) {
   return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 }
 
-export default function ProductCard({ product, seller, onDelete, onSelect, session, myMissingCards = [] }) {
+function ProductCardInner({ product, seller, onDelete, onSelect, session, myMissingCards = [] }) {
   const [loaded, setLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -253,3 +253,5 @@ export default function ProductCard({ product, seller, onDelete, onSelect, sessi
     </div>
   );
 }
+
+export default memo(ProductCardInner);

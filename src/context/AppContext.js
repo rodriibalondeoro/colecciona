@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { persistMessage, getFavorites, toggleFavoriteAPI, getOffers } from "@/lib/dataService";
 import { subscribeToMessages, subscribeToNotifications, supabase } from "@/lib/supabase";
 import { ORDER_STATES } from "@/lib/orderStates";
@@ -366,15 +366,18 @@ export function AppProvider({ children }) {
 
   const clearCart = useCallback(() => setCart([]), []);
 
-  const cartTotal = cart.reduce(
-    (acc, item) => ({
-      subtotal: acc.subtotal + item.product.price,
-      shipping: acc.shipping + (item.shippingMethod?.price || 1.8),
-      commission: acc.commission + item.product.price * 0.08,
-    }),
-    { subtotal: 0, shipping: 0, commission: 0 }
-  );
-  cartTotal.total = cartTotal.subtotal + cartTotal.shipping + cartTotal.commission;
+  const cartTotal = useMemo(() => {
+    const totals = cart.reduce(
+      (acc, item) => ({
+        subtotal: acc.subtotal + item.product.price,
+        shipping: acc.shipping + (item.shippingMethod?.price || 1.8),
+        commission: acc.commission + item.product.price * 0.08,
+      }),
+      { subtotal: 0, shipping: 0, commission: 0 }
+    );
+    totals.total = totals.subtotal + totals.shipping + totals.commission;
+    return totals;
+  }, [cart]);
 
   // ─────────────────────────────────────────────────────────────
   // Favorites helpers
@@ -427,7 +430,7 @@ export function AppProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   // Notifications helpers
   // ─────────────────────────────────────────────────────────────
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const unreadCount = useMemo(() => notifications.filter((n) => !n.read).length, [notifications]);
 
   const markAllRead = useCallback(() => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
@@ -849,7 +852,7 @@ export function AppProvider({ children }) {
 
   // ─────────────────────────────────────────────────────────────
 
-  const value = {
+  const value = useMemo(() => ({
     // session
     session, setSession,
     // cart
@@ -870,7 +873,14 @@ export function AppProvider({ children }) {
     sales, markSaleShipped,
     // reviews
     reviews, addReview, getReviewsForUser,
-  };
+  }), [
+    session, cart, cartTotal, favorites, toggleFavorite,
+    notifications, unreadCount, markAllRead, markRead,
+    toasts, showToast, threads, sendMessage, markThreadRead, loadThreadMessages, startThread, deleteThread,
+    offers, makeOffer, respondToOffer, counterOffer,
+    orders, confirmReceived, checkout, sales, markSaleShipped,
+    reviews, addReview, getReviewsForUser, setSession,
+  ]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

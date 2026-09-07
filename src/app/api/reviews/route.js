@@ -85,15 +85,21 @@ export async function GET(req) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
     );
 
-    const { data } = await supabase
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "50", 10)));
+    const from = (page - 1) * limit;
+
+    const { data, count } = await supabase
       .from("reviews")
       .select(
-        "*, reviewer:profiles!reviews_reviewer_id_fkey(name, username)"
+        "*, reviewer:profiles!reviews_reviewer_id_fkey(name, username)",
+        { count: "exact" }
       )
       .eq("target_user_id", userId)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range(from, from + limit - 1);
 
-    return NextResponse.json({ reviews: data || [] });
+    return NextResponse.json({ reviews: data || [], total: count || 0, page, limit });
   } catch (err) {
     console.error("[Reviews GET]", err);
     return NextResponse.json({ reviews: [] });

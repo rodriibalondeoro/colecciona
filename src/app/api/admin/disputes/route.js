@@ -28,17 +28,20 @@ export async function GET(req) {
 
     const serviceClient = createClient(url, serviceKey);
 
+    const { searchParams } = new URL(req.url);
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "50", 10)));
+
     const { data: disputedOrders, error } = await serviceClient
       .from("orders")
       .select(`
-        id, status, subtotal, shipping, total_paid, commission,
+        id, status, subtotal, shipping, total, commission,
         created_at, completed_at,
         buyer:buyer_id (id, name, username),
-        seller:seller_id (id, name, username),
-        products!orders_product_id_fkey (id, title, image, price)
+        seller:seller_id (id, name, username)
       `)
       .eq("status", "DISPUTED")
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(limit);
 
     if (error) {
       console.error("[API /admin/disputes] Error:", error.message);
@@ -54,7 +57,8 @@ export async function GET(req) {
         products:proposed_product_ids
       `)
       .eq("status", "DISPUTED")
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(limit);
 
     return NextResponse.json({
       orders: disputedOrders || [],

@@ -16,7 +16,6 @@ export async function GET(req) {
 
   const supabase = createClient(url, serviceKey);
 
-  // ADMIN CHECK: verify user is admin before exposing internal stats
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("is_admin")
@@ -30,65 +29,46 @@ export async function GET(req) {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
   const [
-    productsRes,
-    usersRes,
-    ordersRes,
-    messagesRes,
+    productCount,
+    userCount,
+    orderCount,
+    messageCount,
     recentProductsRes,
     recentUsersRes,
     recentOrdersRes,
+    categoryStats,
+    statusStats,
   ] = await Promise.all([
-    supabase.from("products").select("id, category, created_at", { count: "exact" }),
-    supabase.from("profiles").select("id, created_at", { count: "exact" }),
-    supabase.from("orders").select("id, total, commission, status, created_at", { count: "exact" }),
-    supabase.from("messages").select("id", { count: "exact" }),
+    supabase.from("products").select("id", { count: "exact", head: true }),
+    supabase.from("profiles").select("id", { count: "exact", head: true }),
+    supabase.from("orders").select("id", { count: "exact", head: true }),
+    supabase.from("messages").select("id", { count: "exact", head: true }),
     supabase.from("products").select("id, title, image, price, created_at").order("created_at", { ascending: false }).limit(5),
     supabase.from("profiles").select("id, username, avatar_url, created_at").order("created_at", { ascending: false }).limit(5),
     supabase.from("orders").select("id, total, status, created_at").order("created_at", { ascending: false }).limit(5),
+    supabase.rpc("get_category_stats"),
+    supabase.rpc("get_order_status_stats"),
   ]);
-
-  const products = productsRes.data || [];
-  const users = usersRes.data || [];
-  const orders = ordersRes.data || [];
-  const messages = messagesRes.data || [];
-
-  const totalProducts = productsRes.count ?? products.length;
-  const totalUsers = usersRes.count ?? users.length;
-  const totalOrders = ordersRes.count ?? orders.length;
-  const totalMessages = messagesRes.count ?? messages.length;
-
-  const totalRevenue = orders.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
-  const totalCommission = orders.reduce((sum, o) => sum + (Number(o.commission) || 0), 0);
-
-  const byCategory = {};
-  products.forEach((p) => {
-    const cat = p.category || "other";
-    byCategory[cat] = (byCategory[cat] || 0) + 1;
-  });
-
-  const byStatus = {};
-  orders.forEach((o) => {
-    const st = o.status || "unknown";
-    byStatus[st] = (byStatus[st] || 0) + 1;
-  });
 
   const recentProducts = (recentProductsRes.data || []).filter((p) => p.created_at >= thirtyDaysAgo).length;
   const recentUsers = (recentUsersRes.data || []).filter((u) => u.created_at >= thirtyDaysAgo).length;
   const recentOrders = (recentOrdersRes.data || []).filter((o) => o.created_at >= thirtyDaysAgo).length;
 
+  const revenueData = await supabase.rpc("get_revenue_stats");
+
   return NextResponse.json({
     stats: {
-      totalProducts,
-      totalUsers,
-      totalOrders,
-      totalRevenue,
-      totalCommission,
-      totalMessages,
+      totalProducts: productCount.count ?? 0,
+      totalUsers: userCount.count ?? 0,
+      totalOrders: orderCount.count ?? 0,
+      totalRevenue: Number(revenueData.data?.total_revenue) || 0,
+      totalCommission: Number(revenueData.data?.total_commission) || 0,
+      totalMessages: messageCount.count ?? 0,
       recentProducts,
       recentUsers,
       recentOrders,
-      byCategory,
-      byStatus,
+      byCategory: categoryStats.data || {},
+      byStatus: statusStats.data || {},
       recentProductsList: recentProductsRes.data || [],
       recentUsersList: recentUsersRes.data || [],
       recentOrdersList: recentOrdersRes.data || [],
