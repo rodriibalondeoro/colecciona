@@ -1,8 +1,19 @@
 import { NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/serverSupabase";
-import { verifyAuth } from "@/lib/serverAuth";
-import { ORDER_STATES, normalizeOrderStatus } from "@/lib/orderStates";
+import { verifyAuth, extractToken, createUserClient } from "@/lib/serverAuth";
 import { rateLimit } from "@/lib/rateLimit";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function mapRpcError(message) {
+  if (!message) return { status: 500 };
+  if (message.includes("Authentication required")) return { status: 401 };
+  if (message.includes("Order not found")) return { status: 404 };
+  if (message.includes("Can only review")) return { status: 400 };
+  if (message.includes("not a participant")) return { status: 403 };
+  if (message.includes("already reviewed")) return { status: 400 };
+  if (message.includes("deleted")) return { status: 403 };
+  return { status: 500 };
+}
 
 export async function POST(req) {
   try {
@@ -16,11 +27,8 @@ export async function POST(req) {
 
     const body = await req.json().catch(() => null);
     if (!body) return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ error: "Servicio no disponible" }, { status: 503 });
 
     // Validate input types
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!body.orderId || typeof body.orderId !== "string" || !UUID_RE.test(body.orderId)) {
       return NextResponse.json({ error: "Pedido inválido" }, { status: 400 });
     }
@@ -36,82 +44,27 @@ export async function POST(req) {
       }
     }
 
-    const { data: order } = await supabase
-      .from("orders")
-      .select("id, status, buyer_id, seller_id")
-      .eq("id", body.orderId)
-      .single();
+    const token = extractToken(req);
+    if (!token) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
 
-    if (!order || normalizeOrderStatus(order.status) !== ORDER_STATES.COMPLETED) {
-      return NextResponse.json(
-        { error: "Solo puedes reseñar pedidos completados" },
-        { status: 400 }
-      );
-    }
-
-    if (order.buyer_id !== user.id && order.seller_id !== user.id) {
-      return NextResponse.json(
-        { error: "No participas en este pedido" },
-        { status: 403 }
-      );
-    }
-
-    const reviewedId =
-      user.id === order.buyer_id ? order.seller_id : order.buyer_id;
-
-    const { data: existing } = await supabase
-      .from("reviews")
-      .select("id")
-      .eq("order_id", body.orderId)
-      .eq("reviewer_id", user.id)
-      .single();
-
-    if (existing) {
-      return NextResponse.json(
-        { error: "Ya has reseñado este pedido" },
-        { status: 400 }
-      );
-    }
-
-    const { data, error: insertError } = await supabase
-      .from("reviews")
-      .insert({
-        order_id: body.orderId,
-        reviewer_id: user.id,
-        target_user_id: reviewedId,
-        rating: body.rating,
-        comment: body.comment || null,
-      })
-      .select()
-      .single();
-
-    if (insertError) {
-      return NextResponse.json({ error: "Error creando la reseña" }, { status: 500 });
-    }
-
-    // Update rating via SQL AVG RPC (service_role — backend only)
-    const serviceClient = (await import("@supabase/supabase-js")).createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
-    const { error: ratingError } = await serviceClient.rpc("update_reviewer_rating", {
-      p_user_id: reviewedId,
+    const supabase = createUserClient(token);
+    const { data, error: rpcError } = await supabase.rpc("create_review", {
+      p_order_id: body.orderId,
+      p_rating: body.rating,
+      p_comment: body.comment || null,
     });
-    if (ratingError) {
-      console.error("[Reviews] Failed to update rating:", ratingError.message);
-    }
 
-    await supabase.from("notifications").insert({
-      user_id: reviewedId,
-      type: "review",
-      title: "Nueva resena",
-      body: `Te dejaron una resena de ${body.rating} estrellas`,
-      link: "/orders",
-    });
+    if (rpcError) {
+      const mapped = mapRpcError(rpcError.message);
+      return NextResponse.json(
+        { error: "Error al crear la reseña" },
+        { status: mapped.status }
+      );
+    }
 
     return NextResponse.json({ success: true, review: data });
   } catch (err) {
-    console.error("Error creating review:", err);
+    console.error("[Reviews POST]", err);
     return NextResponse.json(
       { error: "Error interno del servidor" },
       { status: 500 }
@@ -126,8 +79,12 @@ export async function GET(req) {
 
     if (!userId) return NextResponse.json({ reviews: [] });
 
-    const supabase = getServerSupabase();
-    if (!supabase) return NextResponse.json({ reviews: [] });
+    const { createClient } = await import("@supabase/supabase-js");
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_ANON_KEY
+    );
+
     const { data } = await supabase
       .from("reviews")
       .select(
@@ -138,7 +95,7 @@ export async function GET(req) {
 
     return NextResponse.json({ reviews: data || [] });
   } catch (err) {
-    console.error("Error fetching reviews:", err);
+    console.error("[Reviews GET]", err);
     return NextResponse.json({ reviews: [] });
   }
 }
