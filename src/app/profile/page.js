@@ -148,11 +148,8 @@ export default function ProfilePage() {
   };
 
   const handleWithdrawConfirm = () => {
-    setWithdrawDone(true);
-    setTimeout(() => {
-      setWithdrawDone(false);
-      setWithdrawModal(false);
-    }, 2000);
+    showToast("Retirada no disponible actualmente. Próximamente.", "info");
+    setWithdrawModal(false);
   };
 
   const handleSave = async () => {

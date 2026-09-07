@@ -12,7 +12,7 @@ import CursorReveal from "@/components/CursorReveal";
 import ParallaxBanner from "@/components/ParallaxBanner";
 import TaglineSection from "@/components/TaglineSection";
 import SpotlightBorder from "@/components/SpotlightBorder";
-import { products, users } from "@/data/mockData";
+
 import { collections } from "@/data/collections";
 import { useStaggerReveal } from "@/lib/useScrollReveal";
 import { useHeroScroll } from "@/hooks/useHeroScroll";
@@ -115,11 +115,7 @@ export default function Home() {
     return () => { cancelled = true; };
   }, []);
 
-  // Guarantee at least 5 products by combining with mockData if needed
-  const displayProducts = [
-    ...featuredProducts,
-    ...products.filter((p) => !featuredProducts.some((fp) => fp.id === p.id)),
-  ];
+  const displayProducts = featuredProducts;
 
   const activeSection = collections.find((c) => c.id === selectedSection);
 

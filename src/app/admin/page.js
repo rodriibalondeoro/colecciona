@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useApp } from "@/context/AppContext";
-import { users } from "@/data/mockData";
+
 import styles from "./page.module.css";
 
 export default function AdminPage() {
@@ -54,7 +54,6 @@ export default function AdminPage() {
   }, []);
 
   const [bannedIds, setBannedIds] = useState([]);
-  const allUsers = users.map((u) => ({ ...u, banned: bannedIds.includes(u.id) }));
 
   const handleResolveDispute = async (orderId, resolution) => {
     if (resolvingId) return;
@@ -458,53 +457,9 @@ export default function AdminPage() {
           <div className={styles.tableCard}>
             <h3>Gestión de Cuentas y Baneos</h3>
             <p className={styles.desc}>
-              Banco una cuenta sospechosa para bloquear su actividad en el mercado. El ban es reversible.
+              Gestión de usuarios próximamente. Los baneos se realizan desde la pestaña de fraude.
             </p>
-            <div className={styles.list}>
-              {allUsers.map((u) => (
-                <div key={u.id} className={styles.disputeItem}>
-                  <div className={styles.fraudGrid}>
-                    <div className={styles.detailColumn}>
-                      <div className={styles.row}>
-                        <span className={styles.flagName}>
-                          <span className={`${styles.avatar} ${u.banned ? styles.avatarBanned : ""}`}>
-                            {u.initials || u.name?.charAt(0)}
-                          </span>
-                          <span className={styles.bold}>{u.name}</span>
-                        </span>
-                        <span className={styles.confBadge}>@{u.username}</span>
-                      </div>
-                      <div className={styles.matchingDetail}>
-                        Ventas: <strong>{u.sales}</strong> · Valoración: <strong>★ {u.rating}</strong> · Respuesta: <strong>{u.responseTime}</strong>
-                      </div>
-                      <div className={styles.ipDetail}>
-                        {u.location} · Miembro desde {u.memberSince}
-                      </div>
-                    </div>
-                    <div className={styles.actionsColumn}>
-                      {u.banned ? (
-                        <>
-                          <button
-                            className={`${styles.btn} ${styles.btnWhite}`}
-                            onClick={() => handleBan(u.id, u)}
-                          >
-                            Desbloquear cuenta
-                          </button>
-                          <span className={`${styles.statusBadge} ${styles.statusRose}`}>Baneada</span>
-                        </>
-                      ) : (
-                        <button
-                          className={`${styles.btn} ${styles.btnDanger}`}
-                          onClick={() => handleBan(u.id, u)}
-                        >
-                          Banear cuenta
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <div className={styles.empty}>Funcionalidad en desarrollo.</div>
           </div>
         )}
       </div>

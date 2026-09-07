@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { products } from "@/data/mockData";
+
 import { collections } from "@/data/collections";
 import { createClient } from "@supabase/supabase-js";
 

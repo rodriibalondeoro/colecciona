@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ProductCard from "@/components/ProductCard";
 import Skeleton from "@/components/Skeleton";
-import { products, users } from "@/data/mockData";
+
 import { collections } from "@/data/collections";
 import { getPersistedProducts, deleteProduct } from "@/lib/dataService";
 import { getRecentlyViewed } from "@/lib/recentlyViewed";
@@ -312,11 +312,11 @@ function MarketplaceContent() {
     setSearchQuery(categoryId === "all" ? "" : findCollectionInfo(categoryId).name);
   };
 
-  const allProducts = [...persisted, ...dbProducts, ...products];
+  const allProducts = [...persisted, ...dbProducts];
 
   // Filter products
   const q = searchQuery.trim().toLowerCase();
-  // Deduplicate: dbProducts take priority over persisted/mock (same ID)
+  // Deduplicate: dbProducts take priority over persisted
   const seenIds = new Set(dbProducts.map((p) => p.id));
   const mergedProducts = [...dbProducts, ...allProducts.filter((p) => !seenIds.has(p.id))];
 

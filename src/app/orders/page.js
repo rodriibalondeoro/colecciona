@@ -270,12 +270,14 @@ export default function OrdersPage() {
     switch (normalizeOrderStatus(status)) {
       case ORDER_STATES.PENDING: return <span className={`${styles.badge} ${styles.amber}`}>Pendiente</span>;
       case ORDER_STATES.PAYMENT_PROCESSING: return <span className={`${styles.badge} ${styles.amber}`}>Pago en proceso</span>;
+      case ORDER_STATES.CAPTURING: return <span className={`${styles.badge} ${styles.amber}`}>Confirmando pago</span>;
       case ORDER_STATES.PAID: return <span className={`${styles.badge} ${styles.amber}`}>Pagado - Esperando envio</span>;
       case ORDER_STATES.PREPARING: return <span className={`${styles.badge} ${styles.amber}`}>Preparando</span>;
       case ORDER_STATES.SHIPPED: return <span className={`${styles.badge} ${styles.blue}`}>En camino</span>;
       case ORDER_STATES.DELIVERED: return <span className={`${styles.badge} ${styles.blue}`}>Recibido</span>;
       case ORDER_STATES.COMPLETED: return <span className={`${styles.badge} ${styles.emerald}`}>Completado</span>;
       case ORDER_STATES.CANCELLED: return <span className={`${styles.badge} ${styles.rose}`}>Cancelado</span>;
+      case ORDER_STATES.REFUND_PENDING: return <span className={`${styles.badge} ${styles.amber}`}>Reembolso en proceso</span>;
       case ORDER_STATES.REFUNDED: return <span className={`${styles.badge} ${styles.rose}`}>Reembolsado</span>;
       case ORDER_STATES.DISPUTED: return <span className={`${styles.badge} ${styles.rose}`}>En disputa</span>;
       case 'accepted': return <span className={`${styles.badge} ${styles.emerald}`}>Aceptada</span>;

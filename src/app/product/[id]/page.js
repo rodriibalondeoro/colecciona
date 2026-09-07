@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { products as mockProducts, users, shippingMethods, mockReviews } from "@/data/mockData";
+import { shippingMethods } from "@/data/mockData";
 
 import { VerifiedBadge } from "@/components/Badge";
 import ProductCard from "@/components/ProductCard";
@@ -230,10 +230,7 @@ export default function ProductDetailPage() {
   if (gallery.length === 0 && product.image) gallery.push(product.image);
   const activeImage = gallery[Math.min(activeImageIndex, gallery.length - 1)] || product.image;
 
-  const mockReviewCount = seller
-    ? (mockReviews[seller.id]?.asSeller?.length || 0) + (mockReviews[seller.id]?.asBuyer?.length || 0)
-    : 0;
-  const sellerReviewCount = mockReviewCount || Number(seller?.sellerReviews || 0) + Number(seller?.buyerReviews || 0);
+  const sellerReviewCount = Number(seller?.sellerReviews || 0) + Number(seller?.buyerReviews || 0);
   const sellerRating = Number(seller?.rating || 0);
   const sellerMemberSince = seller?.memberSince || (
     seller?.member_since ? new Date(seller.member_since).getFullYear() : null

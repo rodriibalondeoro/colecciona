@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import styles from './page.module.css';
-import { users, products, mockReviews } from '@/data/mockData';
+
 import ProductCard from '@/components/ProductCard';
 import { useApp } from '@/context/AppContext';
 import { deleteProduct, fetchReviews } from '@/lib/dataService';
@@ -190,8 +190,7 @@ export default function SellerProfilePage() {
     };
   }, [checkProductsScroll, initialLoading]);
 
-  const mockSeller = users.find(u => u.username === username);
-  const seller = sellerDb ? { ...mockSeller, ...sellerDb } : mockSeller;
+  const seller = sellerDb || null;
 
   const isMyProfile = session && (
     session.username === username ||
@@ -294,10 +293,7 @@ export default function SellerProfilePage() {
     );
   }
 
-  const sellerProducts = [
-    ...products.filter(p => p.seller === seller?.id),
-    ...dbProducts.filter(p => p.seller?.username === username || p.seller === seller?.id),
-  ].filter((p, i, arr) => arr.findIndex((x) => x.id === p.id) === i);
+  const sellerProducts = dbProducts.filter(p => p.seller?.username === username || p.seller === seller?.id);
 
   const serverMapped = serverReviews.map((r) => ({
     id: r.id,
