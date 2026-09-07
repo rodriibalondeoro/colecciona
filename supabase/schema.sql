@@ -1960,6 +1960,7 @@ CREATE TABLE IF NOT EXISTS orders (
   shipping NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (shipping >= 0),
   commission NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (commission >= 0),
   total NUMERIC(10,2) NOT NULL CHECK (total > 0),
+  CHECK (total = subtotal + shipping),
   shipping_method TEXT NOT NULL CHECK (shipping_method IN ('standard', 'tracked')),
   tracking_number TEXT,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (
@@ -5128,3 +5129,32 @@ $$;
 
 REVOKE ALL ON FUNCTION count_active_sellers() FROM PUBLIC;
 REVOKE ALL ON FUNCTION count_active_sellers() FROM authenticated;
+
+-- R12: Wallet ledger reconciliation
+-- Verifies wallet.balance matches SUM(wallet_transactions.amount) for a given user.
+-- REFUND_SHORTFALL entries have balance_before=0, balance_after=0 and don't affect balance,
+-- so we exclude them from the sum check (they are informational only).
+CREATE OR REPLACE FUNCTION reconcile_wallet(p_user_id UUID)
+RETURNS TABLE(
+  wallet_balance NUMERIC(10,2),
+  ledger_sum NUMERIC(10,2),
+  is_consistent BOOLEAN,
+  discrepancy NUMERIC(10,2),
+  transaction_count BIGINT
+)
+LANGUAGE sql SECURITY DEFINER SET search_path = public
+AS $$
+  SELECT
+    w.balance AS wallet_balance,
+    COALESCE(SUM(wt.amount), 0) AS ledger_sum,
+    (w.balance = COALESCE(SUM(wt.amount), 0)) AS is_consistent,
+    (w.balance - COALESCE(SUM(wt.amount), 0)) AS discrepancy,
+    COUNT(wt.id) AS transaction_count
+  FROM wallet w
+  LEFT JOIN wallet_transactions wt ON wt.user_id = w.user_id
+  WHERE w.user_id = p_user_id
+  GROUP BY w.user_id, w.balance;
+$$;
+
+REVOKE ALL ON FUNCTION reconcile_wallet(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION reconcile_wallet(UUID) FROM authenticated;

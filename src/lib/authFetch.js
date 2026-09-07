@@ -2,16 +2,18 @@ import { supabase } from "./supabase";
 
 let redirecting = false;
 
+const DEFAULT_TIMEOUT_MS = 15000;
+
 /**
  * Client-side auth helper for fetch calls.
  * Returns headers with Bearer token from Supabase Auth (or localStorage fallback).
  * Automatically redirects to /auth on 401 responses.
+ * Adds AbortController timeout to prevent infinite hangs.
  */
 export async function authFetch(url, options = {}) {
   let token = null;
 
   if (supabase) {
-    // Supabase configured → ONLY Supabase Auth
     try {
       const { data } = await supabase.auth.getSession();
       if (data?.session?.access_token) token = data.session.access_token;
@@ -19,7 +21,6 @@ export async function authFetch(url, options = {}) {
       console.warn("[authFetch] Supabase session error:", e?.message);
     }
   } else {
-    // Demo mode ONLY (Supabase not configured)
     try {
       const raw = localStorage.getItem("colecciona_session");
       if (raw) {
@@ -38,17 +39,33 @@ export async function authFetch(url, options = {}) {
     headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(url, { ...options, headers });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeout || DEFAULT_TIMEOUT_MS);
 
-  if (res.status === 401 && !redirecting) {
-    redirecting = true;
-    console.warn("[authFetch] 401 received — session expired, redirecting to /auth");
-    try {
-      if (supabase) await supabase.auth.signOut();
-      localStorage.removeItem("colecciona_session");
-    } catch {}
-    window.location.href = "/auth";
+  try {
+    const res = await fetch(url, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+
+    if (res.status === 401 && !redirecting) {
+      redirecting = true;
+      console.warn("[authFetch] 401 received — session expired, redirecting to /auth");
+      try {
+        if (supabase) await supabase.auth.signOut();
+        localStorage.removeItem("colecciona_session");
+      } catch {}
+      window.location.href = "/auth";
+    }
+
+    return res;
+  } catch (err) {
+    if (err.name === "AbortError") {
+      console.warn("[authFetch] Request timed out:", url);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  return res;
 }

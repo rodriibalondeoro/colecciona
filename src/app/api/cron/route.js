@@ -438,6 +438,45 @@ export async function GET(req) {
       console.error("[Cron] Error reclaiming stale webhooks:", webhookErr?.message);
     }
 
+    // 9. Reconcile Stripe PI ↔ order status (R11)
+    // Check recent orders (last 24h) where Stripe state may differ from DB state.
+    try {
+      const { data: suspectOrders, error: suspectErr } = await supabase
+        .from("orders")
+        .select("id, status, payment_intent_id, created_at")
+        .in("status", ["PAYMENT_PROCESSING", "CAPTURING", "REFUND_PENDING"])
+        .not("payment_intent_id", "is", null)
+        .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        .limit(20);
+      if (!suspectErr && suspectOrders?.length > 0) {
+        for (const order of suspectOrders) {
+          try {
+            const pi = await stripe.paymentIntents.retrieve(order.payment_intent_id);
+            if (order.status === "PAYMENT_PROCESSING" && pi.status === "succeeded") {
+              console.warn(`[Cron] Reconciling order ${order.id}: PI succeeded but order still PAYMENT_PROCESSING`);
+              await supabase.rpc("mark_products_sold_by_payment_intent", { p_payment_intent_id: order.payment_intent_id });
+            } else if (order.status === "CAPTURING" && pi.status === "succeeded") {
+              console.warn(`[Cron] Reconciling order ${order.id}: PI succeeded but order still CAPTURING`);
+              await supabase.rpc("mark_products_sold_by_payment_intent", { p_payment_intent_id: order.payment_intent_id });
+            } else if (order.status === "REFUND_PENDING" && pi.status === "succeeded") {
+              // PI succeeded but order is REFUND_PENDING — check if refund exists
+              const { data: refundRow } = await supabase.from("refunds").select("id").eq("order_id", order.id).eq("status", "succeeded").limit(1);
+              if (refundRow?.length > 0) {
+                console.warn(`[Cron] Reconciling order ${order.id}: refund succeeded, transitioning to REFUNDED`);
+                await supabase.rpc("mark_order_refunded", { p_order_id: order.id, p_stripe_refund_id: refundRow[0].id });
+              }
+            }
+          } catch (piErr) {
+            console.error(`[Cron] PI retrieval failed for order ${order.id}:`, piErr?.message);
+          }
+        }
+        results.warnings = results.warnings || [];
+        results.warnings.push({ action: "stripe_reconciliation", checked: suspectOrders.length });
+      }
+    } catch (reconErr) {
+      console.error("[Cron] Error in Stripe reconciliation:", reconErr?.message);
+    }
+
     return NextResponse.json({ message: "Cron completed", results });
   } catch (err) {
     console.error("[Cron] Fatal error:", err);
