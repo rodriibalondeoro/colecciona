@@ -228,24 +228,6 @@ export async function persistMessage(message) {
   }
 }
 
-/** Crea una oferta de precio para un producto (inicia el hilo de negociación). */
-export async function createOffer({ productId, amount, message }) {
-  const token = await getAuthToken();
-  if (!token) return null;
-  try {
-    const res = await fetch("/api/offers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ productId, amount, message }),
-    });
-    const data = await res.json();
-    return data.offer || null;
-  } catch (err) {
-    console.warn("[DataService] createOffer no disponible:", err?.message);
-    return null;
-  }
-}
-
 /** Lista las ofertas del usuario (enviadas y recibidas). */
 export async function getOffers() {
   const token = await getAuthToken();
@@ -257,20 +239,6 @@ export async function getOffers() {
     const data = await res.json();
     return data.offers || [];
   } catch (err) { console.error("[DataService] getOffers error:", err?.message); return []; }
-}
-
-/** Acepta o rechaza una oferta recibida. */
-export async function updateOffer({ id, status }) {
-  const token = await getAuthToken();
-  if (!token) return null;
-  try {
-    const res = await fetch("/api/offers", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ id, status }),
-    });
-    return res.ok;
-  } catch (err) { console.error("[DataService] updateOffer error:", err?.message); return null; }
 }
 
 /** Obtiene las reseñas públicas de un usuario (vendedor). */

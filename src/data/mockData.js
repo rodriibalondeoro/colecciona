@@ -2,29 +2,6 @@
    COLECCIONA MOCK DATA — Bespoke TCG Mercado Dataset
    ========================================================================== */
 
-export const categories = [
-  { id: 'pokemon', name: 'Pokémon TCG', code: 'PKM', color: '#eab308', count: 1250 },
-  { id: 'mtg', name: 'Magic: The Gathering', code: 'MTG', color: '#f97316', count: 850 },
-  { id: 'yugioh', name: 'Yu-Gi-Oh!', code: 'YGO', color: '#8b5cf6', count: 640 },
-  { id: 'onepiece', name: 'One Piece TCG', code: 'OPT', color: '#06b6d4', count: 320 },
-  { id: 'dragonball', name: 'Dragon Ball Super', code: 'DBS', color: '#ef4444', count: 215 },
-  { id: 'sports', name: 'Deportivas / Sports', code: 'SPT', color: '#10b981', count: 412 },
-  { id: 'futbol', name: 'Fútbol', code: 'FUT', color: '#3b82f6', count: 380 },
-  { id: 'basket', name: 'Baloncesto', code: 'BBL', color: '#f59e0b', count: 190 },
-  { id: 'hellokitty', name: 'Hello Kitty', code: 'HK', color: '#f472b6', count: 95 },
-  { id: 'sanrio', name: 'Sanrio / Kawaii', code: 'SNR', color: '#ec4899', count: 70 },
-  { id: 'funk', name: 'Funko Pop!', code: 'FNK', color: '#14b8a6', count: 240 },
-  { id: 'figures', name: 'Figuras Coleccionables', code: 'FIG', color: '#a855f7', count: 160 },
-  { id: 'manga', name: 'Manga & Cómics', code: 'MNG', color: '#6366f1', count: 300 },
-  { id: 'retro', name: 'Videojuegos Retro', code: 'RTO', color: '#f43f5e', count: 130 },
-  { id: 'stamps', name: 'Sellos', code: 'SLO', color: '#0ea5e9', count: 85 },
-  { id: 'coins', name: 'Monedas y Billetes', code: 'CNM', color: '#d97706', count: 65 },
-  { id: 'cromos', name: 'Cromos Clásicos', code: 'CRM', color: '#84cc16', count: 110 },
-  { id: 'stickers', name: 'Pegatinas y Álbumes', code: 'STK', color: '#22d3ee', count: 180 },
-  { id: 'lego', name: 'LEGO y Miniaturas', code: 'LGO', color: '#f97316', count: 260 },
-  { id: 'papers', name: 'Material Escolar / Trotter', code: 'PAP', color: '#60a5fa', count: 90 },
-];
-
 export const cardConditions = {
   PSA10: { label: 'PSA 10 Gem Mint', short: 'PSA 10', color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.12)', description: 'Gradada profesionalmente Gem Mint 10.' },
   NM: { label: 'Near Mint', short: 'NM 9-10', color: '#10b981', bg: 'rgba(16, 185, 129, 0.12)', description: 'Carta impecable, sin marcas visibles de uso ni bordes blancos.' },
@@ -483,13 +460,6 @@ export const mockReviews = {
   }
 };
 
-export const recentSalesTicker = [
-  { title: 'Charizard Base Set Holo', price: '150,00 €', time: 'Hace 4 min', buyer: '@alex_tcg' },
-  { title: 'Aethelred Celestial Dragon PSA 10', price: '95,50 €', time: 'Hace 12 min', buyer: '@cruiz_tcg' },
-  { title: 'Shadow Wolf Manga Rare', price: '120,00 €', time: 'Hace 28 min', buyer: '@elena_magic' },
-  { title: 'Leviathan Tides Alt Art', price: '45,00 €', time: 'Hace 45 min', buyer: '@lucia_cards' },
-];
-
 export const shippingMethods = [
   { id: 'sm0', name: 'Carta Ordinaria Correos', price: 0.85, estimatedDays: '3-5 días', description: 'Sobre normal sin seguimiento. Para cartas de bajo riesgo.' },
   { id: 'sm1', name: 'Carta Certificada Correos', price: 1.65, estimatedDays: '24-48h', description: 'Sobre acolchado blindado con número de seguimiento oficial.', recommended: true },
@@ -499,36 +469,3 @@ export const shippingMethods = [
   { id: 'sm5', name: 'Envío gratuito del vendedor', price: 0, estimatedDays: 'A pactar', description: 'El vendedor asume los gastos de envío.' },
   { id: 'sm6', name: 'Retiro en mano', price: 0, estimatedDays: 'Inmediato', description: 'Acordar punto de encuentro en la misma ciudad.' },
 ];
-
-export const transactions = [
-  { id: 't1', productTitle: 'Charizard Base Set', price: 150.00, buyer: 'u2', seller: 'u1', status: 'completed', date: '2024-02-15', trackingCode: 'PK123456789ES', shippingMethod: 'sm1' },
-  { id: 't2', productTitle: 'Black Lotus Proxy', price: 95.50, buyer: 'u3', seller: 'u6', status: 'shipped', date: '2024-03-20', trackingCode: 'MTG987654321', shippingMethod: 'sm2' },
-  { id: 't3', productTitle: 'Blue-Eyes White Dragon', price: 45.00, buyer: 'u4', seller: 'u2', status: 'pending', date: '2024-03-23', trackingCode: null, shippingMethod: 'sm1' }
-];
-
-/* Helper functions for Anti-Multiaccounting robot */
-export const findUserByPhone = (phoneRaw) => {
-  if (!phoneRaw) return null;
-  const cleanPhone = phoneRaw.replace(/\D/g, '');
-  return users.find((u) => u.phone.replace(/\D/g, '').includes(cleanPhone) || cleanPhone.includes(u.phone.replace(/\D/g, '')));
-};
-
-export const findUserByUsername = (usernameRaw) => {
-  if (!usernameRaw) return null;
-  const clean = usernameRaw.toLowerCase().replace('@', '').trim();
-  return users.find((u) => u.username.toLowerCase() === clean);
-};
-
-export const findUserByEmail = (emailRaw) => {
-  if (!emailRaw) return null;
-  return users.find((u) => u.email.toLowerCase() === emailRaw.toLowerCase().trim());
-};
-
-export const getProductById = (id) => {
-  const product = products.find(p => p.id === id);
-  if (!product) return null;
-  return {
-    ...product,
-    sellerObj: users.find(u => u.id === product.seller)
-  };
-};

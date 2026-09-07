@@ -1,26 +1,5 @@
 import styles from "./Badge.module.css";
-import { cardConditions } from "@/data/mockData";
 import { ORDER_STATES, normalizeOrderStatus } from "@/lib/orderStates";
-
-export function ConditionBadge({ condition, size = "md" }) {
-  const config = cardConditions[condition] || cardConditions.NM;
-  return (
-    <span
-      className={`${styles.conditionBadge} ${styles[size]}`}
-      style={{
-        color: config.color,
-        backgroundColor: config.bg,
-        borderColor: `${config.color}35`,
-      }}
-    >
-      <span
-        className={styles.dot}
-        style={{ backgroundColor: config.color }}
-      />
-      {config.short || condition}
-    </span>
-  );
-}
 
 export function VerifiedBadge() {
   return (

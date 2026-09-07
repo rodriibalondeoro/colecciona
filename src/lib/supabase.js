@@ -25,23 +25,6 @@ if (supabaseUrl && supabaseAnonKey) {
 export const supabase = supabaseClient;
 export const isConfigured = isRealSupabase;
 
-/**
- * Throws in production if Supabase is not configured.
- * Call this at the start of API routes that require a real database.
- */
-export function requireSupabase() {
-  if (!supabaseClient) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error(
-        "🚨 [Colecciona] Supabase no configurado. " +
-        "Configura NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY."
-      );
-    }
-    return null;
-  }
-  return supabaseClient;
-}
-
 // Realtime subscription helpers
 export function subscribeToMessages(userId, callback) {
   if (!supabaseClient) return () => {};

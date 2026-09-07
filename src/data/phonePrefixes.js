@@ -3,7 +3,7 @@ import { COUNTRIES } from "./countries";
 // Prefijos telefónicos por código de país (ISO 3166-1 alpha-2).
 // Mantener sincronizado con `COUNTRIES`: los prefijos del registro se
 // generan a partir de esa misma lista para que SIEMPRE coincidan.
-export const COUNTRY_DIAL = {
+const COUNTRY_DIAL = {
   ES: "+34",
   MX: "+52",
   AR: "+54",
