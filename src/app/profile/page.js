@@ -86,7 +86,8 @@ export default function ProfilePage() {
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
-    fetch(`/api/products/search?limit=100`)
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    fetch(`/api/products/search?limit=100`, { headers })
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
@@ -103,7 +104,8 @@ export default function ProfilePage() {
   useEffect(() => {
     if (!user?.id) return;
     let cancelled = false;
-    fetch("/api/orders")
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    fetch("/api/orders", { headers })
       .then((r) => r.json())
       .then((data) => {
         if (!cancelled) setOrders(data.orders || []);

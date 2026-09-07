@@ -107,7 +107,7 @@ export default function CheckoutPage() {
       },
       body: JSON.stringify({
         productIds: cart.map((i) => i.product.id),
-        shippingMethod: cart[0]?.shippingMethod?.name || 'standard',
+        shippingMethod: cart[0]?.shippingMethod?.id || 'standard',
         shippingAddress: `${address.calle}, ${address.cp} ${address.ciudad}, ${address.provincia}`,
       }),
     })

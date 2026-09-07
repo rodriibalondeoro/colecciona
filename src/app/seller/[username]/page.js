@@ -58,6 +58,17 @@ export default function SellerProfilePage() {
 
   const getAuthHeaders = async () => {
     try {
+      const { createClient } = await import("@/lib/supabase");
+      const supabase = createClient;
+      if (supabase) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          return { Authorization: `Bearer ${session.access_token}` };
+        }
+      }
+    } catch {}
+    // Fallback to localStorage
+    try {
       const raw = localStorage.getItem("colecciona_session");
       if (raw) {
         const s = JSON.parse(raw);

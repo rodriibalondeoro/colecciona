@@ -49,8 +49,9 @@ export default function OrdersPage() {
         const offersData = offersRes.ok ? await offersRes.json() : { offers: [] };
         const sentOffersData = sentOffersRes.ok ? await sentOffersRes.json() : { offers: [] };
 
-        const myOrders = (ordersData.orders || []).filter(o => o.buyer_id === session?.user?.id);
-        const mySales = (ordersData.orders || []).filter(o => o.seller_id === session?.user?.id);
+        const userId = session?.id || session?.user?.id;
+        const myOrders = (ordersData.orders || []).filter(o => o.buyer_id === userId);
+        const mySales = (ordersData.orders || []).filter(o => o.seller_id === userId);
 
         setOrders(myOrders);
         setSales(mySales);

@@ -148,15 +148,10 @@ export async function GET(req) {
       }
     }
 
-    const mockFiltered = filterProducts([...products], filters);
-    const seenIds = new Set(dbProducts.map((p) => p.id));
-    const mockOnly = mockFiltered.filter((p) => !seenIds.has(p.id));
-
-    const combined = filterProducts([...dbProducts, ...mockOnly], filters);
-
-    const total = combined.length;
+    // DB products are the sole source of truth in production
+    const total = dbProducts.length;
     const from = (page - 1) * limit;
-    const paginated = combined.slice(from, from + limit);
+    const paginated = dbProducts.slice(from, from + limit);
 
     return NextResponse.json({
       success: true,

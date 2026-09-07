@@ -156,7 +156,7 @@ export function AppProvider({ children }) {
             type: n.type,
             read: n.read,
             title: n.title,
-            body: n.body,
+            body: n.message || n.body,
             icon: n.type === "favorite" ? "heart" : n.type === "message" ? "chart" : n.type === "offer" ? "offer" : "package",
             time: n.created_at,
             link: n.link || "#",
@@ -755,14 +755,14 @@ export function AppProvider({ children }) {
       const res = await fetch(`/api/orders/${orderId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ status: "COMPLETED" }),
+        body: JSON.stringify({ status: "DELIVERED" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setOrders((prev) =>
-        prev.map((o) => o.id === orderId ? { ...o, status: "COMPLETED", confirmedAt: new Date().toISOString() } : o)
+        prev.map((o) => o.id === orderId ? { ...o, status: "DELIVERED", deliveredAt: new Date().toISOString() } : o)
       );
-      showToast("¡Recepción confirmada! Valoración disponible.", "success");
+      showToast("¡Recepción confirmada! Ahora puedes completar el pedido.", "success");
     } catch (err) {
       showToast(err.message || "Error al confirmar recepción", "error");
     }
