@@ -446,8 +446,9 @@ export async function GET(req) {
         .select("id, status, payment_intent_id, created_at")
         .in("status", ["PAYMENT_PROCESSING", "CAPTURING", "REFUND_PENDING"])
         .not("payment_intent_id", "is", null)
+        .order("created_at", { ascending: true })
         .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-        .limit(20);
+        .limit(30);
       if (!suspectErr && suspectOrders?.length > 0) {
         for (const order of suspectOrders) {
           try {
@@ -460,10 +461,10 @@ export async function GET(req) {
               await supabase.rpc("mark_products_sold_by_payment_intent", { p_payment_intent_id: order.payment_intent_id });
             } else if (order.status === "REFUND_PENDING" && pi.status === "succeeded") {
               // PI succeeded but order is REFUND_PENDING — check if refund exists
-              const { data: refundRow } = await supabase.from("refunds").select("id").eq("order_id", order.id).eq("status", "succeeded").limit(1);
-              if (refundRow?.length > 0) {
+              const { data: refundRow } = await supabase.from("refunds").select("stripe_refund_id").eq("order_id", order.id).eq("status", "succeeded").limit(1);
+              if (refundRow?.length > 0 && refundRow[0].stripe_refund_id) {
                 console.warn(`[Cron] Reconciling order ${order.id}: refund succeeded, transitioning to REFUNDED`);
-                await supabase.rpc("mark_order_refunded", { p_order_id: order.id, p_stripe_refund_id: refundRow[0].id });
+                await supabase.rpc("mark_order_refunded", { p_order_id: order.id, p_refund_id: refundRow[0].stripe_refund_id });
               }
             }
           } catch (piErr) {

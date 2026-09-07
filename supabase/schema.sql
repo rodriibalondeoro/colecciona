@@ -5132,8 +5132,8 @@ REVOKE ALL ON FUNCTION count_active_sellers() FROM authenticated;
 
 -- R12: Wallet ledger reconciliation
 -- Verifies wallet.balance matches SUM(wallet_transactions.amount) for a given user.
--- REFUND_SHORTFALL entries have balance_before=0, balance_after=0 and don't affect balance,
--- so we exclude them from the sum check (they are informational only).
+-- REFUND_SHORTFALL entries record platform losses (amount != 0) but do NOT affect
+-- wallet.balance — they are informational only. Excluded from sum via FILTER.
 CREATE OR REPLACE FUNCTION reconcile_wallet(p_user_id UUID)
 RETURNS TABLE(
   wallet_balance NUMERIC(10,2),
@@ -5146,9 +5146,18 @@ LANGUAGE sql SECURITY DEFINER SET search_path = public
 AS $$
   SELECT
     w.balance AS wallet_balance,
-    COALESCE(SUM(wt.amount), 0) AS ledger_sum,
-    (w.balance = COALESCE(SUM(wt.amount), 0)) AS is_consistent,
-    (w.balance - COALESCE(SUM(wt.amount), 0)) AS discrepancy,
+    COALESCE(
+      SUM(wt.amount) FILTER (WHERE wt.type <> 'REFUND_SHORTFALL'),
+      0
+    ) AS ledger_sum,
+    (w.balance = COALESCE(
+      SUM(wt.amount) FILTER (WHERE wt.type <> 'REFUND_SHORTFALL'),
+      0
+    )) AS is_consistent,
+    (w.balance - COALESCE(
+      SUM(wt.amount) FILTER (WHERE wt.type <> 'REFUND_SHORTFALL'),
+      0
+    )) AS discrepancy,
     COUNT(wt.id) AS transaction_count
   FROM wallet w
   LEFT JOIN wallet_transactions wt ON wt.user_id = w.user_id
