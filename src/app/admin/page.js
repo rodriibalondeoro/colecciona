@@ -12,6 +12,9 @@ export default function AdminPage() {
 
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [disputes, setDisputes] = useState([]);
+  const [resolvingId, setResolvingId] = useState(null);
+  const [fraudFlags, setFraudFlags] = useState([]);
 
   useEffect(() => {
     async function fetchStats() {
@@ -32,66 +35,55 @@ export default function AdminPage() {
     fetchStats();
   }, []);
 
+  useEffect(() => {
+    async function fetchDisputes() {
+      try {
+        const session = JSON.parse(localStorage.getItem("colecciona_session") || "null");
+        const res = await fetch("/api/admin/disputes", {
+          headers: session?.token ? { Authorization: `Bearer ${session.token}` } : {},
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setDisputes(data.orders || []);
+        }
+      } catch (e) {
+        console.warn("[Admin] Disputes fetch error:", e?.message);
+      }
+    }
+    fetchDisputes();
+  }, []);
+
   const [bannedIds, setBannedIds] = useState([]);
   const allUsers = users.map((u) => ({ ...u, banned: bannedIds.includes(u.id) }));
 
-  const [disputes, setDisputes] = useState([
-    {
-      id: "DISP-101",
-      orderId: "CV-2024-001",
-      buyer: "@cruiz_tcg",
-      seller: "@lucia_cards",
-      card: "Voltron Raikou Fox Secret Edition",
-      reason: "Borde superior blanco visible (Vendedor declaró Near Mint)",
-      evidenceImage: "/images/cards/electric-fox.png",
-      status: "open",
-      amount: 25.0,
-    },
-    {
-      id: "DISP-102",
-      orderId: "CV-2024-002",
-      buyer: "@sofi_cards",
-      seller: "@alex_tcg",
-      card: "Aethelred The Celestial Dragon",
-      reason: "Sospecha de copia impresa (Falsa)",
-      evidenceImage: "/images/cards/dragon.png",
-      status: "open",
-      amount: 95.5,
-    },
-  ]);
-
-  const [fraudFlags, setFraudFlags] = useState([
-    {
-      id: "FLAG-901",
-      username: "@cruiz_fake",
-      matchingField: "Teléfono (+34 612 345 678)",
-      owner: "Carlos Ruiz Gómez (@cruiz_tcg)",
-      ipAddress: "192.168.1.42",
-      confidence: "98%",
-      date: "Hace 5 min",
-      status: "blocked",
-    },
-    {
-      id: "FLAG-902",
-      username: "@elena_magic_dup",
-      matchingField: "Mismo dispositivo e IP",
-      owner: "Elena Costa Marín (@elena_magic)",
-      ipAddress: "192.168.1.109",
-      confidence: "85%",
-      date: "Hace 2h",
-      status: "pending_review",
-    },
-  ]);
-
-  const handleResolveDispute = (id, winner) => {
-    setDisputes((prev) =>
-      prev.map((d) => (d.id === id ? { ...d, status: `resolved_${winner}` } : d))
-    );
-    const message =
-      winner === "buyer"
-        ? "Reembolso procesado para el comprador. Dinero devuelto."
-        : "Disputa cerrada a favor del vendedor. Fondos liberados.";
-    showToast(message, "success");
+  const handleResolveDispute = async (orderId, resolution) => {
+    if (resolvingId) return;
+    setResolvingId(orderId);
+    try {
+      const session = JSON.parse(localStorage.getItem("colecciona_session") || "null");
+      const res = await fetch("/api/admin/disputes/resolve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: session?.token ? `Bearer ${session.token}` : "",
+        },
+        body: JSON.stringify({ orderId, type: resolution }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || "Error al resolver la disputa", "error");
+        return;
+      }
+      setDisputes((prev) => prev.filter((d) => d.id !== orderId));
+      const msg = resolution === "refund"
+        ? "Reembolso iniciado para el comprador."
+        : "Disputa resuelta — fondos liberados al vendedor.";
+      showToast(msg, "success");
+    } catch (err) {
+      showToast("Error de red al resolver la disputa", "error");
+    } finally {
+      setResolvingId(null);
+    }
   };
 
   const handleActionFraud = (id, action) => {
@@ -356,51 +348,46 @@ export default function AdminPage() {
                 <div key={d.id} className={styles.disputeItem}>
                   <div className={styles.disputeGrid}>
                     <div className={styles.evidenceColumn}>
-                      <img src={d.evidenceImage} alt="Evidencia" className={styles.thumb} />
-                      <span className={styles.idLabel}>{d.id}</span>
+                      <img src={d.products?.image || "/images/cards/collection.png"} alt="Evidencia" className={styles.thumb} />
+                      <span className={styles.idLabel}>{d.id?.slice(0, 8)}</span>
                     </div>
                     <div className={styles.detailColumn}>
                       <div className={styles.row}>
-                        <span className={styles.bold}>{d.card}</span>
-                        <span className={styles.priceLabel}>{d.amount.toFixed(2)} €</span>
+                        <span className={styles.bold}>{d.products?.title || "Producto"}</span>
+                        <span className={styles.priceLabel}>{Number(d.total_paid || d.subtotal || 0).toFixed(2)} €</span>
                       </div>
                       <div className={styles.participants}>
-                        Comprador: <strong>{d.buyer}</strong> → Vendedor: <strong>{d.seller}</strong>
+                        Comprador: <strong>{d.buyer?.name || d.buyer?.username || "-"}</strong> → Vendedor: <strong>{d.seller?.name || d.seller?.username || "-"}</strong>
                       </div>
                       <p className={styles.reasonText}>
-                        <strong>Motivo de disputa:</strong> &ldquo;{d.reason}&rdquo;
+                        <strong>Orden:</strong> {d.id}
                       </p>
                       <div className={styles.statusRow}>
-                        {d.status === "open" ? (
-                          <span className={`${styles.statusBadge} ${styles.statusAmber}`}>Abierta (En mediación)</span>
-                        ) : d.status === "resolved_buyer" ? (
-                          <span className={`${styles.statusBadge} ${styles.statusGreen}`}>Resuelta: Reembolso al comprador</span>
-                        ) : (
-                          <span className={`${styles.statusBadge} ${styles.statusBlue}`}>Resuelta: Fondos al Vendedor</span>
-                        )}
+                        <span className={`${styles.statusBadge} ${styles.statusAmber}`}>Abierta (En mediación)</span>
                       </div>
                     </div>
                     <div className={styles.actionsColumn}>
-                      {d.status === "open" && (
-                        <>
-                          <button
-                            className={`${styles.btn} ${styles.btnBuyer}`}
-                            onClick={() => handleResolveDispute(d.id, "buyer")}
-                          >
-                            Reembolsar Comprador
-                          </button>
-                          <button
-                            className={`${styles.btn} ${styles.btnSeller}`}
-                            onClick={() => handleResolveDispute(d.id, "seller")}
-                          >
-                            Liberar al Vendedor
-                          </button>
-                        </>
-                      )}
+                      <button
+                        className={`${styles.btn} ${styles.btnBuyer}`}
+                        disabled={resolvingId === d.id}
+                        onClick={() => handleResolveDispute(d.id, "refund")}
+                      >
+                        {resolvingId === d.id ? "Procesando..." : "Reembolsar Comprador"}
+                      </button>
+                      <button
+                        className={`${styles.btn} ${styles.btnSeller}`}
+                        disabled={resolvingId === d.id}
+                        onClick={() => handleResolveDispute(d.id, "complete")}
+                      >
+                        {resolvingId === d.id ? "Procesando..." : "Liberar al Vendedor"}
+                      </button>
                     </div>
                   </div>
                 </div>
               ))}
+              {disputes.length === 0 && (
+                <div className={styles.empty}>No hay disputas abiertas.</div>
+              )}
             </div>
           </div>
         )}
