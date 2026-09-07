@@ -4849,7 +4849,7 @@ BEGIN
     FROM messages m
     WHERE (m.sender_id = v_user_id OR m.receiver_id = v_user_id)
       AND m.receiver_id = v_user_id
-      AND m.is_read = false
+      AND m.read = false
     GROUP BY
       CASE WHEN m.sender_id = v_user_id THEN m.receiver_id ELSE m.sender_id END,
       m.product_id
@@ -4877,6 +4877,62 @@ $$;
 
 REVOKE ALL ON FUNCTION get_thread_summaries(UUID, INT, INT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION get_thread_summaries(UUID, INT, INT) TO authenticated;
+
+-- ============================================================================
+-- get_thread_messages — load full message history for a conversation
+-- ============================================================================
+CREATE OR REPLACE FUNCTION get_thread_messages(
+  p_partner_id UUID,
+  p_product_id UUID DEFAULT NULL,
+  p_limit INT DEFAULT 100,
+  p_offset INT DEFAULT 0
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_user_id UUID;
+  v_result JSONB;
+BEGIN
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
+  IF p_limit < 1 THEN p_limit := 100; END IF;
+  IF p_limit > 500 THEN p_limit := 500; END IF;
+  IF p_offset < 0 THEN p_offset := 0; END IF;
+
+  SELECT jsonb_agg(
+    jsonb_build_object(
+      'id', m.id,
+      'from', m.sender_id,
+      'text', m.text,
+      'time', m.created_at,
+      'read', m.read
+    )
+    ORDER BY m.created_at ASC
+  )
+  INTO v_result
+  FROM messages m
+  WHERE (
+    (m.sender_id = v_user_id AND m.receiver_id = p_partner_id)
+    OR (m.sender_id = p_partner_id AND m.receiver_id = v_user_id)
+  )
+  AND (
+    p_product_id IS NULL
+    OR m.product_id = p_product_id
+    OR (p_product_id IS NULL AND m.product_id IS NULL)
+  )
+  ORDER BY m.created_at ASC
+  LIMIT p_limit OFFSET p_offset;
+
+  RETURN COALESCE(v_result, '[]'::jsonb);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION get_thread_messages(UUID, UUID, INT, INT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_thread_messages(UUID, UUID, INT, INT) TO authenticated;
 
 -- ============================================================================
 -- RATE LIMITS — distributed rate limiting via Supabase

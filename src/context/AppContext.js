@@ -578,11 +578,55 @@ export function AppProvider({ children }) {
   // ─────────────────────────────────────────────────────────────
   // Messages helpers
   // ─────────────────────────────────────────────────────────────
-  const markThreadRead = useCallback((threadId) => {
+  const loadThreadMessages = useCallback(async (threadId) => {
+    const thread = threads.find((t) => t.id === threadId);
+    if (!thread?.partnerId) return;
+
+    const token = session?.access_token;
+    if (!token) return;
+
+    try {
+      const params = new URLSearchParams({ partnerId: thread.partnerId });
+      if (thread.productId) params.set("productId", thread.productId);
+
+      const res = await fetch(`/api/threads/messages?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+
+      if (data.messages) {
+        setThreads((prev) =>
+          prev.map((t) =>
+            t.id === threadId ? { ...t, messages: data.messages } : t
+          )
+        );
+      }
+    } catch (err) {
+      console.warn("[AppContext] Error loading thread messages:", err);
+    }
+  }, [threads, session]);
+
+  const markThreadRead = useCallback(async (threadId) => {
     setThreads((prev) =>
       prev.map((t) => (t.id === threadId ? { ...t, unread: 0 } : t))
     );
-  }, []);
+    // Persist: mark messages as read in DB via API
+    const thread = threads.find((t) => t.id === threadId);
+    if (thread?.partnerId && session?.access_token) {
+      try {
+        await fetch("/api/threads/mark-read", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ partnerId: thread.partnerId }),
+        });
+      } catch (err) {
+        console.warn("[AppContext] markThreadRead persist failed:", err);
+      }
+    }
+  }, [threads, session]);
 
   const startThread = useCallback((partner, product) => {
     const partnerId = partner?.id || partner?.userId;
@@ -817,7 +861,7 @@ export function AppProvider({ children }) {
     // toasts
     toasts, showToast,
     // messages
-    threads, sendMessage, markThreadRead, startThread, deleteThread,
+    threads, sendMessage, markThreadRead, loadThreadMessages, startThread, deleteThread,
     // offers
     offers, makeOffer, respondToOffer, counterOffer,
     // orders

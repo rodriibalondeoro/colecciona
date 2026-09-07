@@ -50,7 +50,7 @@ function TickIcon({ status }) {
 }
 
 function MessagesInner() {
-  const { threads = [], sendMessage, markThreadRead, session, unreadCount, markAllRead, deleteThread } = useApp();
+  const { threads = [], sendMessage, markThreadRead, loadThreadMessages, session, unreadCount, markAllRead, deleteThread } = useApp();
   const searchParams = useSearchParams();
   const [activeThreadId, setActiveThreadId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -121,6 +121,7 @@ function MessagesInner() {
         setActiveThreadId(threadId);
         setIsMobileChatOpen(true);
         markThreadRead(threadId);
+        loadThreadMessages(threadId);
       }
     }
   }, [searchParams, threads.length]);
@@ -129,7 +130,8 @@ function MessagesInner() {
     setActiveThreadId(id);
     setIsMobileChatOpen(true);
     markThreadRead(id);
-  }, [markThreadRead]);
+    loadThreadMessages(id);
+  }, [markThreadRead, loadThreadMessages]);
 
   const handleSend = () => {
     if (messageText.trim() && activeThreadId && !sendingRef.current) {
