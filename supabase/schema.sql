@@ -289,7 +289,7 @@ CREATE TABLE IF NOT EXISTS products (
   set_name TEXT NOT NULL,
   language TEXT NOT NULL,
   year INTEGER NOT NULL CHECK (year >= 1900 AND year <= 2100),
-  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('DRAFT','ACTIVE','RESERVED','SOLD','INACTIVE','REMOVED')),
+  status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('DRAFT','ACTIVE','RESERVED','SOLD')),
   reserved_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
   reserved_until TIMESTAMPTZ,
   sold_at TIMESTAMPTZ,
@@ -325,15 +325,6 @@ BEGIN
     IF auth.uid() = OLD.seller THEN
       -- DRAFT → ACTIVE (publish)
       IF OLD.status = 'DRAFT' AND NEW.status = 'ACTIVE' THEN
-        RETURN NEW;
-      -- ACTIVE → INACTIVE (unpublish)
-      ELSIF OLD.status = 'ACTIVE' AND NEW.status = 'INACTIVE' THEN
-        RETURN NEW;
-      -- INACTIVE → ACTIVE (republish)
-      ELSIF OLD.status = 'INACTIVE' AND NEW.status = 'ACTIVE' THEN
-        RETURN NEW;
-      -- ACTIVE → REMOVED (delete listing)
-      ELSIF OLD.status IN ('ACTIVE','INACTIVE','DRAFT') AND NEW.status = 'REMOVED' THEN
         RETURN NEW;
       -- Seller CANNOT cancel RESERVED (only via expiry or buyer cancellation)
       -- Seller CANNOT transition RESERVED → SOLD (only via confirm_order_payment)
@@ -371,7 +362,7 @@ CREATE TRIGGER trg_validate_product_transition
   FOR EACH ROW EXECUTE FUNCTION validate_product_transition();
 
 -- Prevent deletion of RESERVED/SOLD products (they have active checkout/payment lifecycle).
--- Only ACTIVE/INACTIVE/DRAFT/REMOVED products may be deleted by the seller.
+-- Only ACTIVE/DRAFT products may be deleted by the seller.
 CREATE OR REPLACE FUNCTION prevent_product_delete()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
