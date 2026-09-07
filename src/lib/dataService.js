@@ -305,11 +305,21 @@ export async function updateProfile(updates) {
 
 /**
  * Reset password via Supabase Auth.
- * Passwords are NEVER stored locally — managed exclusively by Supabase.
+ * If newPassword is provided, updates the password directly (requires active session).
+ * If only email is provided, sends a reset link via email.
  */
-export async function resetPassword(email) {
+export async function resetPassword(emailOrPhone, newPassword) {
   if (!supabase) throw new Error("Supabase no configurado. No se puede restablecer contraseña.");
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+
+  if (newPassword) {
+    // Direct password update — requires active session from OTP verification
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw new Error(error.message);
+    return true;
+  }
+
+  // Fallback: send reset link via email
+  const { error } = await supabase.auth.resetPasswordForEmail(emailOrPhone, {
     redirectTo: `${window.location.origin}/reset-password`,
   });
   if (error) throw new Error(error.message);

@@ -3053,7 +3053,6 @@ BEGIN
       WHEN OLD.status = 'SHIPPED' AND NEW.status = 'RECEIVED' AND auth.uid() = OLD.receiver_id THEN true
       WHEN OLD.status = 'RECEIVED' AND NEW.status = 'COMPLETED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
       WHEN OLD.status NOT IN ('COMPLETED','CANCELLED','DISPUTED','SUPERSEDED') AND NEW.status = 'DISPUTED' AND (auth.uid() = OLD.proposer_id OR auth.uid() = OLD.receiver_id) THEN true
-      -- DISPUTED resolution (admin only): cancel (release items) or complete (transfer)
       WHEN OLD.status = 'DISPUTED' AND NEW.status = 'CANCELLED' AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.is_admin = true) THEN true
       WHEN OLD.status = 'DISPUTED' AND NEW.status = 'COMPLETED' AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.is_admin = true) THEN true
       ELSE false
