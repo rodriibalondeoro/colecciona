@@ -20,6 +20,8 @@ export default function ProfilePage() {
   const [withdrawModal, setWithdrawModal] = useState(false);
   const [withdrawDone, setWithdrawDone] = useState(false);
   const [logoutModal, setLogoutModal] = useState(false);
+  const [deleteModal, setDeleteModal] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -177,6 +179,27 @@ export default function ProfilePage() {
     } catch {}
     setSession(null);
     window.location.href = "/auth";
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleting(true);
+    try {
+      const token = session?.access_token || session?.accessToken;
+      const res = await fetch("/api/account/delete", {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al eliminar cuenta");
+      localStorage.removeItem("colecciona_session");
+      setSession(null);
+      showToast("Cuenta eliminada correctamente", "success");
+      window.location.href = "/auth";
+    } catch (err) {
+      showToast(err.message || "Error al eliminar cuenta", "error");
+      setDeleting(false);
+      setDeleteModal(false);
+    }
   };
 
   return (
@@ -495,6 +518,17 @@ export default function ProfilePage() {
             </svg>
             Cerrar sesión
           </button>
+          <button
+            className={`${styles.logoutBtn}`}
+            style={{ color: "#ef4444", marginTop: "8px" }}
+            onClick={() => setDeleteModal(true)}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+            Eliminar cuenta
+          </button>
         </div>
 
         {/* Logout Modal */}
@@ -511,6 +545,34 @@ export default function ProfilePage() {
                 </button>
                 <button className={styles.confirmBtn} onClick={handleLogout}>
                   Sí, cerrar sesión
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete Account Modal */}
+        {deleteModal && (
+          <div className={styles.modalOverlay} onClick={() => !deleting && setDeleteModal(false)}>
+            <div className={`${styles.modalDialog} modal-enter`} onClick={(e) => e.stopPropagation()}>
+              <h3 className={styles.modalTitle}>Eliminar cuenta permanentemente</h3>
+              <p className={styles.modalSub}>
+                Esta acción es irreversible. Se eliminarán todos tus datos, productos, mensajes y transacciones. No podrás recuperar tu cuenta.
+              </p>
+              <p className={styles.modalSub} style={{ color: "#ef4444", fontWeight: 600 }}>
+                No se permite si tienes pedidos, ofertas o intercambios activos.
+              </p>
+              <div className={styles.modalActions}>
+                <button className={styles.cancelBtn} onClick={() => setDeleteModal(false)} disabled={deleting}>
+                  Cancelar
+                </button>
+                <button
+                  className={styles.confirmBtn}
+                  style={{ background: "#ef4444" }}
+                  onClick={handleDeleteAccount}
+                  disabled={deleting}
+                >
+                  {deleting ? "Eliminando..." : "Sí, eliminar mi cuenta"}
                 </button>
               </div>
             </div>
