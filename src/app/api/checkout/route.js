@@ -74,6 +74,19 @@ export async function POST(req) {
       });
 
     if (orderError || !orderResult) {
+      // Rollback: release reserved products back to ACTIVE
+      // We can't use rollback_checkout (needs order_id) if create_checkout_order failed
+      // before inserting the order. Release products directly.
+      try {
+        await serviceClient
+          .from("products")
+          .update({ status: "ACTIVE", reserved_by: null, reserved_until: null })
+          .in("id", uniqueIds)
+          .eq("status", "RESERVED")
+          .eq("reserved_by", user.id);
+      } catch (rbErr) {
+        console.error("[Checkout] Failed to release reservations after order creation failure:", rbErr?.message);
+      }
       return NextResponse.json({ error: "Error creando el pedido" }, { status: 500 });
     }
 

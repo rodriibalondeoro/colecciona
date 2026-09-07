@@ -74,6 +74,7 @@ function MessagesInner() {
 
   const activeThread = threads.find(t => t.id === activeThreadId);
   const sendingRef = useRef(false);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (!session?.id) return;
@@ -136,11 +137,12 @@ function MessagesInner() {
   const handleSend = () => {
     if (messageText.trim() && activeThreadId && !sendingRef.current) {
       sendingRef.current = true;
+      setSending(true);
       if (sendMessage) {
         sendMessage(activeThreadId, messageText);
       }
-      setMessageText('');
-      setTimeout(() => { sendingRef.current = false; }, 500);
+      setMessageText("");
+      setTimeout(() => { sendingRef.current = false; setSending(false); }, 500);
     }
   };
 
@@ -331,7 +333,7 @@ function MessagesInner() {
               <button
                 className={styles.sendButton}
                 onClick={handleSend}
-                disabled={!messageText.trim()}
+                disabled={!messageText.trim() || sending}
               >
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="22" y1="2" x2="11" y2="13"></line>

@@ -412,6 +412,32 @@ export async function GET(req) {
       console.log("[Cron] Cleaned abandoned PENDING orders");
     }
 
+    // 8. Reclaim stale webhook_events stuck in 'processing' > 10 min
+    // These are events where the processing server died mid-handler.
+    // Reset to 'failed' so Stripe can retry delivery.
+    try {
+      const { data: staleEvents, error: staleErr } = await supabase
+        .from("webhook_events")
+        .select("stripe_event_id, event_type, processing_started_at")
+        .eq("status", "processing")
+        .lt("processing_started_at", new Date(Date.now() - 10 * 60 * 1000).toISOString())
+        .limit(50);
+      if (!staleErr && staleEvents?.length > 0) {
+        console.warn(`[Cron] Found ${staleEvents.length} stale webhook_events in 'processing' state, resetting to 'failed'`);
+        for (const evt of staleEvents) {
+          await supabase
+            .from("webhook_events")
+            .update({ status: "failed", processed_at: new Date().toISOString() })
+            .eq("stripe_event_id", evt.stripe_event_id)
+            .eq("status", "processing");
+        }
+        results.warnings = results.warnings || [];
+        results.warnings.push({ action: "reclaim_stale_webhooks", count: staleEvents.length });
+      }
+    } catch (webhookErr) {
+      console.error("[Cron] Error reclaiming stale webhooks:", webhookErr?.message);
+    }
+
     return NextResponse.json({ message: "Cron completed", results });
   } catch (err) {
     console.error("[Cron] Fatal error:", err);
