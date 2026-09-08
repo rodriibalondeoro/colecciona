@@ -123,7 +123,7 @@ export async function PATCH(req, { params }) {
       const { data, error: rpcError } = await supabase.rpc("counter_offer_proposal", {
         p_proposal_id: id,
         p_message: message || null,
-        p_new_proposer_items: new_proposer_items.map((i) => ({
+        p_new_proposer_items: (new_proposer_items || []).map((i) => ({
           collection_item_id: i.collection_item_id,
           quantity: i.quantity || 1,
         })),

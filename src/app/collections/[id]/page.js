@@ -304,7 +304,7 @@ export default function CollectionDetailPage() {
                         {s.items.map((item, i) => (
                           <span key={i} className={styles.sellerItemBadge}>
                             {item.status === 'FOR_TRADE' ? '⇄ Intercambio' : '€ Venta'}
-                            {item.quantity > 1 && ` ×${item.quantity}`}
+                            {item.duplicate_quantity > 1 && ` ×${item.duplicate_quantity}`}
                           </span>
                         ))}
                       </div>

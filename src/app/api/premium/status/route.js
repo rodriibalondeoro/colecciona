@@ -19,7 +19,7 @@ export async function GET(req) {
 
     const { data: profile } = await supabase
       .from("subscriptions")
-      .select("status, current_period_end")
+      .select("status, current_period_start, current_period_end")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(1)

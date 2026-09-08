@@ -73,6 +73,8 @@ function filterProducts(list, { query, category, condition, minPrice, maxPrice, 
 }
 
 export async function GET(req) {
+  let dbProducts = [];
+  let filters = { query: "", category: "all", condition: "all", minPrice: null, maxPrice: null, sort: "recent", sellerUsername: "" };
   try {
     const { searchParams } = new URL(req.url);
     const query = searchParams.get("q") || "";
@@ -87,12 +89,10 @@ export async function GET(req) {
     const minPrice = minRaw !== null && minRaw !== "" && !isNaN(Number(minRaw)) ? Number(minRaw) : null;
     const maxPrice = maxRaw !== null && maxRaw !== "" && !isNaN(Number(maxRaw)) ? Number(maxRaw) : null;
 
-    const filters = { query, category, condition, minPrice, maxPrice, sort, sellerUsername };
+    filters = { query, category, condition, minPrice, maxPrice, sort, sellerUsername };
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    let dbProducts = [];
 
     if (url && key) {
       try {
@@ -162,16 +162,7 @@ export async function GET(req) {
     });
   } catch (error) {
     console.error("Error en Search API:", error);
-    const filters = {
-      query: new URL(req.url).searchParams.get("q") || "",
-      category: new URL(req.url).searchParams.get("category") || "all",
-      condition: new URL(req.url).searchParams.get("condition") || "all",
-      minPrice: null,
-      maxPrice: null,
-      sort: "recent",
-      sellerUsername: "",
-    };
-    const filtered = filterProducts([...products], filters);
+    const filtered = filterProducts([...dbProducts], filters);
     return NextResponse.json({
       success: true,
       products: filtered.slice(0, 20),

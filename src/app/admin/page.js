@@ -211,7 +211,7 @@ export default function AdminPage() {
             className={`${styles.tab} ${activeTab === "users" ? styles.tabActive : ""}`}
             onClick={() => setActiveTab("users")}
           >
-            👥 Usuarios y Baneos ({allUsers.filter((u) => u.banned).length})
+            👥 Usuarios y Baneos ({bannedIds.length})
           </button>
         </div>
 

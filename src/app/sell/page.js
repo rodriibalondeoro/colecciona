@@ -461,7 +461,7 @@ export default function SellPage() {
                 category={category}
                 condition={condition}
                 title={title}
-                onSuggestedPrice={(p) => setPrice(String(p))}
+                onSuggest={(p) => setPrice(String(p))}
               />
 
               <div className={styles.inputGroup}>

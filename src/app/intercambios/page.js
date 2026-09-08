@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
@@ -28,7 +28,7 @@ export default function IntercambiosPage() {
   const [selectedTheirItems, setSelectedTheirItems] = useState([]);
   const [proposalMsg, setProposalMsg] = useState('');
   const [sending, setSending] = useState(false);
-  const sendingRef = useState(false);
+  const sendingRef = useRef(false);
 
   // Counter-offer state
   const [showCounter, setShowCounter] = useState(false);
@@ -39,7 +39,7 @@ export default function IntercambiosPage() {
   const [selectedCounterTheirItems, setSelectedCounterTheirItems] = useState([]);
   const [counterMsg, setCounterMsg] = useState('');
   const [counterSending, setCounterSending] = useState(false);
-  const counterSendingRef = useState(false);
+  const counterSendingRef = useRef(false);
 
   useEffect(() => {
     if (!session?.id) { router.push('/auth'); return; }
@@ -294,45 +294,52 @@ export default function IntercambiosPage() {
               </div>
             ) : (
               <div className={styles.matchGrid}>
-                {matches.map(m => (
-                  <div key={m.userId} className={styles.matchCard}>
+                {matches.map(m => {
+                  const u = m.user || {};
+                  const name = u.name || u.username || 'Usuario';
+                  const giveItems = m.giveItems || [];
+                  const getItems = m.getItems || [];
+                  const total = m.score ?? (m.giveCount + m.getCount);
+                  return (
+                  <div key={u.id} className={styles.matchCard}>
                     <div className={styles.matchHeader}>
-                      <div className={styles.matchAvatar}>{m.userName?.[0] || '?'}</div>
+                      <div className={styles.matchAvatar}>{name?.[0] || '?'}</div>
                       <div>
-                        <span className={styles.matchName}>{m.userName}</span>
+                        <span className={styles.matchName}>{name}</span>
                         <div className={styles.matchMeta}>
-                          {m.rating > 0 && <span className={styles.matchRating}>⭐ {m.rating.toFixed(1)}</span>}
-                          {m.location && <span className={styles.matchLocation}>📍 {m.location}</span>}
+                          {u.rating > 0 && <span className={styles.matchRating}>⭐ {Number(u.rating).toFixed(1)}</span>}
+                          {u.location && <span className={styles.matchLocation}>📍 {u.location}</span>}
                         </div>
-                        {m.finalScore >= 75 && <span className={styles.hotBadge}>🔥</span>}
+                        {total >= 75 && <span className={styles.hotBadge}>🔥</span>}
                       </div>
                       <div className={styles.scoreCircle}>
-                        <span className={styles.scoreVal}>{m.finalScore}</span>
+                        <span className={styles.scoreVal}>{total}</span>
                         <span className={styles.scorePct}>%</span>
                       </div>
                     </div>
                     <div className={styles.matchBody}>
-                      {m.youCanGet.length > 0 && (
+                      {giveItems.length > 0 && (
                         <div className={styles.matchCol}>
                           <span className={styles.matchLabel}>Tú puedes recibir:</span>
-                          {m.youCanGet.map((c, i) => <span key={i} className={styles.matchItem}>✓ {c}</span>)}
+                          {giveItems.map((c, i) => <span key={i} className={styles.matchItem}>✓ {c.card_name || c}</span>)}
                         </div>
                       )}
-                      {m.theyCanGet.length > 0 && (
+                      {getItems.length > 0 && (
                         <div className={styles.matchCol}>
-                          <span className={styles.matchLabel}>{m.userName} puede recibir:</span>
-                          {m.theyCanGet.map((c, i) => <span key={i} className={styles.matchItem}>⇄ {c}</span>)}
+                          <span className={styles.matchLabel}>{name} puede recibir:</span>
+                          {getItems.map((c, i) => <span key={i} className={styles.matchItem}>⇄ {c.card_name || c}</span>)}
                         </div>
                       )}
                     </div>
                     <div className={styles.matchFooter}>
-                      <span className={styles.matchCount}>{m.matchedCount} coincidencias</span>
-                      <button className={styles.proposeBtn} onClick={() => openProposalFor(m.userId)}>
+                      <span className={styles.matchCount}>{total} coincidencias</span>
+                      <button className={styles.proposeBtn} onClick={() => openProposalFor(u.id)}>
                         Proponer intercambio
                       </button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

@@ -101,6 +101,10 @@ export function AppProvider({ children }) {
 
   // ── Messages / Chat threads ──
   const [threads, setThreads] = useState([]);
+  const threadsRef = useRef([]);
+  useEffect(() => {
+    threadsRef.current = threads;
+  }, [threads]);
 
   // ── Offers (ofertas de precio) ──
   const [offers, setOffers] = useState([]);
@@ -672,17 +676,14 @@ export function AppProvider({ children }) {
   const sendMessage = useCallback((threadId, text) => {
     if (!text?.trim()) return;
 
-    // Find thread via functional state to avoid stale closure
-    let receiverId = null;
-    let productId = null;
-
-    setThreads((prev) => {
-      const thread = prev.find((t) => t.id === threadId);
-      if (!thread) return prev;
-      receiverId = thread.partnerId || thread.partner?.id;
-      productId = thread.productId || thread.product?.id || null;
-      return prev;
-    });
+    // Read thread synchronously from ref (avoids relying on setState updater side-effects)
+    const thread = threadsRef.current.find((t) => t.id === threadId);
+    if (!thread) {
+      showToast("No se pudo enviar: conversación no encontrada", "error");
+      return;
+    }
+    const receiverId = thread.partnerId || thread.partner?.id;
+    const productId = thread.productId || thread.product?.id || null;
 
     if (!receiverId) {
       showToast("No se pudo enviar: receptor no encontrado", "error");
