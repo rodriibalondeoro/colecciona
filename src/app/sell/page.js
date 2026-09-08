@@ -312,7 +312,7 @@ export default function SellPage() {
         <div className={styles.formContainer}>
           {/* Step 1: Foto */}
           {step === 1 && (
-            <div className={styles.stepBox}>
+            <div className={`${styles.stepBox} ${styles.stepContent}`}>
               <h2 className={styles.stepTitle}>1. Fotografía de la Carta</h2>
               <p className={styles.stepDesc}>Sube una imagen nítida sin brillos ni desenfoques.</p>
 
@@ -397,7 +397,7 @@ export default function SellPage() {
 
           {/* Step 2: Detalles */}
           {step === 2 && (
-            <div className={styles.stepBox}>
+            <div className={`${styles.stepBox} ${styles.stepContent}`}>
               <h2 className={styles.stepTitle}>2. Detalles y Precio</h2>
 
               <div className={styles.inputGroup}>
@@ -508,7 +508,7 @@ export default function SellPage() {
 
           {/* Step 3: Envío */}
           {step === 3 && (
-            <div className={styles.stepBox}>
+            <div className={`${styles.stepBox} ${styles.stepContent}`}>
               <h2 className={styles.stepTitle}>3. Métodos de Envío</h2>
               <p className={styles.stepDesc}>
                 Selecciona los métodos de envío que aceptas. El comprador asume el coste del transporte.
@@ -562,7 +562,7 @@ export default function SellPage() {
 
           {/* Step 4: Confirmar */}
           {step === 4 && (
-            <div className={styles.stepBox}>
+            <div className={`${styles.stepBox} ${styles.stepContent}`}>
               <h2 className={styles.stepTitle}>4. Desglose Financiero</h2>
 
               <div className={styles.summaryCard}>

@@ -119,6 +119,15 @@
   margin-top: -12px;
 }
 
+.stepContent {
+  animation: sellStepIn 0.35s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@keyframes sellStepIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 /* Upload Zone */
 .uploadZone {
   margin-top: 8px;

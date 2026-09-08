@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
 import ShippingQR from '@/components/ShippingQR';
+import Skeleton from '@/components/Skeleton';
 import { authFetch } from '@/lib/authFetch';
 import styles from './page.module.css';
 import { ORDER_STATES, normalizeOrderStatus } from '@/lib/orderStates';
@@ -310,14 +311,17 @@ export default function OrdersPage() {
 
   if (loading) {
     return (
-      <div className={styles.container}>
-        <div className={styles.emptyState}>Cargando...</div>
+      <div className={`${styles.container} page-enter`}>
+        <div className={styles.header}>
+          <h1 className={styles.title}>Panel de Actividad</h1>
+        </div>
+        <Skeleton type="card" count={4} />
       </div>
     );
   }
 
   return (
-    <div className={styles.container}>
+    <div className={`${styles.container} page-enter`}>
       <div className={styles.header}>
         <h1 className={styles.title}>Panel de Actividad</h1>
         <div className={styles.tabs}>

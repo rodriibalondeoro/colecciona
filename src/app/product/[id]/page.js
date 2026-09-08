@@ -11,6 +11,7 @@ import ProductCard from "@/components/ProductCard";
 import MakeOfferModal from "@/components/MakeOfferModal";
 import FoilCard from "@/components/FoilCard";
 import PriceAlertButton from "@/components/PriceAlertButton";
+import Skeleton from "@/components/Skeleton";
 import { useApp } from "@/context/AppContext";
 import { addRecentlyViewed } from "@/lib/recentlyViewed";
 import { collections } from "@/data/collections";
@@ -176,10 +177,8 @@ export default function ProductDetailPage() {
 
   if (loading) {
     return (
-      <div className={styles.notFoundWrapper}>
-        <div className={styles.notFoundBox}>
-          <p>Cargando carta...</p>
-        </div>
+      <div className={`${styles.notFoundWrapper} page-enter`}>
+        <Skeleton type="detail" count={1} />
       </div>
     );
   }

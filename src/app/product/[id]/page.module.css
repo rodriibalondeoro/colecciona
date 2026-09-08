@@ -890,6 +890,12 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
+  animation: lightboxFadeIn 0.25s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@keyframes lightboxFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .closeLightboxBtn {
@@ -913,6 +919,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  animation: lightboxScaleIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+}
+
+@keyframes lightboxScaleIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .lightboxImage {

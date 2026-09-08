@@ -185,7 +185,7 @@ export default function CheckoutPage() {
       <div className={styles.content}>
         <div className={styles.mainColumn}>
           {step === 1 && (
-            <div className={styles.card}>
+            <div className={`${styles.card} ${styles.stepContent}`}>
               <h2 className={styles.cardTitle}>Dirección de entrega</h2>
               <form onSubmit={handleNextStep} className={styles.form}>
                 <div className={styles.formRow}>
@@ -222,7 +222,7 @@ export default function CheckoutPage() {
           )}
 
           {step === 2 && (
-            <div className={styles.card}>
+            <div className={`${styles.card} ${styles.stepContent}`}>
               <h2 className={styles.cardTitle}>Datos de pago</h2>
               <div className={styles.paymentMethods}>
                 <div className={`${styles.paymentMethod} ${styles.selected}`}>
