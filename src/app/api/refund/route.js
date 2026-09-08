@@ -28,7 +28,7 @@ export async function POST(req) {
     }
 
     if (!url || !key) {
-      return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
+      return NextResponse.json({ error: "Supabase not configured" }, { status: 503 });
     }
 
     const stripe = getStripe();

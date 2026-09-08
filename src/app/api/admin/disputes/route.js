@@ -8,7 +8,7 @@ const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 export async function GET(req) {
   try {
     if (!url || !serviceKey) {
-      return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
+      return NextResponse.json({ error: "Supabase not configured" }, { status: 503 });
     }
 
     const { user, error: authError } = await verifyAuth(req);

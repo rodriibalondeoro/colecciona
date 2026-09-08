@@ -84,10 +84,21 @@ export async function POST(req) {
     }
 
     console.log(`📱 [Colecciona SMS Mock] Código enviado a ${otpKey} (Expira en 5 min)`);
+    // Sin Twilio configurado NO se envía ningún SMS real. Solo en desarrollo/staging
+    // revelamos el código (demoCode) para permitir pruebas. En producción esto es
+    // un error de configuración y NO se debe filtrar el código.
+    const isProd = process.env.NODE_ENV === "production";
+    if (isProd) {
+      return NextResponse.json({
+        success: false,
+        error: "SMS no configurado. Contacta con soporte.",
+      }, { status: 503 });
+    }
     return NextResponse.json({
       success: true,
       message: "Código SMS enviado con éxito",
       otpKey,
+      demoCode: code,
     });
   } catch (error) {
     console.error("Error en SMS Send API:", error);

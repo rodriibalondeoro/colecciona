@@ -444,16 +444,16 @@ export default function OrdersPage() {
         {activeTab === 'ventas' && (
           <div className={styles.cardList}>
             {sales.length > 0 ? sales.map((sale, idx) => {
-              const priceNum = parseFloat(sale.total || 0);
-              const earning = (priceNum * 0.92).toFixed(2);
+              const saleProduct = sale.items?.[0]?.product;
+              const earning = Number(sale.subtotal - sale.commission || 0).toFixed(2);
 
               return (
                 <div key={sale.id} className={styles.card} style={{ animationDelay: `${idx * 60}ms` }}>
                   <div className={styles.cardHeader}>
                     <div className={styles.productInfo}>
-                      <img src={sale.product?.image || 'https://via.placeholder.com/80'} alt={sale.product?.title} className={styles.productImage} />
+                      <img src={saleProduct?.image || 'https://via.placeholder.com/80'} alt={saleProduct?.title} className={styles.productImage} />
                       <div className={styles.productDetails}>
-                        <span className={styles.productTitle}>{sale.product?.title || 'Producto'}</span>
+                        <span className={styles.productTitle}>{saleProduct?.title || 'Producto'}</span>
                         <div className={styles.partnerInfo}>
                           Comprador:
                           <div className={styles.avatar}>{getInitials(sale.buyer?.name)}</div>

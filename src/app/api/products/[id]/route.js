@@ -15,7 +15,7 @@ export async function GET(req, { params }) {
     }
 
     if (!url || !anonKey) {
-      return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
+      return NextResponse.json({ error: "Supabase no configurado" }, { status: 503 });
     }
 
     // Public product: use anon key (RLS allows public SELECT on ACTIVE products)

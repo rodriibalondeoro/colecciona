@@ -10,7 +10,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export async function DELETE(req, { params }) {
   try {
     if (!url || !key) {
-      return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
+      return NextResponse.json({ error: "Supabase no configurado" }, { status: 503 });
     }
     const supabase = createClient(url, key);
     const { id } = await params;

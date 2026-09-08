@@ -304,7 +304,7 @@ function MessagesInner() {
             <div className={styles.messagesContainer}>
               {activeThread.messages?.map((msg, idx) => {
                 const isMe = msg.from === 'me' || msg.from === session?.id;
-                const msgStatus = msg.status || (isMe ? 'read' : undefined);
+                const msgStatus = msg.status || (isMe ? (msg.read ? 'read' : 'delivered') : undefined);
                 return (
                   <div key={msg.id} className={`${styles.messageWrapper} ${isMe ? styles.me : styles.partner}`}>
                     <div className={styles.messageBubble}>

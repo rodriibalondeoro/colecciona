@@ -15,7 +15,7 @@ export async function POST(req) {
     }
 
     if (!url || !key) {
-      return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
+      return NextResponse.json({ error: "Supabase no configurado" }, { status: 503 });
     }
     const supabase = createClient(url, key);
     const body = await req.json().catch(() => null);

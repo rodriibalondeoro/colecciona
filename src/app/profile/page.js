@@ -14,6 +14,14 @@ import { shippingMethods } from "@/data/mockData";
 import { useApp } from "@/context/AppContext";
 import styles from "./page.module.css";
 
+function computeLevel(sales = 0, purchases = 0) {
+  const activity = (Number(sales) || 0) + (Number(purchases) || 0);
+  if (activity >= 50) return 4;
+  if (activity >= 20) return 3;
+  if (activity >= 5) return 2;
+  return 1;
+}
+
 export default function ProfilePage() {
   const { session, setSession, showToast } = useApp();
   const [tab, setTab] = useState("selling");
@@ -326,7 +334,7 @@ export default function ProfilePage() {
                   <div className={styles.nameRow}>
                     <h1 className={styles.userName}>{user.name}</h1>
                     {isVerified && <VerifiedBadge />}
-                    <LevelBadge level={user.level} />
+                    <LevelBadge level={computeLevel(user.sales, user.purchases)} />
                     <button className={styles.editBtn} onClick={() => setEditing(true)}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -456,13 +464,13 @@ export default function ProfilePage() {
                     {purchases.map((o) => (
                       <div key={o.id} className={styles.historyItem}>
                         <div className={styles.historyInfo}>
-                          <span className={styles.itemTitle}>{o.product?.title || "Compra"}</span>
+                          <span className={styles.itemTitle}>{o.items?.[0]?.product?.title || "Compra"}</span>
                           <span className={styles.itemMeta}>
                             {new Date(o.created_at).toLocaleDateString("es-ES")} • {o.shipping_method || "Envío por gestionar"}
                           </span>
                         </div>
                         <div className={styles.historyRight}>
-                          <span className={styles.priceVal}>{Number(o.total || o.price || 0).toFixed(2)} €</span>
+                          <span className={styles.priceVal}>{Number(o.total || 0).toFixed(2)} €</span>
                           <StatusBadge status={o.status} />
                         </div>
                       </div>
@@ -486,13 +494,13 @@ export default function ProfilePage() {
                     {sales.map((o) => (
                       <div key={o.id} className={styles.historyItem}>
                         <div className={styles.historyInfo}>
-                          <span className={styles.itemTitle}>{o.product?.title || "Venta"}</span>
+                          <span className={styles.itemTitle}>{o.items?.[0]?.product?.title || "Venta"}</span>
                           <span className={styles.itemMeta}>
                             {new Date(o.created_at).toLocaleDateString("es-ES")} • {o.shipping_method || "Envío por gestionar"}
                           </span>
                         </div>
                         <div className={styles.historyRight}>
-                          <span className={styles.priceNet}>+{(Number(o.price || 0) * 0.92).toFixed(2)} €</span>
+                          <span className={styles.priceNet}>+{Number(o.subtotal - o.commission || 0).toFixed(2)} €</span>
                           <StatusBadge status={o.status} />
                         </div>
                       </div>

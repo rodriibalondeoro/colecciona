@@ -27,7 +27,7 @@ export async function POST(req) {
 
   if (!webhookSecret) {
     console.error("[Webhook] STRIPE_WEBHOOK_SECRET no configurado");
-    return NextResponse.json({ error: "Webhook not configured" }, { status: 500 });
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   }
 
   const stripe = getStripe();

@@ -11,7 +11,7 @@ export async function GET(req) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !serviceKey) {
-    return NextResponse.json({ error: "Supabase no configurado" }, { status: 500 });
+    return NextResponse.json({ error: "Supabase no configurado" }, { status: 503 });
   }
 
   const supabase = createClient(url, serviceKey);
