@@ -126,12 +126,13 @@ export default function Navbar() {
                     <button className={styles.notifMarkAll} onClick={markAllRead}>Marcar todas leídas</button>
                   </div>
                   <div className={styles.notifList}>
-                    {notifications.map((n) => (
+                    {notifications.map((n, idx) => (
                       <Link
                         key={n.id}
                         href={n.link || "#"}
                         className={`${styles.notifItem} ${!n.read ? styles.notifUnread : ""}`}
                         onClick={() => { markRead(n.id); setNotifOpen(false); }}
+                        style={{ animationDelay: `${idx * 30}ms` }}
                       >
                         <div className={styles.notifIcon} style={{ color: notifColors[n.icon] }}>
                           {notifIcons[n.icon]}

@@ -349,8 +349,8 @@ export default function OrdersPage() {
       <div className={styles.content}>
         {activeTab === 'compras' && (
           <div className={styles.cardList}>
-            {orders.length > 0 ? orders.map(order => (
-              <div key={order.id} className={styles.card}>
+            {orders.length > 0 ? orders.map((order, idx) => (
+              <div key={order.id} className={styles.card} style={{ animationDelay: `${idx * 60}ms` }}>
                 <div className={styles.cardHeader}>
                   <div className={styles.productInfo}>
                     <img src={order.items?.[0]?.product?.image || 'https://via.placeholder.com/80'} alt={order.items?.[0]?.product?.title} className={styles.productImage} />
@@ -443,12 +443,12 @@ export default function OrdersPage() {
 
         {activeTab === 'ventas' && (
           <div className={styles.cardList}>
-            {sales.length > 0 ? sales.map(sale => {
+            {sales.length > 0 ? sales.map((sale, idx) => {
               const priceNum = parseFloat(sale.total || 0);
               const earning = (priceNum * 0.92).toFixed(2);
 
               return (
-                <div key={sale.id} className={styles.card}>
+                <div key={sale.id} className={styles.card} style={{ animationDelay: `${idx * 60}ms` }}>
                   <div className={styles.cardHeader}>
                     <div className={styles.productInfo}>
                       <img src={sale.product?.image || 'https://via.placeholder.com/80'} alt={sale.product?.title} className={styles.productImage} />
@@ -554,11 +554,11 @@ export default function OrdersPage() {
 
             {offerTab === 'received' && (
               <div className={styles.cardList}>
-                {offers.length > 0 ? offers.map(offer => {
+                {offers.length > 0 ? offers.map((offer, idx) => {
                   const partner = offer.from_user;
                   const fmt = (n) => `${Number(n || 0).toFixed(2)} €`;
                   return (
-                    <div key={offer.id} className={styles.card}>
+                    <div key={offer.id} className={styles.card} style={{ animationDelay: `${idx * 60}ms` }}>
                       <div className={styles.cardHeader}>
                         <div className={styles.productInfo}>
                           <img src={offer.product?.image || 'https://via.placeholder.com/80'} alt={offer.product?.title} className={styles.productImage} />
@@ -597,11 +597,11 @@ export default function OrdersPage() {
 
             {offerTab === 'sent' && (
               <div className={styles.cardList}>
-                {sentOffers.length > 0 ? sentOffers.map(offer => {
+                {sentOffers.length > 0 ? sentOffers.map((offer, idx) => {
                   const partner = offer.to_user;
                   const fmt = (n) => `${Number(n || 0).toFixed(2)} €`;
                   return (
-                    <div key={offer.id} className={styles.card}>
+                    <div key={offer.id} className={styles.card} style={{ animationDelay: `${idx * 60}ms` }}>
                       <div className={styles.cardHeader}>
                         <div className={styles.productInfo}>
                           <img src={offer.product?.image || 'https://via.placeholder.com/80'} alt={offer.product?.title} className={styles.productImage} />

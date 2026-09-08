@@ -281,6 +281,12 @@
   gap: 16px;
   box-shadow: 0 4px 20px rgba(99, 102, 241, 0.1);
   margin-bottom: 32px;
+  animation: walletGlow 3s ease-in-out infinite alternate, authCardIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes walletGlow {
+  from { box-shadow: 0 4px 20px rgba(99, 102, 241, 0.1); }
+  to { box-shadow: 0 4px 32px rgba(99, 102, 241, 0.25); }
 }
 
 .walletHeader {
@@ -340,6 +346,17 @@
   font-weight: 800;
   color: var(--text-primary);
   display: block;
+  background: linear-gradient(90deg, var(--text-primary) 0%, var(--accent-light) 50%, var(--text-primary) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: balanceShimmer 3s ease-in-out infinite;
+}
+
+@keyframes balanceShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .balanceLbl {
@@ -429,15 +446,36 @@
   cursor: pointer;
   border-radius: var(--radius-xs);
   transition: all var(--trans-fast);
+  position: relative;
+}
+
+.tabBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .tabActive {
   color: var(--text-primary);
   background: var(--bg-surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.tabActive::after {
+  content: "";
+  position: absolute;
+  bottom: -9px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60%;
+  height: 2px;
+  background: var(--accent-primary);
+  border-radius: 1px;
+  animation: tabGlow 2s ease-in-out infinite alternate;
 }
 
 .tabContent {
   padding-top: 24px;
+  animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .productGrid {

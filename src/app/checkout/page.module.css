@@ -294,6 +294,44 @@
 .successCard {
   text-align: center;
   padding: 3rem 2rem;
+  animation: successBounce 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  position: relative;
+  overflow: hidden;
+}
+
+@keyframes successBounce {
+  from { opacity: 0; transform: scale(0.9) translateY(20px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.successCard::before,
+.successCard::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  opacity: 0;
+}
+
+.successCard::before {
+  top: 20%;
+  left: 10%;
+  background: var(--accent-light);
+  animation: confettiDrop 1.2s 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.successCard::after {
+  top: 15%;
+  right: 12%;
+  background: var(--emerald);
+  animation: confettiDrop 1.2s 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes confettiDrop {
+  0% { opacity: 0; transform: translateY(-30px) rotate(0deg); }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; transform: translateY(40px) rotate(720deg); }
 }
 
 .checkmarkContainer {
@@ -345,6 +383,12 @@
 .successTitle {
   font-size: 2rem;
   margin: 0 0 0.5rem;
+  animation: successTitleIn 0.5s 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes successTitleIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .orderId {

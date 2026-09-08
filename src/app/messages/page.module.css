@@ -117,6 +117,12 @@
   border-bottom: 1px solid var(--border-subtle);
   transition: background-color var(--trans-fast), transform var(--trans-fast), box-shadow var(--trans-fast);
   border-left: 3px solid transparent;
+  animation: threadSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes threadSlideIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 .threadItem:hover {

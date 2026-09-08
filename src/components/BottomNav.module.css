@@ -37,10 +37,29 @@
   font-size: 10px;
   font-weight: 600;
   transition: all var(--trans-fast);
+  position: relative;
 }
 
 .item.active {
   color: var(--accent-light);
+}
+
+.item.active::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 20px;
+  height: 2px;
+  background: var(--accent-light);
+  border-radius: 1px;
+  animation: navDotIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes navDotIn {
+  from { width: 0; opacity: 0; }
+  to { width: 20px; opacity: 1; }
 }
 
 .icon {
@@ -67,8 +86,15 @@
   box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
   border: 3px solid var(--bg-dark);
   transition: all var(--trans-fast);
+  animation: centerFloat 3s ease-in-out infinite;
+}
+
+@keyframes centerFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
 }
 
 .centerBtn:active .centerCircle {
   transform: scale(0.92);
+  animation: none;
 }

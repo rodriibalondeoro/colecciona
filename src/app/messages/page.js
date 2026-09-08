@@ -186,12 +186,13 @@ function MessagesInner() {
 
         <div className={styles.threadListContent}>
           {filteredThreads.length > 0 ? (
-            filteredThreads.map(thread => {
+            filteredThreads.map((thread, idx) => {
               return (
                 <div
                   key={thread.id}
                   className={`${styles.threadItem} ${activeThreadId === thread.id ? styles.active : ''}`}
                   onClick={() => handleThreadSelect(thread.id)}
+                  style={{ animationDelay: `${idx * 40}ms` }}
                 >
                   <div className={styles.avatar}>
                     {getInitials(thread.partner?.username || thread.partner?.name || thread.partnerName)}

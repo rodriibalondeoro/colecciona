@@ -291,7 +291,7 @@ export default function SellPage() {
         </div>
 
         {/* Wizard Progress Bar */}
-        <div className={styles.wizardBar}>
+        <div className={styles.wizardBar} style={{ '--progress': `${((step - 1) / 3) * 100}%` }}>
           {[
             { num: 1, label: "Fotografía" },
             { num: 2, label: "Especificaciones" },

@@ -50,6 +50,21 @@
   z-index: 1;
 }
 
+.wizardBar::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  left: 20px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent-primary), #a78bfa);
+  border-radius: 1px;
+  z-index: 2;
+  transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  width: var(--progress, 0%);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+  animation: progressGlow 2s ease-in-out infinite alternate;
+}
+
 .wizardStep {
   display: flex;
   flex-direction: column;
@@ -85,6 +100,17 @@
   border-color: var(--accent-primary);
   color: white;
   box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+  animation: stepPulse 2s ease-in-out infinite alternate;
+}
+
+@keyframes stepPulse {
+  from { box-shadow: 0 0 8px rgba(99, 102, 241, 0.3); transform: scale(1); }
+  to { box-shadow: 0 0 20px rgba(99, 102, 241, 0.6); transform: scale(1.08); }
+}
+
+@keyframes progressGlow {
+  from { filter: brightness(1); }
+  to { filter: brightness(1.3); }
 }
 
 .stepActive .stepText {
