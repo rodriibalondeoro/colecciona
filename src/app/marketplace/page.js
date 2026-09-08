@@ -478,7 +478,7 @@ function MarketplaceContent() {
           onClose={() => setSearchOpen(false)}
           onSearch={(t) => setSearchQuery(t)}
           onSelectCategory={handleCategoryChange}
-          fallbackUsers={users}
+          fallbackUsers={[]}
           selectedCategory={selectedCategory}
         />
 
@@ -566,7 +566,7 @@ function MarketplaceContent() {
               {filtered.map((product, idx) => {
                 const seller = product.seller && typeof product.seller === "object"
                   ? product.seller
-                  : users.find((u) => u.id === product.seller);
+                  : null;
                 const isOwner = session && (
                   session.id === product.seller?.id ||
                   session.id === product.seller ||

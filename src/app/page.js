@@ -155,7 +155,7 @@ export default function Home() {
   const spotlightSeller =
     typeof displayProducts[0]?.seller === "object"
       ? displayProducts[0].seller
-      : users.find((u) => u.id === displayProducts[0]?.seller);
+      : null;
   const spotlightSellerName = spotlightSeller?.name || spotlightSeller?.username || "Coleccionista";
   const spotlightUsername = spotlightSeller?.username ? `@${spotlightSeller.username}` : "";
 

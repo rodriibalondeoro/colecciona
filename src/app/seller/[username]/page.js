@@ -424,7 +424,6 @@ export default function SellerProfilePage() {
               <>
                 <div ref={productsTrackRef} className={styles.carouselTrack}>
                   {sellerProducts.map(product => {
-                    const productSeller = users.find((u) => u.id === product.seller);
                     return (
                       <Link key={product.id} href={`/product/${product.id}`} className={styles.carouselCard}>
                         <div className={styles.carouselCardImg}>
