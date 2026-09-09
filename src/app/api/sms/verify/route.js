@@ -91,8 +91,33 @@ export async function POST(req) {
 
     const rawKey = String(otpKey);
     const isEmail = rawKey.includes("@");
-    const normalizedKey = isEmail ? rawKey : normalizePhone(rawKey);
+    const normalizedKey = isEmail ? rawKey.toLowerCase().trim() : normalizePhone(rawKey);
     const rawCode = String(code).trim();
+
+    // ── Email OTP (Supabase Auth): verificar vía auth.verifyOtp ──
+    if (isEmail && url && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+      const authClient = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+      const { data: otpData, error: otpErr } = await authClient.auth.verifyOtp({
+        email: normalizedKey,
+        token: rawCode,
+        type: "email",
+      });
+      if (!otpErr && otpData?.session) {
+        // Email OTP válido: devolvemos la sesión de Supabase directamente.
+        return NextResponse.json({
+          success: true,
+          message: "Email verificado correctamente",
+          user: otpData.user,
+          phone: "",
+          accessToken: otpData.session.access_token,
+          refreshToken: otpData.session.refresh_token,
+        });
+      }
+      if (otpErr) {
+        console.warn("[SMS Verify] email OTP error:", otpErr.message);
+        return NextResponse.json({ error: "Código incorrecto o expirado. Revisa tu email y vuelve a intentarlo." }, { status: 400 });
+      }
+    }
 
     // Atomic verify: one-time use + attempt limit + expiry (Supabase-backed)
     const verifyResult = await verifyOtp(normalizedKey, rawCode, 5);

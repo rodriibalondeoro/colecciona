@@ -32,6 +32,8 @@ export default function AuthPage() {
   const [otpTimer, setOtpTimer] = useState(60);
   const [pendingEmail, setPendingEmail] = useState("");
   const [otpKey, setOtpKey] = useState("");
+  const [otpMethod, setOtpMethod] = useState("sms");
+  const [twilioAvailable, setTwilioAvailable] = useState(true);
   const [sendingOtp, setSendingOtp] = useState(false);
   const [verifying, setVerifying] = useState(false);
 
@@ -54,6 +56,14 @@ export default function AuthPage() {
       return () => clearInterval(interval);
     }
   }, [authStep, otpTimer]);
+
+  // --- Detect whether SMS (Twilio) is available ---
+  useEffect(() => {
+    fetch("/api/sms/config")
+      .then((r) => r.json())
+      .then((d) => setTwilioAvailable(Boolean(d.twilio)))
+      .catch(() => setTwilioAvailable(false));
+  }, []);
 
   // --- REAL-TIME Phone Duplicate Check ---
   const checkPhone = (localNumber) => {
@@ -99,6 +109,15 @@ export default function AuthPage() {
       return;
     }
 
+    // Registro sin Twilio: registro directo email+password (Supabase envía email de confirmación)
+    if (!isLogin && !twilioAvailable) {
+      setSendingOtp(true);
+      const ok = await completeRegistration();
+      setSendingOtp(false);
+      if (ok) window.location.href = "/";
+      return;
+    }
+
     setSendingOtp(true);
     try {
       const res = await fetch("/api/sms/send", {
@@ -106,18 +125,24 @@ export default function AuthPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone: smsPhone,
-          email: isLogin && id.includes("@") ? id : undefined,
+          email: isLogin && id.includes("@")
+            ? id
+            : !isLogin
+              ? email.trim()
+              : undefined,
         }),
       });
       const json = await res.json();
       if (!json.success) {
-        setOtpError(json.error || "No se pudo enviar el SMS. Inténtalo de nuevo.");
+        setOtpError(json.error || "No se pudo enviar el código. Inténtalo de nuevo.");
         return;
       }
       setPendingEmail(id.includes("@") ? id : (!isLogin ? email.trim() : ""));
       setOtpKey(json.otpKey || smsPhone || fullPhone);
       setOtpCode(json.demoCode || "");
       if (json.demoCode) setOtpInput(json.demoCode);
+      // método de envío: "sms" | "email" | "demo"
+      setOtpMethod(json.method || (json.demoCode ? "demo" : "sms"));
       setOtpTimer(60);
       setOtpMode(isLogin ? "login" : "register");
       setAuthStep("otp");
@@ -159,16 +184,17 @@ export default function AuthPage() {
       const res = await fetch("/api/sms/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({ phone, email: email || undefined }),
       });
       const json = await res.json();
       if (!json.success) {
-        setOtpError(json.error || "No se pudo enviar el SMS. Inténtalo de nuevo.");
+        setOtpError(json.error || "No se pudo enviar el código. Inténtalo de nuevo.");
         return;
       }
       setOtpKey(json.otpKey || phone);
       setOtpCode(json.demoCode || "");
       if (json.demoCode) setOtpInput(json.demoCode);
+      setOtpMethod(json.method || (json.demoCode ? "demo" : "sms"));
       setOtpTimer(60);
       setOtpMode("reset");
       setAuthStep("otp");
@@ -177,6 +203,53 @@ export default function AuthPage() {
     } finally {
       setSendingOtp(false);
     }
+  };
+
+  // --- Crear la cuenta (registro) y guardar sesión local ---
+  const completeRegistration = async () => {
+    const newUser = {
+      fullName,
+      username: username.replace("@", ""),
+      email,
+      phone: fullPhone,
+      password,
+      registeredAt: new Date().toISOString(),
+    };
+    let created;
+    try {
+      created = await registerUser(newUser);
+    } catch (regErr) {
+      setOtpError(regErr?.message || "No se pudo crear la cuenta. Inténtalo de nuevo.");
+      return false;
+    }
+    const fullSession = {
+      ...created,
+      ...newUser,
+      id: created?.id,
+      email: created?.email || email,
+      name: created?.name || fullName,
+      username: created?.username || username.replace("@", ""),
+      initials: created?.name
+        ? String(created.name).split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()
+        : (fullName || "U").charAt(0).toUpperCase(),
+      balance: created?.balance || 0,
+      verified: true,
+    };
+
+    // Crear sesión Supabase para obtener Bearer token
+    if (supabase) {
+      try {
+        const { data: sessionData } = await supabase.auth.signInWithPassword({ email, password });
+        if (sessionData?.session?.access_token) {
+          fullSession.access_token = sessionData.session.access_token;
+        }
+      } catch (e) {
+        console.warn("[Auth] No se pudo crear sesión Supabase:", e?.message);
+      }
+    }
+
+    localStorage.setItem("colecciona_session", JSON.stringify(fullSession));
+    return true;
   };
 
   // --- Verify OTP ---
@@ -202,60 +275,19 @@ export default function AuthPage() {
       });
       const json = await res.json();
       if (!json.success) {
-        setOtpError(json.error || "Código incorrecto. Revisa el SMS y vuelve a intentarlo.");
+        setOtpError(json.error || "Código incorrecto. Revisa el email o SMS y vuelve a intentarlo.");
         return;
       }
 
-      // Recuperación de contraseña: tras verificar el SMS, pedimos la nueva contraseña
+      // Recuperación de contraseña: tras verificar, pedimos la nueva contraseña
       if (otpMode === "reset") {
         setAuthStep("newPass");
         return;
       }
 
       if (!isLogin) {
-        const newUser = {
-          fullName,
-          username: username.replace("@", ""),
-          email,
-          phone: fullPhone,
-          password,
-          registeredAt: new Date().toISOString(),
-        };
-        let created;
-        try {
-          created = await registerUser(newUser);
-        } catch (regErr) {
-          setOtpError(regErr?.message || "No se pudo crear la cuenta. Inténtalo de nuevo.");
-          setVerifying(false);
-          return;
-        }
-        const fullSession = {
-          ...created,
-          ...newUser,
-          id: created?.id,
-          email: created?.email || email,
-          name: created?.name || fullName,
-          username: created?.username || username.replace("@", ""),
-          initials: created?.name
-            ? String(created.name).split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()
-            : (fullName || "U").charAt(0).toUpperCase(),
-          balance: created?.balance || 0,
-          verified: true,
-        };
-
-        // Crear sesión Supabase para obtener Bearer token
-        if (supabase) {
-          try {
-            const { data: sessionData } = await supabase.auth.signInWithPassword({ email, password });
-            if (sessionData?.session?.access_token) {
-              fullSession.access_token = sessionData.session.access_token;
-            }
-          } catch (e) {
-            console.warn("[Auth] No se pudo crear sesión Supabase:", e?.message);
-          }
-        }
-
-        localStorage.setItem("colecciona_session", JSON.stringify(fullSession));
+        const ok = await completeRegistration();
+        if (!ok) { setVerifying(false); return; }
       } else {
         const sessionUser = json.user;
         if (!sessionUser) {
@@ -314,17 +346,20 @@ export default function AuthPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone: smsPhone,
-          email: otpMode === "reset" ? undefined : (isLogin && id.includes("@") ? id : undefined),
+          email: otpMode === "reset"
+            ? (resetEmail || undefined)
+            : (isLogin && id.includes("@") ? id : undefined),
         }),
       });
       const json = await res.json();
       if (!json.success) {
-        setOtpError(json.error || "No se pudo reenviar el SMS. Inténtalo de nuevo.");
+        setOtpError(json.error || "No se pudo reenviar el código. Inténtalo de nuevo.");
         return;
       }
       setOtpKey(json.otpKey || smsPhone || fullPhone);
       setOtpCode(json.demoCode || "");
       if (json.demoCode) setOtpInput(json.demoCode);
+      setOtpMethod(json.method || (json.demoCode ? "demo" : "sms"));
       setOtpTimer(60);
     } catch {
       setOtpError("Error de conexión. Inténtalo de nuevo.");
@@ -477,8 +512,12 @@ export default function AuthPage() {
                 <line x1="12" y1="18" x2="12.01" y2="18" />
               </svg>
             </div>
-            <h2>{otpMode === "reset" ? "Recuperar contraseña" : "Verificación SMS"}</h2>
-            <p>Hemos enviado un código de 6 dígitos por SMS a <strong>{displayPhone}</strong>. Válido durante <strong>{otpTimer}s</strong>.</p>
+            <h2>{otpMode === "reset" ? "Recuperar contraseña" : otpMethod === "email" ? "Verificación por email" : "Verificación SMS"}</h2>
+            <p>
+              {otpMethod === "email"
+                ? <>Hemos enviado un código de 6 dígitos a tu email <strong>{displayPhone}</strong>. Válido durante <strong>{otpTimer}s</strong>.</>
+                : <>Hemos enviado un código de 6 dígitos por SMS a <strong>{displayPhone}</strong>. Válido durante <strong>{otpTimer}s</strong>.</>}
+            </p>
           </div>
 
           <div className={styles.form}>
@@ -509,7 +548,7 @@ export default function AuthPage() {
 
             {otpCode && (
               <div className={styles.demoCodeBox}>
-                📱 <strong>Modo demo</strong> (sin proveedor SMS): tu código es{" "}
+                📱 <strong>Modo demo</strong>: tu código es{" "}
                 <strong className={styles.demoCodeValue}>{otpCode}</strong>. Se introduce automáticamente.
               </div>
             )}
